@@ -1,0 +1,18 @@
+{
+  "answerOnlyFromKnowledge": true,
+  "bannedTopics": [
+    "medical advice",
+    "legal advice",
+    "competitor pricing",
+    "politics",
+    "weapons",
+    "adult content",
+    "sexual"
+  ],
+  "fallbackMessage": "I'm not sure about that one — leave your email and our team will get back to you.",
+  "minMeaningScore": 0.30,
+  "curatedMatchThreshold": 0.80,
+  "curatedBorderline": 0.65,
+  "bannedMatchThreshold": 0.35,
+  "notes": "Matching is by MEANING (embeddings), not exact words. GUARDRAILS = keyword → moderation API (free, universal safety) → embeddings (store-specific). CURATED = embeddings; score >= curatedMatchThreshold uses it directly; score between curatedBorderline and curatedMatchThreshold asks the LLM to confirm; below curatedBorderline is skipped. bannedMatchThreshold: meaning-closeness to block a banned topic. minMeaningScore: strength a product/knowledge match must have. Tune to taste."
+}

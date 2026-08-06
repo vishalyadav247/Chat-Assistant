@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ChatConvert — Chatbox</title>
+<style>
+  :root{
+    --cw1:#6d3bf5;--cw2:#3b82f6;
+    --bg:#f6f6f7;--surface:#ffffff;--surface-2:#fbfbfc;
+    --ink:#2b2b30;--ink-strong:#141417;--muted:#6b6b73;--muted-2:#9a9aa2;
+    --border:#e9e9ec;--border-strong:#dcdce1;
+    --nav-bg:#17171b;--accent:#6d3bf5;--accent-2:#3b82f6;--accent-soft:#efeafe;
+    --green:#16a34a;--green-bg:#d7f8e6;--green-ink:#0c5132;
+    --info-bg:#e0edff;--info-ink:#1d4ed8;--todo-bg:#ececf0;--todo-ink:#5a5a63;
+    --shadow-sm:0 1px 2px rgba(20,20,25,.06), 0 0 0 1px rgba(20,20,25,.04);
+    --shadow-md:0 6px 20px rgba(20,20,25,.08), 0 0 0 1px rgba(20,20,25,.04);
+    --radius:16px;
+  }
+  *{box-sizing:border-box;}
+  html{overflow-y:scroll;}
+  html,body{margin:0;padding:0;}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Inter",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased;}
+
+  .topbar{height:56px;background:var(--nav-bg);display:flex;align-items:center;padding:0 12px;position:sticky;top:0;z-index:50;gap:16px;}
+  .brand{display:flex;align-items:center;gap:10px;min-width:230px;padding-left:6px;}
+  .brand .logo{width:28px;height:28px;border-radius:9px;background:linear-gradient(135deg,#7c3aed,#3b82f6);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:15px;}
+  .brand .wordmark{color:#fff;font-weight:700;font-size:17px;}
+  .brand .release{color:#a9a9b3;font-size:12px;border-left:1px solid #3a3a42;padding-left:10px;}
+  .search{flex:1;max-width:480px;margin:0 auto;background:#26262d;border:1px solid #3a3a42;border-radius:9px;height:34px;display:flex;align-items:center;padding:0 10px;gap:8px;color:#a9a9b3;}
+  .search .ph{flex:1;}.search .kbd{font-size:11px;color:#a9a9b3;border:1px solid #3a3a42;border-radius:5px;padding:1px 6px;background:#1d1d23;}
+  .topbar-right{display:flex;align-items:center;gap:6px;min-width:180px;justify-content:flex-end;}
+  .icon-btn{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;color:#c9c9d0;cursor:pointer;}
+  .icon-btn:hover{background:#2c2c34;}
+  .userchip{display:flex;align-items:center;gap:8px;background:#26262d;border-radius:9px;padding:4px 8px 4px 4px;}
+  .userchip .av{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,#7c3aed,#3b82f6);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;}
+  .userchip .name{color:#e6e6ea;font-size:13px;}.userchip .badge{font-size:10px;color:#a9a9b3;background:#1d1d23;border-radius:5px;padding:1px 6px;font-weight:600;}
+
+  .shell{display:flex;align-items:flex-start;}
+  .sidebar{width:236px;flex:none;padding:12px 12px 40px;position:sticky;top:56px;height:calc(100vh - 56px);overflow-y:auto;}
+  .sidebar::-webkit-scrollbar{width:8px;}.sidebar::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:8px;}
+  .nav-item{display:flex;align-items:center;gap:10px;height:34px;padding:0 9px;border-radius:9px;color:var(--ink);font-weight:500;cursor:pointer;transition:.13s;}
+  .nav-item:hover{background:var(--border);}
+  .nav-item .ico{width:18px;height:18px;flex:none;display:flex;align-items:center;justify-content:center;color:currentColor;opacity:.85;}
+  .nav-item .label{flex:1;}.nav-item .count{font-size:11px;color:#fff;font-weight:700;background:var(--accent);border-radius:20px;padding:1px 7px;}
+  .nav-section-label{font-size:11px;font-weight:700;color:var(--muted-2);padding:14px 9px 4px;text-transform:uppercase;letter-spacing:.5px;}
+  .nav-divider{height:1px;background:var(--border);margin:8px 4px;}
+  .app-head{display:flex;align-items:center;gap:8px;height:34px;padding:0 9px;border-radius:9px;font-weight:650;}
+  .app-head .app-ico{width:18px;height:18px;border-radius:6px;background:linear-gradient(135deg,#7c3aed,#3b82f6);flex:none;}
+  .app-head .dot{width:7px;height:7px;border-radius:50%;background:#22c55e;margin-left:auto;box-shadow:0 0 0 3px rgba(34,197,94,.18);}
+  .sub-rail{position:relative;}.sub-rail::before{content:"";position:absolute;left:20px;top:36px;bottom:34px;width:1.5px;background:var(--border-strong);border-radius:2px;}
+  .sub-item{position:relative;display:flex;align-items:center;height:31px;padding:0 9px 0 34px;border-radius:9px;color:var(--ink);font-weight:500;cursor:pointer;transition:.13s;text-decoration:none;}
+  .sub-item:hover{background:var(--border);}
+  .sub-item.active{background:var(--accent-soft);color:var(--accent);font-weight:700;box-shadow:inset 0 0 0 1px rgba(109,59,245,.18);}
+  .sub-item.active::before{content:"";position:absolute;left:23px;top:6px;bottom:6px;width:3px;border-radius:3px;background:linear-gradient(180deg,#7c3aed,#3b82f6);}
+  .sub-item.muted{color:var(--muted);}
+
+  .main{flex:1;min-width:0;padding:20px 26px 50px;}
+  .content{max-width:1120px;margin:0 auto;display:flex;flex-direction:column;gap:14px;}
+  .page-head h1{font-size:21px;font-weight:750;color:var(--ink-strong);margin:0;letter-spacing:-.3px;}
+  .page-head .sub{color:var(--muted);font-size:12.5px;margin-top:4px;}
+  .page-head .sub a{color:var(--accent);text-decoration:none;}
+  .ph-badge{font-size:11px;font-weight:800;border-radius:20px;padding:3px 10px;display:inline-flex;align-items:center;gap:5px;}
+  .ph-badge.on{color:var(--green-ink);background:var(--green-bg);}
+  .ph-badge.off{color:var(--muted);background:var(--todo-bg);}
+  .ph-badge .pd{width:6px;height:6px;border-radius:50%;background:currentColor;}
+  .deact-btn{border:none;cursor:pointer;font-family:inherit;font-size:13px;font-weight:700;border-radius:9px;padding:9px 16px;background:linear-gradient(135deg,#2b2b30,#17171b);color:#fff;flex:none;}
+  .deact-btn:hover{opacity:.92;}
+
+  .seg{display:flex;gap:4px;background:var(--surface-2);border-radius:11px;padding:4px;box-shadow:inset 0 0 0 1px var(--border);width:fit-content;}
+  .seg button{border:none;background:transparent;font-family:inherit;font-size:12.5px;font-weight:650;color:var(--muted);padding:7px 15px;border-radius:8px;cursor:pointer;transition:.12s;}
+  .seg button.active{background:var(--surface);color:var(--ink-strong);box-shadow:var(--shadow-sm);}
+
+  .disp-row{display:flex;align-items:center;gap:9px;color:var(--ink);font-size:13px;font-weight:600;padding:2px;}
+  .disp-row svg{color:var(--muted);}
+
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow-sm);padding:16px 18px;}
+  .cb-row{display:flex;align-items:flex-start;gap:14px;}
+  .cb-row+.cb-row,.blk+.blk{margin-top:0;padding-top:15px;box-shadow:inset 0 1px 0 var(--border);}
+  .cb-t{font-weight:750;color:var(--ink-strong);font-size:13.5px;display:flex;align-items:center;gap:8px;}
+  .cb-d{color:var(--muted);font-size:12.5px;margin-top:4px;line-height:1.5;}
+  .cb-d a{color:var(--accent);text-decoration:none;}
+  .cb-row .grow{flex:1;min-width:0;}
+
+  .switch{display:inline-block;vertical-align:middle;width:34px;height:20px;border-radius:20px;background:var(--border-strong);position:relative;cursor:pointer;transition:.15s;flex:none;}
+  .switch.on{background:var(--accent);}
+  .switch::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.15s;box-shadow:0 1px 2px rgba(0,0,0,.2);}
+  .switch.on::after{left:16px;}
+
+  .upgrade{display:inline-flex;align-items:center;gap:5px;background:#fbe6a2;color:#8a5a00;font-size:11px;font-weight:750;border-radius:20px;padding:2px 9px;}
+  .sec-label{font-weight:750;color:var(--ink-strong);font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted-2);margin-bottom:12px;}
+  .fld{margin-top:14px;}
+  .fld label{display:block;font-size:12.5px;font-weight:650;color:var(--ink-strong);margin-bottom:7px;}
+  .inp-wrap{position:relative;}
+  .inp{width:100%;font-family:inherit;font-size:13px;color:var(--ink);background:var(--surface-2);border:1px solid var(--border-strong);border-radius:9px;padding:10px 12px;outline:none;}
+  .inp:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
+  .inp-ic{position:absolute;right:11px;top:50%;transform:translateY(-50%);color:var(--muted-2);cursor:pointer;}
+  .logo-box{width:64px;height:64px;border-radius:12px;border:1.5px dashed var(--border-strong);background:var(--surface-2);display:flex;align-items:center;justify-content:center;color:var(--muted-2);cursor:pointer;}
+  .logo-box:hover{border-color:var(--accent);color:var(--accent);}
+  .upload-btn{display:inline-flex;align-items:center;gap:7px;background:var(--surface);border:1px solid var(--border-strong);border-radius:9px;font-size:12.5px;font-weight:600;color:var(--ink);padding:8px 13px;cursor:pointer;}
+  .upload-btn:hover{background:var(--surface-2);border-color:var(--accent);color:var(--accent);}
+  .emoji-row{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12.5px;margin-top:9px;}
+  .emoji-row .ems{font-size:15px;letter-spacing:2px;}
+
+  .blk{display:flex;align-items:flex-start;gap:14px;}
+  .info-note{background:var(--info-bg);border-radius:10px;padding:11px 12px;margin-top:12px;font-size:12.5px;color:var(--info-ink);}
+  .info-note .row1{display:flex;align-items:flex-start;gap:8px;}
+  .info-note .row1 .x{margin-left:auto;opacity:.7;cursor:pointer;}
+  .info-note a{color:var(--info-ink);font-weight:600;}
+  .info-note .act{margin-top:9px;background:var(--surface);color:var(--ink);border:none;font-family:inherit;font-weight:650;font-size:12px;border-radius:8px;padding:6px 13px;cursor:pointer;box-shadow:inset 0 0 0 1px var(--border-strong);}
+  .edit-link{color:var(--ink-strong);font-weight:650;font-size:12.5px;cursor:pointer;flex:none;}
+  .cb-panel{display:none;flex-direction:column;gap:14px;}
+  .cb-panel.show{display:flex;}
+  .card-h{font-weight:750;color:var(--ink-strong);font-size:14px;}
+  .card-sub{color:var(--muted);font-size:12.5px;margin:5px 0 0;line-height:1.5;}
+  .card-sub a{color:var(--accent);text-decoration:none;}
+  .chk{display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:13px;color:var(--ink);}
+  .chk input{width:16px;height:16px;accent-color:var(--ink-strong);cursor:pointer;margin-top:1px;flex:none;}
+  .chk .ck-t{font-weight:600;color:var(--ink-strong);}
+  .chk .ck-d{color:var(--muted);font-size:12px;margin-top:2px;display:block;}
+  .link-btn{color:var(--accent);font-weight:650;font-size:12.5px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;}
+  .qcard{display:flex;gap:11px;align-items:flex-start;border:1px solid var(--border);border-radius:11px;padding:12px 13px;}
+  .qdrag{color:var(--muted-2);cursor:grab;flex:none;margin-top:2px;}
+  .qt{font-weight:700;color:var(--ink-strong);font-size:12.5px;}
+  .qd{color:var(--muted);font-size:12px;margin-top:3px;line-height:1.5;}
+  .qd a{color:var(--accent);text-decoration:none;}
+  .qact{display:flex;align-items:center;gap:13px;color:var(--muted);flex:none;}
+  .qact svg{cursor:pointer;}.qact svg:hover{color:var(--accent);}
+  .radio-opt{display:flex;gap:11px;align-items:flex-start;padding:11px 0;cursor:pointer;}
+  .ro-r{width:18px;height:18px;border-radius:50%;border:1.5px solid var(--border-strong);flex:none;margin-top:1px;display:flex;align-items:center;justify-content:center;}
+  .radio-opt.sel .ro-r{border-color:var(--ink-strong);}
+  .radio-opt.sel .ro-r::after{content:"";width:9px;height:9px;border-radius:50%;background:var(--ink-strong);}
+  .ro-t{font-weight:700;color:var(--ink-strong);font-size:13px;}
+  .ro-d{color:var(--muted);font-size:12px;margin-top:3px;line-height:1.5;}
+  .ro-d a{color:var(--accent);text-decoration:none;}
+  .dropbtn{background:var(--surface-2);border:1px solid var(--border-strong);border-radius:9px;font-family:inherit;font-size:12.5px;font-weight:600;color:var(--ink);padding:8px 12px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;margin-top:2px;}
+  .field-row{display:flex;align-items:center;gap:10px;border:1px solid var(--border-strong);border-radius:9px;padding:11px 13px;margin-top:10px;font-size:13px;color:var(--ink-strong);font-weight:600;}
+  .req-badge{background:var(--green-bg);color:var(--green-ink);font-size:10.5px;font-weight:700;border-radius:20px;padding:2px 9px;}
+  .field-row .fr-del{margin-left:auto;color:#e11d48;cursor:pointer;display:flex;}
+  .toggle2{display:inline-flex;background:var(--surface-2);border-radius:10px;padding:3px;box-shadow:inset 0 0 0 1px var(--border);}
+  .toggle2 button{border:none;background:transparent;font-family:inherit;font-size:12.5px;font-weight:650;color:var(--muted);padding:6px 16px;border-radius:8px;cursor:pointer;}
+  .toggle2 button.active{background:var(--ink-strong);color:#fff;}
+  .swatches{display:flex;gap:10px;margin:14px 0;flex-wrap:wrap;}
+  .swatch{width:30px;height:30px;border-radius:9px;cursor:pointer;box-shadow:inset 0 0 0 1px rgba(0,0,0,.06);transition:.12s;}
+  .swatch.sel{box-shadow:0 0 0 2px var(--surface),0 0 0 4px var(--accent);}
+  .color-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  .color-inp{position:relative;}
+  .color-inp .inp{width:100%;padding-right:44px;}
+  .color-chip{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:28px;height:28px;border-radius:7px;box-shadow:inset 0 0 0 1px rgba(20,20,25,.12);cursor:pointer;}
+  .launcher-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;}
+  .launcher-opt{border:1.5px solid var(--border-strong);border-radius:11px;height:62px;display:flex;align-items:center;justify-content:center;cursor:pointer;background:var(--surface-2);transition:.12s;}
+  .launcher-opt.sel{border-color:var(--ink-strong);background:var(--surface);}
+  .lo-icon{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--cw1),var(--cw2));color:#fff;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 10px rgba(109,59,245,.35);}
+  .lo-pill{background:linear-gradient(135deg,var(--cw1),var(--cw2));color:#fff;border-radius:20px;padding:7px 12px;font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:6px;box-shadow:0 4px 10px rgba(109,59,245,.35);}
+  .launcher-labels{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:8px;text-align:center;font-size:12px;color:var(--muted);}
+  .icon-choices{display:flex;align-items:center;gap:10px;}
+  .icon-choice{width:44px;height:44px;border-radius:11px;border:1.5px solid var(--border-strong);display:flex;align-items:center;justify-content:center;cursor:pointer;}
+  .icon-choice.sel{border-color:var(--ink-strong);}
+  .icon-choice .ci{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--cw1),var(--cw2));color:#fff;display:flex;align-items:center;justify-content:center;}
+  .icon-choice.up{border-style:dashed;color:var(--muted);}
+  select.inp{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 20 20' fill='none'><path d='M6 8l4 4 4-4' stroke='%236b6b73' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");background-repeat:no-repeat;background-position:right 11px center;padding-right:34px;}
+  .cd-row{padding:15px 0;box-shadow:inset 0 -1px 0 var(--border);}
+  .cd-row:first-child{padding-top:6px;}
+  .cd-row:last-child{box-shadow:none;padding-bottom:2px;}
+  .cd-head{display:flex;align-items:flex-start;gap:14px;}
+  .cd-head .grow{flex:1;min-width:0;}
+  .cd-t{font-weight:700;color:var(--ink-strong);font-size:13px;}
+  .cd-d{color:var(--muted);font-size:12px;margin-top:6px;line-height:1.5;}
+  .cd-d a{color:var(--accent);text-decoration:none;}
+  .email-field{display:flex;align-items:center;gap:10px;margin-top:10px;}
+  .email-field .edrag{color:var(--muted-2);cursor:grab;flex:none;}
+  .email-ic{width:36px;height:36px;border-radius:9px;background:#f5b301;flex:none;display:flex;align-items:center;justify-content:center;color:#fff;}
+  .email-field .inp{flex:1;}
+  .email-field .edel{color:var(--muted);cursor:pointer;flex:none;}
+  .email-field .edel:hover{color:#e11d48;}
+  .cm-name{font-weight:600;font-size:12px;color:var(--ink-strong);margin:14px 0 6px;padding-left:26px;}
+  .cm-ic{width:36px;height:36px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;color:#fff;}
+  .cm-ic.wa{background:#25d366;}.cm-ic.ph{background:#22c55e;}.cm-ic.em{background:#f5b301;}
+  .phone-inp{flex:1;display:flex;align-items:center;gap:7px;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:9px;padding:0 12px;height:40px;}
+  .phone-inp .flag{font-size:15px;}
+  .phone-inp input{border:none;background:transparent;outline:none;font-family:inherit;font-size:13px;color:var(--ink);width:100%;}
+  .dd-wrap{position:relative;display:inline-block;}
+  .dd-menu{position:absolute;top:calc(100% + 6px);left:0;min-width:210px;background:var(--surface);border:1px solid var(--border);border-radius:11px;box-shadow:var(--shadow-md);padding:6px;display:none;z-index:60;}
+  .dd-menu.show{display:block;}
+  .dd-item{display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:8px;font-size:13px;font-weight:600;color:var(--ink);cursor:pointer;}
+  .dd-item:hover{background:var(--surface-2);}
+  .dd-item .di-ic{width:26px;height:26px;border-radius:7px;flex:none;display:flex;align-items:center;justify-content:center;color:#fff;}
+  .di-ic.wa{background:#25d366;}.di-ic.ph{background:#22c55e;}.di-ic.em{background:#f5b301;}
+  .opt-badge{background:var(--info-bg);color:var(--info-ink);font-size:10.5px;font-weight:700;border-radius:20px;padding:2px 9px;}
+  .dd-item2{padding:9px 12px;border-radius:8px;font-size:13px;font-weight:600;color:var(--ink);cursor:pointer;}
+  .dd-item2:hover{background:var(--surface-2);}
+  .cb-layout{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:26px;align-items:start;}
+  .cb-left{display:flex;flex-direction:column;gap:14px;min-width:0;}
+  .cb-preview{position:sticky;top:76px;}
+  .pv-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;height:34px;}
+  .pv-title{display:flex;align-items:center;gap:8px;font-weight:700;color:var(--ink-strong);font-size:13.5px;}
+  .pv-title svg{color:var(--muted);}
+  .pv-desktop{display:inline-flex;align-items:center;gap:7px;background:var(--surface);border:1px solid var(--border-strong);border-radius:9px;font-family:inherit;font-size:12.5px;font-weight:600;color:var(--ink);padding:7px 12px;cursor:pointer;}
+  .pv-desktop:hover{background:var(--surface-2);}
+  @media(max-width:980px){.cb-layout{grid-template-columns:1fr;}.cb-preview{display:none;}}
+  .chat-widget{background:var(--surface);border:1px solid var(--border);border-radius:18px;box-shadow:var(--shadow-md);overflow:hidden;width:100%;}
+  .cw-head{background:linear-gradient(135deg,var(--cw1),var(--cw2));color:#fff;padding:16px 18px 18px;display:flex;align-items:center;gap:12px;}
+  .cw-brand{display:flex;align-items:center;gap:11px;min-width:0;}
+  .cw-logo{width:40px;height:40px;border-radius:11px;overflow:hidden;flex:none;background:rgba(255,255,255,.18);}
+  .cw-logo img{width:100%;height:100%;object-fit:cover;display:block;}
+  .cw-title{font-weight:750;font-size:17px;}
+  .cw-sub{font-size:13px;opacity:.92;margin-top:2px;}
+  .cw-head .cw-back{color:#fff;cursor:pointer;flex:none;align-items:center;justify-content:center;}
+  .cw-head .cw-back:hover{opacity:.8;}
+  .cw-x{color:#fff;cursor:pointer;opacity:.9;flex:none;margin-left:auto;display:flex;align-items:center;}
+  .cw-x:hover{opacity:.7;}
+  .ot-tabs{display:flex;gap:0;box-shadow:inset 0 -1px 0 var(--border);}
+  .ot-tabs button{flex:1;background:none;border:none;font-family:inherit;font-size:13px;font-weight:600;color:var(--muted);padding:8px 4px 10px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;}
+  .ot-tabs button.active{color:var(--ink-strong);border-bottom-color:var(--accent);}
+  .ot-lbl{color:var(--muted);font-size:13px;margin-bottom:7px;}
+  .ot-inp{width:100%;box-sizing:border-box;background:var(--surface);border:1px solid var(--border-strong);border-radius:10px;padding:11px 13px;font-size:13px;font-family:inherit;color:var(--ink);}
+  .ot-inp::placeholder{color:var(--muted-2);}
+  .ot-inp:focus{outline:none;border-color:var(--accent);}
+  .ot-radios{display:flex;gap:22px;}
+  .ot-radio{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--ink-strong);cursor:pointer;}
+  .ot-dot{width:16px;height:16px;border-radius:50%;border:1.6px solid var(--border-strong);flex:none;position:relative;}
+  .ot-radio.sel .ot-dot{border-color:var(--accent);}
+  .ot-radio.sel .ot-dot::after{content:"";position:absolute;inset:3px;border-radius:50%;background:var(--accent);}
+  .ot-track{background:linear-gradient(135deg,var(--cw1),var(--cw2));color:#fff;border:none;border-radius:10px;padding:11px;font-size:13.5px;font-weight:650;font-family:inherit;cursor:pointer;}
+  .cw-body{padding:16px;background:var(--surface-2);min-height:340px;display:flex;flex-direction:column;gap:12px;}
+  .cw-bot{display:flex;gap:8px;align-items:flex-end;}
+  .cw-av{width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,var(--cw1),var(--cw2));color:#fff;display:flex;align-items:center;justify-content:center;flex:none;font-size:11px;}
+  .cw-bubble{background:var(--surface);box-shadow:var(--shadow-sm);border-radius:12px;border-bottom-left-radius:4px;padding:9px 12px;font-size:12.5px;color:var(--ink);line-height:1.5;}
+  .cw-starters{display:flex;flex-direction:column;gap:8px;margin-top:2px;}
+  .cw-chip{background:var(--surface);box-shadow:inset 0 0 0 1px var(--border-strong);border-radius:10px;padding:9px 12px;font-size:12.5px;color:var(--ink);cursor:pointer;font-weight:550;}
+  .cw-chip:hover{background:var(--accent-soft);}
+  .pvb{background:var(--surface);border-radius:12px;box-shadow:var(--shadow-sm);padding:13px 14px;}
+  .pvb-t{font-weight:750;color:var(--ink-strong);font-size:13.5px;}
+  .pvc-status{display:flex;align-items:center;gap:7px;color:#16a34a;font-size:12px;font-weight:600;margin-top:5px;}
+  .pvc-status .d{width:8px;height:8px;border-radius:50%;background:#16a34a;flex:none;}
+  .pvc-actions{display:flex;align-items:center;gap:9px;margin-top:12px;}
+  .pvc-chat{flex:1;max-width:120px;height:40px;display:inline-flex;align-items:center;justify-content:center;gap:7px;background:linear-gradient(135deg,var(--cw1),var(--cw2));color:#fff;border:none;border-radius:10px;padding:0 14px;font-size:12.5px;font-weight:650;font-family:inherit;cursor:pointer;}
+  .pvc-ic{width:40px;height:40px;border-radius:10px;background:#f5b301;color:#fff;display:flex;align-items:center;justify-content:center;flex:none;}
+  .pvc-ic.wa{background:#25d366;}.pvc-ic.ph{background:#22c55e;}.pvc-ic.em{background:#f5b301;}
+  #pvContactIcons{display:flex;gap:9px;align-items:center;flex-wrap:nowrap;}
+  .pvb-row{display:flex;align-items:center;justify-content:space-between;gap:10px;cursor:pointer;}
+  .pvo-sub{color:var(--muted);font-size:12px;margin-top:3px;}
+  .pv-search{display:flex;align-items:center;justify-content:space-between;background:var(--surface-2);border-radius:9px;padding:9px 11px;color:var(--muted-2);font-size:12px;box-shadow:inset 0 0 0 1px var(--border-strong);margin-bottom:4px;}
+  .pv-faq{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;color:var(--ink);padding:10px 2px;box-shadow:inset 0 -1px 0 var(--border);cursor:pointer;}
+  .pv-faq:last-child{box-shadow:none;}
+  .cw-back{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);cursor:pointer;margin-bottom:2px;}
+  .pv-empty{text-align:center;color:var(--muted-2);font-size:12px;padding:30px 10px;}
+  .cw-input{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 12px;background:var(--surface);box-shadow:inset 0 1px 0 var(--border);color:var(--muted-2);font-size:12.5px;}
+  .cw-input>span:first-child{flex:1;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:10px;padding:9px 12px;}
+  .cw-send{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,var(--cw1),var(--cw2));color:#fff;display:flex;align-items:center;justify-content:center;flex:none;}
+  .cw-foot{text-align:center;font-size:10.5px;color:var(--muted-2);padding:8px;background:var(--surface);}
+  .cw-launcher{width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,var(--cw1),var(--cw2));color:#fff;display:flex;align-items:center;justify-content:center;gap:9px;box-shadow:0 8px 20px rgba(109,59,245,.4);margin:14px 0 0 auto;font-size:14px;font-weight:650;overflow:hidden;}
+  .cw-launcher.lc-pill{width:auto;height:52px;border-radius:28px;padding:0 22px;}
+  .cw-launcher img{width:26px;height:26px;object-fit:cover;border-radius:6px;}
+  .cw-launcher.lc-left{margin:14px auto 0 0;}
+  .modal-ov{position:fixed;inset:0;background:rgba(20,20,25,.5);display:none;align-items:center;justify-content:center;z-index:200;padding:24px 16px;overflow-y:auto;}
+  .modal-ov.show{display:flex;}
+  .modal{background:var(--surface);border-radius:16px;box-shadow:var(--shadow-md);width:100%;max-width:660px;overflow:hidden;}
+  .modal-hd{display:flex;align-items:center;justify-content:space-between;padding:15px 20px;box-shadow:inset 0 -1px 0 var(--border);}
+  .modal-hd h3{margin:0;font-size:16px;font-weight:750;color:var(--ink-strong);}
+  .modal-x{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--muted);cursor:pointer;}
+  .modal-x:hover{background:var(--border);}
+  .modal-bd{padding:16px 20px;}
+  .modal-ft{display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;box-shadow:inset 0 1px 0 var(--border);}
+  .btn2{border:none;cursor:pointer;font-family:inherit;font-size:13px;font-weight:650;border-radius:9px;padding:9px 16px;}
+  .btn2.light{background:var(--surface);color:var(--ink);box-shadow:inset 0 0 0 1px var(--border-strong);}
+  .btn2.dark{background:linear-gradient(135deg,#2b2b30,#17171b);color:#fff;}
+  .rte{border:1px solid var(--border-strong);border-radius:10px;overflow:hidden;}
+  .rte-bar{display:flex;align-items:center;gap:4px;padding:8px 10px;box-shadow:inset 0 -1px 0 var(--border);color:var(--muted);}
+  .rte-bar .rb{width:28px;height:28px;border-radius:7px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:14px;font-weight:700;}
+  .rte-bar .rb:hover{background:var(--surface-2);color:var(--ink);}
+  .rte-bar .sep{width:1px;height:18px;background:var(--border);margin:0 4px;}
+  .rte-area{min-height:180px;padding:12px 13px;font-size:13px;color:var(--ink);outline:none;line-height:1.55;}
+</style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><div class="logo">C</div><span class="wordmark">ChatConvert</span><span class="release">Summer '26</span></div>
+    <div class="search"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="6" stroke="#a9a9b3" stroke-width="1.6"/><path d="M14 14l3.5 3.5" stroke="#a9a9b3" stroke-width="1.6" stroke-linecap="round"/></svg><span class="ph">Search</span><span class="kbd">CTRL K</span></div>
+    <div class="topbar-right">
+      <div class="icon-btn"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M10 3a4 4 0 0 0-4 4v3l-1.3 2.2c-.3.5.1 1.1.7 1.1h9.2c.6 0 1-.6.7-1.1L14 10V7a4 4 0 0 0-4-4Z" stroke="#c9c9d0" stroke-width="1.4"/></svg></div>
+      <div class="userchip"><div class="av">CC</div><span class="name">chatconvert-store</span><span class="badge">dev</span></div>
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="nav-item"><span class="ico"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M3 8.5 10 3l7 5.5V16a1 1 0 0 1-1 1h-3v-5H7v5H4a1 1 0 0 1-1-1V8.5Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span><span class="label">Home</span></div>
+      <div class="nav-item"><span class="ico"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M4 6h12l-1 9H5L4 6Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M7 6a3 3 0 0 1 6 0" stroke="currentColor" stroke-width="1.4"/></svg></span><span class="label">Orders</span><span class="count">31</span></div>
+      <div class="nav-item"><span class="ico"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M10 3 4 6v8l6 3 6-3V6l-6-3Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span><span class="label">Products</span></div>
+      <div class="nav-item"><span class="ico"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="7" r="3" stroke="currentColor" stroke-width="1.4"/><path d="M4.5 16a5.5 5.5 0 0 1 11 0" stroke="currentColor" stroke-width="1.4"/></svg></span><span class="label">Customers</span></div>
+      <div class="nav-item"><span class="ico"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M4 8 8 4h8v8l-4 4-8-8Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span><span class="label">Discounts</span></div>
+      <div class="nav-item"><span class="ico"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><rect x="4" y="4" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.4"/><path d="M4 8h12M8 8v8" stroke="currentColor" stroke-width="1.4"/></svg></span><span class="label">Content</span></div>
+      <div class="nav-item"><span class="ico"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.4"/><path d="M3 10h14M10 3c2 2.5 2 11.5 0 14M10 3c-2 2.5-2 11.5 0 14" stroke="currentColor" stroke-width="1.4"/></svg></span><span class="label">Markets</span></div>
+      <div class="nav-item"><span class="ico"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M4 16V9M8 16V5M12 16v-4M16 16V7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span><span class="label">Analytics</span></div>
+      <div class="nav-section-label">Sales channels</div>
+      <div class="nav-item"><span class="ico"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.4"/><path d="M3 10h14" stroke="currentColor" stroke-width="1.4"/></svg></span><span class="label">Online Store</span></div>
+      <div class="nav-item"><span class="ico"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M10 3v14M6 6l4-3 4 3" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span><span class="label">Agentic</span></div>
+      <div class="nav-section-label">Apps</div>
+      <div class="sub-rail">
+        <div class="app-head"><span class="app-ico"></span><span class="label" style="flex:1;">chatconvert-develop…</span><span class="dot"></span></div>
+        <a class="sub-item" href="dashboard.html">Dashboard</a>
+        <a class="sub-item" href="inbox.html">Inbox</a>
+        <a class="sub-item" href="contacts.html">Contacts</a>
+        <a class="sub-item active" href="chatbox.html">Chatbox</a>
+        <a class="sub-item" href="ai-agent.html">AI Agent</a>
+        <a class="sub-item" href="proactive-chat.html">Proactive Chat</a>
+        <a class="sub-item" href="curated-answers.html">Curated Answers</a>
+        <a class="sub-item" href="analytics.html">Analytics</a>
+        <a class="sub-item" href="plan-usage.html">Plan &amp; Usage</a>
+        <a class="sub-item" href="settings.html">Settings</a>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="content">
+        <div class="page-head">
+          <div>
+            <h1>Chatbox</h1>
+            <div class="sub">Set up your customer chat experience. <a href="#">Learn more</a></div>
+          </div>
+        </div>
+
+        <div class="seg" id="cbTabs">
+          <button class="active" data-cbt="general">General</button>
+          <button data-cbt="chatpage">Chat page</button>
+          <button data-cbt="appearance">Appearance</button>
+        </div>
+
+        <div class="cb-layout">
+        <div class="cb-left">
+        <div class="cb-panel show" data-cbp="general">
+        <div class="card">
+          <div class="cb-row"><div class="grow"><div class="cb-t">Chat focus mode</div><div class="cb-d">Quickly jump into chat page when opening chatbox. Active only with livechat enabled</div></div><span class="switch on js-switch"></span></div>
+        </div>
+
+        <div class="card">
+          <div class="sec-label">ChatBox Header</div>
+          <div class="cb-t" style="font-size:12.5px;font-weight:650;gap:6px">Logo <svg width="14" height="14" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7.5" stroke="var(--muted-2)" stroke-width="1.3"/><path d="M10 9v4M10 6.5h.01" stroke="var(--muted-2)" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+          <div style="display:flex;align-items:center;gap:14px;margin-top:8px">
+            <div class="logo-box" id="cwLogoBox" style="border-style:solid;overflow:hidden;padding:0"><img id="cwLogoImg" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%236d3bf5'/><stop offset='1' stop-color='%233b82f6'/></linearGradient></defs><rect width='48' height='48' rx='12' fill='url(%23g)'/><path d='M14 16h20v13H21l-5 4V16Z' fill='none' stroke='%23ffffff' stroke-width='2.4' stroke-linejoin='round'/></svg>" alt="logo" style="width:100%;height:100%;object-fit:cover"></div>
+            <div>
+              <label class="upload-btn" for="logoUpload"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M10 4v9M6.5 7.5 10 4l3.5 3.5M4 16h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Upload logo</label>
+              <input type="file" id="logoUpload" accept="image/*" style="display:none">
+              <div style="font-size:11px;color:var(--muted-2);margin-top:6px">PNG or JPG, up to 2MB</div>
+            </div>
+          </div>
+          <div class="fld"><label>name</label><input class="inp" id="cwNameInput" value="Chittpa"></div>
+          <div style="color:var(--muted);font-size:12px;margin-top:6px;line-height:1.5">Shown as the chat window title. Leave blank to use ChatConvert.</div>
+          <div class="fld"><label>Description</label><input class="inp" id="cwDescInput" value="How can we help you?"></div>
+          <div style="color:var(--muted);font-size:12px;margin-top:6px;line-height:1.5">Shown below the name in the chat window header.</div>
+        </div>
+
+        <div class="card">
+          <div class="card-h">Contact &amp; Chat</div>
+          <div class="card-sub">Manage how customers reach and chat with you</div>
+          <div class="cd-row" style="margin-top:8px"><div class="cd-head"><div class="grow"><div class="cd-t">Chat status</div><div class="cd-d">Set up online/offline status in <a href="settings.html#availability">working hours settings</a></div></div><span class="switch on js-switch" data-pv="pvStatus"></span></div></div>
+          <div class="cd-row"><div class="cd-head"><div class="grow"><div class="cd-t">Live chat</div><div class="cd-d">Enable real time conversation with your customers.</div></div><span class="switch on js-switch" data-pv="pvContact"></span></div></div>
+          <div class="cd-row"><div class="cd-head"><div class="grow"><div class="cd-t">Contact methods</div><div class="cd-d">Show contact methods to your store</div>
+            <div class="dd-wrap" style="margin-top:12px">
+              <button class="dropbtn" id="cmAddBtn">Add contact method <svg width="12" height="12" viewBox="0 0 20 20" fill="none"><path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+              <div class="dd-menu" id="cmMenu">
+                <div class="dd-item" data-m="whatsapp"><span class="di-ic wa"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M4 16l1-3a6 6 0 1 1 2.4 2.4L4 16Z" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/></svg></span>WhatsApp</div>
+                <div class="dd-item" data-m="phone"><span class="di-ic ph"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M5 4h3l1.5 3.5-2 1.2a8 8 0 0 0 3.8 3.8l1.2-2L16 15v3a1 1 0 0 1-1 1A11 11 0 0 1 4 5a1 1 0 0 1 1-1Z" stroke="#fff" stroke-width="1.3" stroke-linejoin="round"/></svg></span>Phone call</div>
+                <div class="dd-item" data-m="email"><span class="di-ic em"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><rect x="3" y="5" width="14" height="10" rx="2" stroke="#fff" stroke-width="1.4"/><path d="m4 6 6 5 6-5" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/></svg></span>Email</div>
+              </div>
+            </div>
+            <div id="cmRows"></div>
+          </div><span class="switch on js-switch" data-pv="pvContactIcons"></span></div></div>
+        </div>
+
+        <div class="card">
+          <div class="cb-row"><div class="grow"><div class="cb-t">Order tracking</div><div class="cb-d">Show the Order Tracking block to let customers track their orders. Select a tracking method in <a href="settings.html#chatbox">Integration settings</a>.</div></div><span class="switch on js-switch" data-pv="pvOrder"></span></div>
+        </div>
+
+        <div class="card">
+          <div class="cb-row"><div class="grow"><div class="cb-t">FAQs</div><div class="cb-d">Show featured questions set up in <a href="ai-agent.html#faqs">FAQs settings</a>.</div></div><span class="switch on js-switch" data-pv="pvFaqs"></span></div>
+        </div>
+        </div>
+
+        <div class="cb-panel" data-cbp="chatpage">
+          <div class="card">
+            <div class="card-h">Welcome message</div>
+            <div class="card-sub">Send the welcome message when visitors initiate the chat</div>
+            <div class="fld">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px"><label style="margin:0">Message</label><span class="link-btn">Insert customer name</span></div>
+              <div class="inp-wrap"><textarea class="inp" id="welcomeMsg" rows="2" style="resize:vertical;padding-right:40px;line-height:1.6">Hi {{customer_name}} 👋
+How can we help you?</textarea><span class="inp-ic"><svg width="17" height="17" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7.3" stroke="currentColor" stroke-width="1.3"/><circle cx="7.4" cy="8.2" r=".95" fill="currentColor"/><circle cx="12.6" cy="8.2" r=".95" fill="currentColor"/><path d="M6.8 11.6a3.6 3.6 0 0 0 6.4 0" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></span></div>
+            </div>
+            <label class="chk" style="margin-top:12px"><input type="checkbox"><span class="ck-t">Use different offline message</span></label>
+          </div>
+
+          <div class="card">
+            <div style="display:flex;align-items:flex-start;gap:14px"><div style="flex:1"><div class="card-h">Conversation starter</div><div class="card-sub">Provide instant answers to customer's questions based on your FAQs</div></div><span class="switch on js-switch" data-pv="pvStarters"></span></div>
+            <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
+              <div class="qcard"><span class="qdrag"><svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><circle cx="7" cy="5" r="1.3"/><circle cx="13" cy="5" r="1.3"/><circle cx="7" cy="10" r="1.3"/><circle cx="13" cy="10" r="1.3"/><circle cx="7" cy="15" r="1.3"/><circle cx="13" cy="15" r="1.3"/></svg></span><div style="flex:1;min-width:0"><div class="qt">🛒 Track my order</div><div class="qd">You can track your order using the tracking number provided in your shipping confirmation email. Click on <a href="#">Track</a> navigation</div></div><span class="qact"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M5 6h10M8 6V4h4v2M6 6l1 9h6l1-9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M13 4l3 3-8 8-4 1 1-4 8-8Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span></div>
+              <div class="qcard"><span class="qdrag"><svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><circle cx="7" cy="5" r="1.3"/><circle cx="13" cy="5" r="1.3"/><circle cx="7" cy="10" r="1.3"/><circle cx="13" cy="10" r="1.3"/><circle cx="7" cy="15" r="1.3"/><circle cx="13" cy="15" r="1.3"/></svg></span><div style="flex:1;min-width:0"><div class="qt">🚚 How long does delivery take?</div><div class="qd">Typically, it takes 3-5 business days to receive your order. We're doing our best to deliver it promptly for you.</div></div><span class="qact"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M5 6h10M8 6V4h4v2M6 6l1 9h6l1-9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M13 4l3 3-8 8-4 1 1-4 8-8Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span></div>
+              <div class="qcard"><span class="qdrag"><svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><circle cx="7" cy="5" r="1.3"/><circle cx="13" cy="5" r="1.3"/><circle cx="7" cy="10" r="1.3"/><circle cx="13" cy="10" r="1.3"/><circle cx="7" cy="15" r="1.3"/><circle cx="13" cy="15" r="1.3"/></svg></span><div style="flex:1;min-width:0"><div class="qt">🔁 Return policy</div><div class="qd">Please check our return/refund/exchange policy <a href="#">here</a>.</div></div><span class="qact"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M5 6h10M8 6V4h4v2M6 6l1 9h6l1-9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M13 4l3 3-8 8-4 1 1-4 8-8Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span></div>
+            </div>
+            <div style="display:flex;gap:22px;margin-top:14px"><span class="link-btn" id="addQBtn"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M10 5v10M5 10h10" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>Add question</span><span class="link-btn"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M10 3v9m0 0 3.5-3.5M10 12 6.5 8.5M4 16h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Import from FAQs</span></div>
+          </div>
+
+          <div class="card">
+            <div class="card-h">Chat avatar</div>
+            <div style="margin-top:6px">
+              <div class="radio-opt sel js-radio" data-grp="avatar"><span class="ro-r"></span><div><div class="ro-t">Store branding</div><div class="ro-d">Show store logo and name in customer chats. <a href="settings.html#general">Edit store logo</a></div></div></div>
+              <div class="radio-opt js-radio" data-grp="avatar"><span class="ro-r"></span><div><div class="ro-t">Team member profile</div><div class="ro-d">Show individual team member names and avatars in customer chats. Go to <a href="settings.html#general">team member</a></div></div></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-h" style="font-size:13px">Pre-chat form</div>
+            <div class="card-sub">Collect leads from customers</div>
+            <div class="fld"><label>How customers start a chat</label>
+              <div class="radio-opt js-radio js-startpc" data-grp="start" data-mode="guest"><span class="ro-r"></span><div><div class="ro-t">Chat as guest</div><div class="ro-d">Require information before chat</div></div></div>
+              <div class="radio-opt js-radio js-startpc" data-grp="start" data-mode="anonymous"><span class="ro-r"></span><div><div class="ro-t">Chat as anonymous</div><div class="ro-d">No information required</div></div></div>
+              <div class="radio-opt sel js-radio js-startpc" data-grp="start" data-mode="both"><span class="ro-r"></span><div><div class="ro-t">Show both options</div><div class="ro-d">Let customers choose to provide information or not</div></div></div>
+            </div>
+            <div class="fld pc-both"><label>Show form after X messages from visitors</label><input class="inp" value="1"></div>
+            <div class="pc-gb">
+              <div class="fld"><label>Description</label><input class="inp" value="Please enter your contact information so we can keep you updated with our replies"></div>
+              <div class="card-sub">Description helps to convey the purpose of collecting user information</div>
+              <div class="fld"><label>Information to be collected</label>
+                <div class="dd-wrap"><button class="dropbtn" id="fieldAddBtn">Add contact field <svg width="12" height="12" viewBox="0 0 20 20" fill="none"><path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                  <div class="dd-menu" id="fieldMenu"><div class="dd-item2" data-f="Name">Name</div><div class="dd-item2" data-f="Phone number">Phone number</div></div>
+                </div>
+                <div id="fieldRows"><div class="field-row">Email address <span class="req-badge">Required</span> <svg width="12" height="12" viewBox="0 0 20 20" fill="none"><path d="M6 8l4 4 4-4" stroke="var(--muted)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="fr-del"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M5 6h10M8 6V4h4v2M6 6l1 9h6l1-9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div></div>
+              </div>
+              <label class="chk" style="margin-top:16px"><input type="checkbox"><span><span class="ck-t">Show marketing opt-in to customers</span><span class="ck-d">Visitor subscribe will be convert to customers</span></span></label>
+            </div>
+            <label class="chk" style="margin-top:12px"><input type="checkbox" id="disclaimerChk"><span><span class="ck-t">Disclaimer consent</span><span class="ck-d">Inform customers how their data is used before they start a conversation or subscribe</span></span></label>
+            <div id="disclaimerBox" style="display:none">
+              <div class="info-note" style="margin-top:16px"><div class="row1"><svg width="15" height="15" viewBox="0 0 20 20" fill="none" style="flex:none;margin-top:1px"><circle cx="10" cy="10" r="7.5" stroke="currentColor" stroke-width="1.4"/><path d="M10 9v4M10 6.5h.01" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span>Please ensure that this setting aligns with your business's legal and operational requirements regarding data privacy and customer engagement.</span><span class="x" onclick="this.closest('.info-note').style.display='none'"><svg width="13" height="13" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span></div></div>
+              <div class="rte" style="margin-top:12px">
+                <div class="rte-bar"><span class="rb" style="font-weight:800">B</span><span class="rb" style="font-style:italic">I</span><span class="sep"></span><span class="rb"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M8 12a3 3 0 0 0 4 0l2-2a3 3 0 0 0-4-4l-1 1M12 8a3 3 0 0 0-4 0L6 10a3 3 0 0 0 4 4l1-1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></span></div>
+                <div class="rte-area" contenteditable="true" style="min-height:120px">By sending us a message, you agree to our <a href="#">privacy policy</a>.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="cb-row"><div class="grow"><div class="cb-t">Display satisfaction survey</div><div class="cb-d">Turn on to send satisfaction survey in your conversation with customers. <a href="settings.html#survey">Configure survey</a></div></div><span class="switch js-switch"></span></div>
+          </div>
+        </div>
+
+        <div class="cb-panel" data-cbp="appearance">
+          <div class="card">
+            <div class="card-h">Brand colors</div>
+            <div class="toggle2" id="accToggle" style="margin-top:14px"><button data-a="solid">Solid</button><button class="active" data-a="gradient">Gradient</button></div>
+            <div id="solidSec" style="display:none">
+              <div class="swatches js-swgrp">
+                <span class="swatch sel" data-c1="#6d3bf5" style="background:#6d3bf5"></span>
+                <span class="swatch" data-c1="#10b981" style="background:#10b981"></span>
+                <span class="swatch" data-c1="#b91c1c" style="background:#b91c1c"></span>
+                <span class="swatch" data-c1="#1e293b" style="background:#1e293b"></span>
+                <span class="swatch" data-c1="#0ea5e9" style="background:#0ea5e9"></span>
+                <span class="swatch" data-c1="#db2777" style="background:#db2777"></span>
+              </div>
+              <div class="fld" style="margin-top:0"><label>Custom color</label><div class="color-inp"><input class="inp" id="customColor" value="#6d3bf5"><span class="color-chip" id="customChip" style="background:#6d3bf5"></span></div></div>
+            </div>
+            <div id="gradSec">
+              <div class="swatches js-swgrp">
+                <span class="swatch sel" data-c1="#7c3aed" data-c2="#6d3bf5" style="background:linear-gradient(135deg,#7c3aed,#6d3bf5)"></span>
+                <span class="swatch" data-c1="#3b82f6" data-c2="#2563eb" style="background:linear-gradient(135deg,#3b82f6,#2563eb)"></span>
+                <span class="swatch" data-c1="#10b981" data-c2="#059669" style="background:linear-gradient(135deg,#10b981,#059669)"></span>
+                <span class="swatch" data-c1="#f97316" data-c2="#ea580c" style="background:linear-gradient(135deg,#f97316,#ea580c)"></span>
+                <span class="swatch" data-c1="#ff99cc" data-c2="#ad8aff" style="background:linear-gradient(135deg,#ff99cc,#ad8aff)"></span>
+                <span class="swatch" data-c1="#3f3f46" data-c2="#18181b" style="background:linear-gradient(135deg,#3f3f46,#18181b)"></span>
+              </div>
+              <div class="color-grid">
+                <div class="fld" style="margin-top:0"><label>Start color</label><div class="color-inp"><input class="inp" id="startColor" value="#7c3aed"><span class="color-chip" id="startChip" style="background:#7c3aed"></span></div></div>
+                <div class="fld" style="margin-top:0"><label>End color</label><div class="color-inp"><input class="inp" id="endColor" value="#6d3bf5"><span class="color-chip" id="endChip" style="background:#6d3bf5"></span></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-h">Chatbox button</div>
+            <div class="fld"><label>Launcher</label>
+              <div class="launcher-grid">
+                <div class="launcher-opt sel js-launcher" data-l="icon"><span class="lo-icon"><svg width="17" height="17" viewBox="0 0 20 20" fill="none"><path d="M4 5h12v8H8l-3 3V5Z" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg></span></div>
+                <div class="launcher-opt js-launcher" data-l="label"><span class="lo-pill">Chat with us</span></div>
+                <div class="launcher-opt js-launcher" data-l="both"><span class="lo-pill"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M4 5h12v8H8l-3 3V5Z" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>Chat with us</span></div>
+              </div>
+              <div class="launcher-labels"><span>Icon only</span><span>Label only</span><span>Icon &amp; label</span></div>
+            </div>
+            <div class="fld"><label>Launcher icon</label>
+              <div class="icon-choices">
+                <div class="icon-choice sel js-iconc" data-ic="chat"><span class="ci"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M4 5h12v8H8l-3 3V5Z" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg></span></div>
+                <div class="icon-choice js-iconc" data-ic="help"><span class="ci"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7.5" stroke="#fff" stroke-width="1.4"/><path d="M8 8a2 2 0 1 1 2.6 1.9c-.4.2-.6.5-.6 1V11.5M10 14h.01" stroke="#fff" stroke-width="1.4" stroke-linecap="round"/></svg></span></div>
+                <label class="icon-choice up" for="launcherIconUpload"><svg width="17" height="17" viewBox="0 0 20 20" fill="none"><path d="M10 4v9M6.5 7.5 10 4l3.5 3.5M4 16h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></label>
+                <input type="file" id="launcherIconUpload" accept="image/*" style="display:none">
+              </div>
+            </div>
+            <div class="fld"><label>Launcher position</label><select class="inp" id="launcherPos"><option>Bottom right</option><option>Bottom left</option><option>Top right</option><option>Top left</option></select></div>
+          </div>
+
+
+          <div class="card">
+            <div class="cb-row"><span class="switch js-switch" id="removeBrandSw"></span><div class="grow"><div class="cb-t">Remove "Powered by ChatConvert"</div><div class="cb-d">Hide the small ChatConvert credit at the bottom of the chat panel.</div></div></div>
+          </div>
+
+        </div>
+        </div>
+
+        <div class="cb-preview">
+          <div class="pv-head"><span class="pv-title"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M2 10s3-5 8-5 8 5 8 5-3 5-8 5-8-5-8-5Z" stroke="currentColor" stroke-width="1.4"/><circle cx="10" cy="10" r="2" stroke="currentColor" stroke-width="1.4"/></svg>Preview</span><button class="pv-desktop"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><rect x="2.5" y="4" width="15" height="10" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M7 17h6M10 14v3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>Desktop</button></div>
+          <div class="chat-widget" id="cwWidget">
+            <div class="cw-head">
+              <span class="cw-back" id="pvBack" style="display:none"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M12 4l-6 6 6 6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+              <div class="cw-brand">
+                <span class="cw-logo"><img id="cwLogoImgPv" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'><defs><linearGradient id='g2' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%236d3bf5'/><stop offset='1' stop-color='%233b82f6'/></linearGradient></defs><rect width='48' height='48' rx='12' fill='url(%23g2)'/><path d='M14 16h20v13H21l-5 4V16Z' fill='none' stroke='%23ffffff' stroke-width='2.4' stroke-linejoin='round'/></svg>" alt="logo"></span>
+                <div><div class="cw-title" id="cwName">Chittpa</div><div class="cw-sub" id="cwDesc">How can we help you?</div></div>
+              </div>
+              <span class="cw-x" id="cwMin" title="Minimize"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+            </div>
+            <div class="cw-body">
+              <div id="pvHome" style="display:flex;flex-direction:column;gap:12px">
+                <div class="pvb" id="pvContact">
+                  <div class="pvb-t">Contact us</div>
+                  <div class="pvc-status" id="pvStatus"><span class="d"></span>We are online</div>
+                  <div class="pvc-actions">
+                    <button class="pvc-chat" id="pvChatNow"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M3 10l14-6-6 14-2-6-6-2Z" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>Chat now</button>
+                    <div id="pvContactIcons" style="display:flex;gap:9px;align-items:center;flex-wrap:nowrap"></div>
+                  </div>
+                </div>
+                <div class="pvb pvb-row" id="pvOrder">
+                  <div><div class="pvb-t">Order tracking</div><div class="pvo-sub">Track your orders</div></div>
+                  <svg width="17" height="17" viewBox="0 0 20 20" fill="none" style="color:var(--muted)"><path d="M8 5l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+                <div class="pvb" id="pvFaqs">
+                  <div class="pv-search"><span>Search for help</span><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="5.5" stroke="currentColor" stroke-width="1.5"/><path d="m13.5 13.5 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+                  <div class="pv-faq"><span>How long will it take to receive my order?</span><svg width="15" height="15" viewBox="0 0 20 20" fill="none" style="flex:none;color:var(--muted)"><path d="M8 5l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+                  <div class="pv-faq"><span>How to track my order?</span><svg width="15" height="15" viewBox="0 0 20 20" fill="none" style="flex:none;color:var(--muted)"><path d="M8 5l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+                  <div class="pv-faq"><span>What is your return policy?</span><svg width="15" height="15" viewBox="0 0 20 20" fill="none" style="flex:none;color:var(--muted)"><path d="M8 5l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+                  <div class="pv-faq"><span>Do you offer international shipping?</span><svg width="15" height="15" viewBox="0 0 20 20" fill="none" style="flex:none;color:var(--muted)"><path d="M8 5l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+                </div>
+                <div class="pv-empty" id="pvEmpty" style="display:none">Enable a feature to see it here.</div>
+              </div>
+              <div id="pvChat" style="display:none;flex-direction:column;gap:12px">
+                <div class="cw-bot"><span class="cw-av"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M4 5h12v8H8l-3 3V5Z" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg></span><div class="cw-bubble" id="cwBubble">Hi 👋 How can we help you?</div></div>
+                <div class="cw-starters" id="pvStarters">
+                  <div class="cw-chip">🛒 Track my order</div>
+                  <div class="cw-chip">🚚 How long does delivery take?</div>
+                  <div class="cw-chip">🔁 Return policy</div>
+                </div>
+              </div>
+              <div id="pvOrderScreen" style="display:none;flex-direction:column;gap:14px">
+                <div class="ot-tabs" id="otTabs"><button class="active" data-ot="order">Order number</button><button data-ot="tracking">Tracking number</button></div>
+                <div>
+                  <div class="ot-lbl" id="otLbl">Order number</div>
+                  <input class="ot-inp" id="otInp" placeholder="e.g. 1001">
+                </div>
+                <div class="ot-radios" id="otRadios">
+                  <label class="ot-radio sel" data-r="email"><span class="ot-dot"></span>Email address</label>
+                  <label class="ot-radio" data-r="phone"><span class="ot-dot"></span>Phone number</label>
+                </div>
+                <input class="ot-inp" id="otContact" placeholder="example@gmail.com">
+                <button class="ot-track">Track</button>
+              </div>
+            </div>
+            <div class="cw-input" id="cwInput" style="display:none"><span>Type your message…</span><span class="cw-send"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M3 10l14-6-6 14-2-6-6-2Z" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg></span></div>
+            <div class="cw-foot" id="cwFoot">Powered by ChatConvert</div>
+          </div>
+          <div class="cw-launcher" id="cwLauncher"><svg width="24" height="24" viewBox="0 0 20 20" fill="none"><path d="M4 5h12v8H8l-3 3V5Z" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg></div>
+        </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- MODAL: Add question -->
+  <div class="modal-ov" id="mAddQ">
+    <div class="modal">
+      <div class="modal-hd"><h3 id="aqTitle">Add question</h3><div class="modal-x js-qclose"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div></div>
+      <div class="modal-bd">
+        <div class="fld" style="margin-top:0"><label>Question</label><div style="position:relative"><input class="inp" id="aqQ" maxlength="100" style="padding-right:54px"><span id="aqCount" style="position:absolute;right:13px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--muted-2)">0/100</span></div></div>
+        <div class="fld"><label>Answer</label>
+          <div class="rte">
+            <div class="rte-bar"><span class="rb" style="font-weight:800">B</span><span class="rb" style="font-style:italic">I</span><span class="sep"></span><span class="rb"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M8 12a3 3 0 0 0 4 0l2-2a3 3 0 0 0-4-4l-1 1M12 8a3 3 0 0 0-4 0L6 10a3 3 0 0 0 4 4l1-1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></span></div>
+            <div class="rte-area" id="aqA" contenteditable="true"></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-ft"><button class="btn2 light js-qclose">Cancel</button><button class="btn2 dark js-qclose">Save</button></div>
+    </div>
+  </div>
+
+<script>
+  function syncPv(s){const id=s.dataset.pv;if(!id)return;const el=document.getElementById(id);if(el)el.style.display=s.classList.contains('on')?'':'none';const home=document.getElementById('pvHome'),empty=document.getElementById('pvEmpty');if(home&&empty){const any=[...home.querySelectorAll('.pvb')].some(b=>b.style.display!=='none');empty.style.display=any?'none':'';}}
+  document.querySelectorAll('.js-switch').forEach(s=>{s.addEventListener('click',()=>{s.classList.toggle('on');syncPv(s);});if(s.dataset.pv)syncPv(s);});
+  (function(){
+    const home=document.getElementById('pvHome'),chat=document.getElementById('pvChat'),ord=document.getElementById('pvOrderScreen'),
+      bk=document.getElementById('pvBack'),inp=document.getElementById('cwInput'),
+      cn=document.getElementById('pvChatNow'),ordBtn=document.getElementById('pvOrder');
+    function show(v,wi){home.style.display=v==='home'?'flex':'none';chat.style.display=v==='chat'?'flex':'none';ord.style.display=v==='order'?'flex':'none';bk.style.display=v==='home'?'none':'inline-flex';if(inp)inp.style.display=wi?'flex':'none';}
+    window.__pvShow=show;
+    if(cn)cn.addEventListener('click',()=>show('chat',true));
+    if(ordBtn)ordBtn.addEventListener('click',()=>show('order',false));
+    if(bk)bk.addEventListener('click',()=>show('home',false));
+    const w=document.getElementById('cwWidget'),ln=document.getElementById('cwLauncher'),mn=document.getElementById('cwMin');
+    if(mn)mn.addEventListener('click',()=>w.style.display='none');
+    if(ln)ln.addEventListener('click',()=>w.style.display='');
+    const ot=document.getElementById('otTabs');
+    if(ot)ot.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;ot.querySelectorAll('button').forEach(x=>x.classList.remove('active'));b.classList.add('active');const lbl=document.getElementById('otLbl'),oi=document.getElementById('otInp'),rd=document.getElementById('otRadios'),ct=document.getElementById('otContact');const trk=b.dataset.ot==='tracking';if(trk){lbl.textContent='Tracking number';oi.placeholder='e.g. AA12345';}else{lbl.textContent='Order number';oi.placeholder='e.g. 1001';}rd.style.display=trk?'none':'flex';ct.style.display=trk?'none':'';});
+    document.querySelectorAll('#otRadios .ot-radio').forEach(r=>r.addEventListener('click',()=>{document.querySelectorAll('#otRadios .ot-radio').forEach(x=>x.classList.remove('sel'));r.classList.add('sel');const c=document.getElementById('otContact');c.placeholder=r.dataset.r==='phone'?'+1 555 000 0000':'example@gmail.com';}));
+  })();
+  (function(){const ni=document.getElementById('cwNameInput'),ne=document.getElementById('cwName');
+    if(ni&&ne)ni.addEventListener('input',()=>ne.textContent=ni.value.trim()||'ChatConvert');
+    const di=document.getElementById('cwDescInput'),de=document.getElementById('cwDesc');
+    if(di&&de)di.addEventListener('input',()=>de.textContent=di.value);
+    const up=document.getElementById('logoUpload');
+    if(up)up.addEventListener('change',e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{const a=document.getElementById('cwLogoImg'),b=document.getElementById('cwLogoImgPv');if(a)a.src=r.result;if(b)b.src=r.result;};r.readAsDataURL(f);});})();
+  (function(){const dc=document.getElementById('disclaimerChk'),db=document.getElementById('disclaimerBox');if(dc&&db)dc.addEventListener('change',()=>db.style.display=dc.checked?'block':'none');})();
+  function renderChips(){const box=document.getElementById('pvStarters');if(!box)return;const qs=[...document.querySelectorAll('.qcard .qt')].map(q=>q.textContent.trim());box.innerHTML=qs.map(t=>`<div class="cw-chip">${t}</div>`).join('');}
+  (function(){const wm=document.getElementById('welcomeMsg'),bb=document.getElementById('cwBubble');
+    function syncWelcome(){if(wm&&bb)bb.innerHTML=wm.value.replace(/{{\s*customer_name\s*}}/g,'there').replace(/\n/g,'<br>');}
+    if(wm)wm.addEventListener('input',syncWelcome);syncWelcome();renderChips();})();
+  (function(){
+    const mq=document.getElementById('mAddQ'),btn=document.getElementById('addQBtn'),q=document.getElementById('aqQ'),a=document.getElementById('aqA'),cnt=document.getElementById('aqCount'),title=document.getElementById('aqTitle');
+    function close(){mq.classList.remove('show');document.body.style.overflow='';}
+    function openQ(mode,qv,av){title.textContent=mode==='edit'?'Edit question':'Add question';q.value=qv||'';a.innerHTML=av||'';cnt.textContent=(qv||'').length+'/100';mq.classList.add('show');document.body.style.overflow='hidden';q.focus();}
+    if(btn)btn.addEventListener('click',()=>openQ('add','',''));
+    document.querySelectorAll('.qcard').forEach(card=>{const svgs=card.querySelectorAll('.qact svg');
+      if(svgs[0])svgs[0].addEventListener('click',()=>{card.remove();renderChips();});
+      if(svgs[1])svgs[1].addEventListener('click',()=>openQ('edit',(card.querySelector('.qt').textContent||'').replace(/^[^\s]+\s+/,''),card.querySelector('.qd').innerHTML));});
+    document.querySelectorAll('.js-qclose').forEach(b=>b.addEventListener('click',close));
+    mq.addEventListener('click',e=>{if(e.target===mq)close();});
+    document.addEventListener('keydown',e=>{if(e.key==='Escape')close();});
+    if(q)q.addEventListener('input',()=>cnt.textContent=q.value.length+'/100');
+  })();
+  document.getElementById('cbTabs').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;document.querySelectorAll('#cbTabs button').forEach(x=>x.classList.remove('active'));b.classList.add('active');
+    document.querySelectorAll('.cb-panel').forEach(p=>p.classList.toggle('show',p.dataset.cbp===b.dataset.cbt));window.scrollTo({top:0,behavior:'smooth'});
+    if(window.__pvShow){if(b.dataset.cbt==='chatpage'){renderChips();window.__pvShow('chat',true);}else{window.__pvShow('home',false);}}});
+  document.querySelectorAll('.js-radio').forEach(o=>o.addEventListener('click',()=>{document.querySelectorAll('.js-radio[data-grp="'+o.dataset.grp+'"]').forEach(x=>x.classList.remove('sel'));o.classList.add('sel');}));
+  const accT=document.getElementById('accToggle');
+  if(accT)accT.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;accT.querySelectorAll('button').forEach(x=>x.classList.remove('active'));b.classList.add('active');
+    const solid=b.dataset.a==='solid';const ss=document.getElementById('solidSec'),gs=document.getElementById('gradSec');if(ss)ss.style.display=solid?'block':'none';if(gs)gs.style.display=solid?'none':'block';updateAccent();});
+  function setCol(inpId,chipId,c){const i=document.getElementById(inpId),ch=document.getElementById(chipId);if(i)i.value=c;if(ch)ch.style.background=c;}
+  function updateAccent(){const a=document.querySelector('#accToggle button.active');const solid=a&&a.dataset.a==='solid';let c1,c2;if(solid){c1=c2=document.getElementById('customColor').value;}else{c1=document.getElementById('startColor').value;c2=document.getElementById('endColor').value;}document.documentElement.style.setProperty('--cw1',c1);document.documentElement.style.setProperty('--cw2',c2);}
+  ['customColor','startColor','endColor'].forEach(id=>{const el=document.getElementById(id);if(el)el.addEventListener('input',updateAccent);});
+  document.querySelectorAll('.js-swgrp').forEach(grp=>grp.querySelectorAll('.swatch').forEach(s=>s.addEventListener('click',()=>{
+    grp.querySelectorAll('.swatch').forEach(x=>x.classList.remove('sel'));s.classList.add('sel');
+    const c1=s.dataset.c1,c2=s.dataset.c2;
+    if(s.closest('#gradSec')&&c1){setCol('startColor','startChip',c1);setCol('endColor','endChip',c2||c1);}
+    if(s.closest('#solidSec')&&c1){setCol('customColor','customChip',c1);}
+    updateAccent();
+  })));
+  (function(){const rb=document.getElementById('removeBrandSw'),foot=document.getElementById('cwFoot');if(rb&&foot)rb.addEventListener('click',()=>{foot.style.display=rb.classList.contains('on')?'none':'';});})();
+  (function(){
+    const ln=document.getElementById('cwLauncher');if(!ln)return;
+    const icons={chat:'<svg width="24" height="24" viewBox="0 0 20 20" fill="none"><path d="M4 5h12v8H8l-3 3V5Z" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>',help:'<svg width="24" height="24" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7.5" stroke="#fff" stroke-width="1.4"/><path d="M8 8a2 2 0 1 1 2.6 1.9c-.4.2-.6.5-.6 1V11.5M10 14h.01" stroke="#fff" stroke-width="1.4" stroke-linecap="round"/></svg>'};
+    let curIcon=icons.chat,style='icon',posLeft=false;
+    function render(){ln.classList.toggle('lc-pill',style!=='icon');ln.classList.toggle('lc-left',posLeft);
+      if(style==='label')ln.innerHTML='<span>Chat with us</span>';else if(style==='both')ln.innerHTML=curIcon+'<span>Chat with us</span>';else ln.innerHTML=curIcon;}
+    document.querySelectorAll('.js-launcher').forEach(o=>o.addEventListener('click',()=>{document.querySelectorAll('.js-launcher').forEach(x=>x.classList.remove('sel'));o.classList.add('sel');style=o.dataset.l;render();}));
+    document.querySelectorAll('.js-iconc').forEach(o=>o.addEventListener('click',()=>{document.querySelectorAll('.js-iconc').forEach(x=>x.classList.remove('sel'));o.classList.add('sel');curIcon=icons[o.dataset.ic]||curIcon;render();}));
+    const iu=document.getElementById('launcherIconUpload');
+    if(iu)iu.addEventListener('change',e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{curIcon='<img src="'+r.result+'">';document.querySelectorAll('.js-iconc').forEach(x=>x.classList.remove('sel'));render();};r.readAsDataURL(f);});
+    const ps=document.getElementById('launcherPos');
+    if(ps)ps.addEventListener('change',()=>{posLeft=/left/i.test(ps.value);render();});
+    render();
+  })();
+  function updatePreChat(mode){
+    document.querySelectorAll('.pc-both').forEach(e=>e.style.display=(mode==='both')?'':'none');
+    document.querySelectorAll('.pc-gb').forEach(e=>e.style.display=(mode==='guest'||mode==='both')?'':'none');
+  }
+  document.querySelectorAll('.js-startpc').forEach(o=>o.addEventListener('click',()=>updatePreChat(o.dataset.mode)));
+  updatePreChat('both');
+  (function(){
+    const btn=document.getElementById('fieldAddBtn'),menu=document.getElementById('fieldMenu'),rows=document.getElementById('fieldRows');
+    if(!btn)return;
+    const chev='<svg width="12" height="12" viewBox="0 0 20 20" fill="none"><path d="M6 8l4 4 4-4" stroke="var(--muted)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    const trash='<svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M5 6h10M8 6V4h4v2M6 6l1 9h6l1-9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    function wireDel(){rows.querySelectorAll('.fr-del').forEach(d=>d.onclick=()=>d.closest('.field-row').remove());}
+    wireDel();
+    btn.addEventListener('click',e=>{e.stopPropagation();menu.classList.toggle('show');});
+    document.addEventListener('click',()=>menu.classList.remove('show'));
+    menu.querySelectorAll('.dd-item2').forEach(it=>it.addEventListener('click',e=>{e.stopPropagation();menu.classList.remove('show');
+      rows.insertAdjacentHTML('beforeend',`<div class="field-row">${it.dataset.f} <span class="opt-badge">Optional</span> ${chev}<span class="fr-del">${trash}</span></div>`);wireDel();}));
+  })();
+  const cEdit=document.getElementById('contactEdit');
+  if(cEdit)cEdit.addEventListener('click',()=>{const d=document.getElementById('contactDetail'),open=d.style.display!=='none';d.style.display=open?'none':'block';cEdit.textContent=open?'Edit':'Close';});
+
+  // Contact methods dropdown
+  (function(){
+    const rows=document.getElementById('cmRows'),btn=document.getElementById('cmAddBtn'),menu=document.getElementById('cmMenu');
+    if(!rows)return;
+    const drag='<svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><circle cx="7" cy="5" r="1.3"/><circle cx="13" cy="5" r="1.3"/><circle cx="7" cy="10" r="1.3"/><circle cx="13" cy="10" r="1.3"/><circle cx="7" cy="15" r="1.3"/><circle cx="13" cy="15" r="1.3"/></svg>';
+    const trash='<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 6h10M8 6V4h4v2M6 6l1 9h6l1-9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    const conf={
+      whatsapp:{name:'WhatsApp',cls:'wa',ic:'<svg width="28" height="28" viewBox="0 0 20 20" fill="none"><path d="M4 16l1-3a6 6 0 1 1 2.4 2.4L4 16Z" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/></svg>',phone:true,val:'+1'},
+      phone:{name:'Phone call',cls:'ph',ic:'<svg width="28" height="28" viewBox="0 0 20 20" fill="none"><path d="M5 4h3l1.5 3.5-2 1.2a8 8 0 0 0 3.8 3.8l1.2-2L16 15v3a1 1 0 0 1-1 1A11 11 0 0 1 4 5a1 1 0 0 1 1-1Z" stroke="#fff" stroke-width="1.3" stroke-linejoin="round"/></svg>',phone:true,val:'+1'},
+      email:{name:'Email',cls:'em',ic:'<svg width="28" height="28" viewBox="0 0 20 20" fill="none"><rect x="3" y="5" width="14" height="10" rx="2" stroke="#fff" stroke-width="1.5"/><path d="m4 6 6 5 6-5" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>',phone:false,val:'pooja@justgoweb.com'},
+    };
+    const pvIcons=document.getElementById('pvContactIcons');
+    let added=[];
+    function rowHtml(t,val){const c=conf[t];const inp=c.phone?`<div class="phone-inp"><span class="flag">🇺🇸</span><svg width="11" height="11" viewBox="0 0 20 20" fill="none"><path d="M7 8l3-3 3 3M7 12l3 3 3-3" stroke="var(--muted-2)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><input value="${val}"></div>`:`<input class="inp" value="${val}">`;
+      return `<div class="cm-item" data-t="${t}"><div class="cm-name">${c.name}</div><div class="email-field"><span class="edrag">${drag}</span><span class="cm-ic ${c.cls}">${c.ic}</span>${inp}<span class="edel js-cmdel">${trash}</span></div></div>`;}
+    function render(){
+      rows.innerHTML=added.map(t=>rowHtml(t,t==='email'?conf[t].val:conf[t].val)).join('');
+      rows.querySelectorAll('.js-cmdel').forEach(d=>d.onclick=()=>{const t=d.closest('.cm-item').dataset.t;added=added.filter(x=>x!==t);render();});
+      pvIcons.innerHTML=added.map(t=>`<span class="pvc-ic ${conf[t].cls}">${conf[t].ic}</span>`).join('');
+      menu.querySelectorAll('.dd-item').forEach(it=>it.style.display=added.includes(it.dataset.m)?'none':'');
+    }
+    added=['whatsapp','email'];render();
+    btn.addEventListener('click',e=>{e.stopPropagation();menu.classList.toggle('show');});
+    document.addEventListener('click',()=>menu.classList.remove('show'));
+    menu.querySelectorAll('.dd-item').forEach(it=>it.addEventListener('click',e=>{e.stopPropagation();menu.classList.remove('show');const t=it.dataset.m;if(!added.includes(t)){added.push(t);render();}}));
+  })();
+</script>
+</body>
+</html>

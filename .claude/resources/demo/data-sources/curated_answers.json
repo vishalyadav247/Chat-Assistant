@@ -1,0 +1,50 @@
+[
+  {
+    "question": "what are your best sellers",
+    "synonyms": ["best sellers", "top products", "most popular", "what sells the most"],
+    "products": ["Merino Wool Gloves", "Waterproof Rain Jacket", "Wireless Bluetooth Earbuds"],
+    "talkingPoints": "These are our most-loved picks this season, chosen by thousands of shoppers.",
+    "status": "Published",
+    "priority": "High"
+  },
+  {
+    "question": "do you have gift ideas under 30 dollars",
+    "synonyms": ["gift ideas", "gifts under 30", "cheap gift", "affordable present"],
+    "products": ["Ceramic Coffee Mug", "Scented Soy Candle", "Insulated Water Bottle"],
+    "talkingPoints": "Great crowd-pleasers that ship fast and suit almost anyone.",
+    "status": "Published",
+    "priority": "Normal"
+  },
+  {
+    "question": "what should I buy for winter",
+    "synonyms": ["winter essentials", "cold weather gear", "stay warm", "winter must haves"],
+    "products": ["Merino Wool Gloves", "Fleece Beanie", "Chunky Knit Scarf", "Down Puffer Jacket"],
+    "talkingPoints": "Our winter warmers keep you cosy from head to toe.",
+    "status": "Published",
+    "priority": "Normal"
+  },
+  {
+    "question": "what do you recommend for the kitchen",
+    "synonyms": ["kitchen essentials", "cooking gear", "kitchen must haves", "for cooking"],
+    "products": ["Stainless Chef's Knife", "Bamboo Cutting Board", "Non-Stick Frying Pan", "French Press Coffee Maker"],
+    "talkingPoints": "The core kit for a happy kitchen — sharp, sturdy, and built to last.",
+    "status": "Published",
+    "priority": "Normal"
+  },
+  {
+    "question": "what should I get for a home workout",
+    "synonyms": ["home gym", "workout gear", "exercise at home", "fitness essentials"],
+    "products": ["Yoga Mat", "Adjustable Dumbbell Set", "Resistance Bands Set"],
+    "talkingPoints": "Everything you need to train at home without a gym membership.",
+    "status": "Published",
+    "priority": "Normal"
+  },
+  {
+    "question": "gifts for a coffee lover",
+    "synonyms": ["coffee gift", "for someone who loves coffee", "coffee lover present"],
+    "products": ["French Press Coffee Maker", "Insulated Travel Tumbler", "Ceramic Coffee Mug"],
+    "talkingPoints": "A perfect trio for anyone who takes their coffee seriously.",
+    "status": "Published",
+    "priority": "Normal"
+  }
+]

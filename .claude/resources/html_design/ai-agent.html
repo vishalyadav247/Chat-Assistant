@@ -1,0 +1,1805 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ChatConvert — AI Agent</title>
+<style>
+  :root{
+    --bg:#f6f6f7;--surface:#ffffff;--surface-2:#fbfbfc;
+    --ink:#2b2b30;--ink-strong:#141417;--muted:#6b6b73;--muted-2:#9a9aa2;
+    --border:#e9e9ec;--border-strong:#dcdce1;
+    --nav-bg:#17171b;--accent:#6d3bf5;--accent-2:#3b82f6;--accent-soft:#efeafe;
+    --green-bg:#d7f8e6;--green-ink:#0c5132;--amber-bg:#fdecc8;--amber-ink:#8a5a00;
+    --info-bg:#dbeafe;--info-ink:#1e40af;--red:#e11d48;--todo-bg:#ececf0;--todo-ink:#5a5a63;--star:#f59e0b;
+    --shadow-sm:0 1px 2px rgba(20,20,25,.06), 0 0 0 1px rgba(20,20,25,.04);
+    --shadow-md:0 6px 20px rgba(20,20,25,.08), 0 0 0 1px rgba(20,20,25,.04);
+    --radius:16px;
+  }
+  html[data-theme="dark"]{
+    --bg:#101014;--surface:#1a1a20;--surface-2:#202027;
+    --ink:#e6e6ea;--ink-strong:#ffffff;--muted:#a2a2ac;--muted-2:#71717a;
+    --border:#2a2a32;--border-strong:#33333d;--accent-soft:#241a44;
+    --green-bg:#123524;--green-ink:#77e6ab;--amber-bg:#3a2a08;--amber-ink:#f2c360;
+    --info-bg:#14233f;--info-ink:#9dc0ff;--red:#fb7185;--todo-bg:#2a2a32;--todo-ink:#b6b6c0;
+    --shadow-sm:0 1px 2px rgba(0,0,0,.4), 0 0 0 1px rgba(255,255,255,.04);
+    --shadow-md:0 8px 26px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.05);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Inter",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased;transition:background .35s,color .35s;}
+
+  .topbar{height:56px;background:var(--nav-bg);display:flex;align-items:center;padding:0 12px;position:sticky;top:0;z-index:50;gap:16px;}
+  .brand{display:flex;align-items:center;gap:10px;min-width:230px;padding-left:6px;}
+  .brand .logo{width:28px;height:28px;border-radius:9px;background:linear-gradient(135deg,#7c3aed,#3b82f6);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:15px;}
+  .brand .wordmark{color:#fff;font-weight:700;font-size:17px;}
+  .brand .release{color:#a9a9b3;font-size:12px;border-left:1px solid #3a3a42;padding-left:10px;}
+  .search{flex:1;max-width:480px;margin:0 auto;background:#26262d;border:1px solid #3a3a42;border-radius:9px;height:34px;display:flex;align-items:center;padding:0 10px;gap:8px;color:#a9a9b3;}
+  .search .ph{flex:1;}.search .kbd{font-size:11px;color:#a9a9b3;border:1px solid #3a3a42;border-radius:5px;padding:1px 6px;background:#1d1d23;}
+  .topbar-right{display:flex;align-items:center;gap:6px;min-width:210px;justify-content:flex-end;}
+  .icon-btn{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;color:#c9c9d0;cursor:pointer;}
+  .icon-btn:hover{background:#2c2c34;}
+  .userchip{display:flex;align-items:center;gap:8px;background:#26262d;border-radius:9px;padding:4px 8px 4px 4px;}
+  .userchip .av{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,#7c3aed,#3b82f6);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;}
+  .userchip .name{color:#e6e6ea;font-size:13px;}.userchip .badge{font-size:10px;color:#a9a9b3;background:#1d1d23;border-radius:5px;padding:1px 6px;font-weight:600;}
+  .theme-toggle{display:flex;align-items:center;gap:6px;background:#26262d;border-radius:9px;padding:5px 10px;cursor:pointer;color:#c9c9d0;font-size:12px;font-weight:600;}
+  .theme-toggle:hover{background:#31313a;}
+
+  .shell{display:flex;align-items:flex-start;}
+  .sidebar{width:236px;flex:none;padding:12px 12px 40px;position:sticky;top:56px;height:calc(100vh - 56px);overflow-y:auto;}
+  .sidebar::-webkit-scrollbar{width:8px;}.sidebar::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:8px;}
+  .nav-item{display:flex;align-items:center;gap:10px;height:34px;padding:0 9px;border-radius:9px;color:var(--ink);font-weight:500;cursor:pointer;transition:.13s;}
+  .nav-item:hover{background:var(--border);}
+  .nav-item .ico{width:18px;height:18px;flex:none;display:flex;align-items:center;justify-content:center;color:currentColor;opacity:.85;}
+  .nav-item .label{flex:1;}.nav-item .count{font-size:11px;color:#fff;font-weight:700;background:var(--accent);border-radius:20px;padding:1px 7px;}
+  .nav-section-label{font-size:11px;font-weight:700;color:var(--muted-2);padding:14px 9px 4px;text-transform:uppercase;letter-spacing:.5px;}
+  .nav-divider{height:1px;background:var(--border);margin:8px 4px;}
+  .app-head{display:flex;align-items:center;gap:8px;height:34px;padding:0 9px;border-radius:9px;font-weight:650;}
+  .app-head .app-ico{width:18px;height:18px;border-radius:6px;background:linear-gradient(135deg,#7c3aed,#3b82f6);flex:none;}
+  .app-head .dot{width:7px;height:7px;border-radius:50%;background:#22c55e;margin-left:auto;box-shadow:0 0 0 3px rgba(34,197,94,.18);}
+  .sub-rail{position:relative;}.sub-rail::before{content:"";position:absolute;left:20px;top:36px;bottom:34px;width:1.5px;background:var(--border-strong);border-radius:2px;}
+  .sub-item{position:relative;display:flex;align-items:center;height:31px;padding:0 9px 0 34px;border-radius:9px;color:var(--ink);font-weight:500;cursor:pointer;transition:.13s;}
+  .sub-item:hover{background:var(--border);}
+  .sub-item.active{background:var(--accent-soft);color:var(--accent);font-weight:700;box-shadow:inset 0 0 0 1px rgba(109,59,245,.18);}
+  .sub-item.active::before{content:"";position:absolute;left:23px;top:6px;bottom:6px;width:3px;border-radius:3px;background:linear-gradient(180deg,#7c3aed,#3b82f6);}
+  html[data-theme="dark"] .sub-item.active{color:#b79bff;box-shadow:inset 0 0 0 1px rgba(183,155,255,.25);}
+  .sub-item.muted{color:var(--muted);}
+
+  .main{flex:1;min-width:0;padding:18px 26px 60px;}
+  .content{max-width:1000px;margin:0 auto;display:flex;flex-direction:column;gap:16px;}
+  .view{display:none;flex-direction:column;gap:16px;}
+  .view.show{display:flex;}
+  .btn{border:none;cursor:pointer;font-family:inherit;font-size:12.5px;font-weight:650;border-radius:9px;padding:8px 14px;display:inline-flex;align-items:center;gap:7px;transition:.14s;}
+  .btn.light{background:var(--surface);color:var(--ink);box-shadow:inset 0 0 0 1px var(--border-strong);}
+  .btn.light:hover{background:var(--border);}
+  .btn.dark{background:linear-gradient(135deg,#2b2b30,#17171b);color:#fff;}
+  html[data-theme="dark"] .btn.dark{background:linear-gradient(135deg,#6d3bf5,#3b82f6);}
+  .btn.dark:hover{transform:translateY(-1px);}
+
+  /* AI agent overview */
+  .ag-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;}
+  .ag-title{display:flex;align-items:center;gap:10px;}
+  .ag-title h1{font-size:22px;font-weight:750;color:var(--ink-strong);margin:0;letter-spacing:-.4px;}
+  .on-badge{font-size:11px;font-weight:800;color:var(--green-ink);background:var(--green-bg);border-radius:20px;padding:3px 10px;display:inline-flex;align-items:center;gap:5px;}
+  .on-badge .d{width:6px;height:6px;border-radius:50%;background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,.25);}
+  .ag-sub{color:var(--muted);font-size:13px;margin:6px 0 0;}
+  .ag-sub a{color:var(--accent);font-weight:600;text-decoration:none;}
+  html[data-theme="dark"] .ag-sub a{color:#b79bff;}
+  .ag-actions{display:flex;gap:8px;flex:none;}
+  .banner-wrap{border-radius:12px;overflow:hidden;box-shadow:var(--shadow-sm);}
+  .banner{background:var(--info-bg);padding:14px 16px;display:flex;align-items:center;gap:12px;}
+  .banner .bi{color:var(--info-ink);flex:none;}
+  .banner .bt{font-weight:750;color:var(--info-ink);font-size:13px;}
+  .banner .bx{margin-left:auto;color:var(--info-ink);cursor:pointer;opacity:.7;}
+  .banner-wrap .bb{background:var(--surface);padding:12px 16px 14px;color:var(--muted);font-size:12.5px;}
+  .card{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow-sm);padding:18px 20px;}
+  .row-card{display:flex;align-items:center;gap:12px;}
+  .row-card .rt{font-weight:700;color:var(--ink-strong);font-size:13.5px;display:flex;align-items:center;gap:8px;}
+  .pending{font-size:11px;font-weight:700;color:var(--amber-ink);background:var(--amber-bg);border-radius:20px;padding:2px 9px;}
+  .row-card .rs{color:var(--muted);font-size:12.5px;margin-top:2px;}
+  .row-card .rl{margin-left:auto;color:var(--accent);font-weight:700;font-size:12.5px;cursor:pointer;text-decoration:none;}
+  html[data-theme="dark"] .row-card .rl{color:#b79bff;}
+  .setup h2{font-size:14.5px;font-weight:750;color:var(--ink-strong);margin:0 0 14px;}
+  .setup-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;}
+  .scard{position:relative;display:flex;flex-direction:column;border-radius:16px;background:var(--surface);box-shadow:inset 0 0 0 1px var(--border);padding:18px 16px 16px;overflow:hidden;transition:transform .18s,box-shadow .18s;}
+  .scard::before{content:"";position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,var(--c1),var(--c2));}
+  .scard::after{content:"";position:absolute;right:-30px;top:-30px;width:110px;height:110px;border-radius:50%;background:radial-gradient(circle,var(--c1),transparent 70%);opacity:.10;pointer-events:none;}
+  .scard:hover{transform:translateY(-4px);box-shadow:0 14px 30px rgba(20,20,25,.12),inset 0 0 0 1px var(--border);}
+  html[data-theme="dark"] .scard:hover{box-shadow:0 16px 34px rgba(0,0,0,.55),inset 0 0 0 1px var(--border);}
+  .s-top{display:flex;align-items:flex-start;margin-bottom:13px;}
+  .s-icon{width:46px;height:46px;border-radius:13px;display:flex;align-items:center;justify-content:center;color:#fff;flex:none;background:linear-gradient(135deg,var(--c1),var(--c2));box-shadow:0 6px 14px color-mix(in srgb,var(--c1) 40%,transparent);}
+  .s-step{margin-left:auto;font-size:10.5px;font-weight:800;color:var(--muted);background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--border);border-radius:20px;padding:4px 10px;height:fit-content;letter-spacing:.3px;}
+  .scard .sn{font-weight:750;color:var(--ink-strong);font-size:14.5px;}
+  .scard .sd{color:var(--muted);font-size:12.5px;margin:4px 0 12px;}
+  .s-status{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;border-radius:20px;padding:3px 10px;width:fit-content;margin-bottom:10px;}
+  .s-status.done{color:var(--green-ink);background:var(--green-bg);}
+  .s-status.todo{color:var(--amber-ink);background:var(--amber-bg);}
+  .s-status.ready{color:var(--accent);background:var(--accent-soft);}
+  html[data-theme="dark"] .s-status.ready{color:#b79bff;}
+  .s-status .d{width:6px;height:6px;border-radius:50%;background:currentColor;}
+  .s-status.ready .d{animation:pulseDot 1.6s infinite;}
+  @keyframes pulseDot{0%{box-shadow:0 0 0 0 color-mix(in srgb,currentColor 55%,transparent);}70%{box-shadow:0 0 0 6px transparent;}100%{box-shadow:0 0 0 0 transparent;}}
+  .s-track{height:6px;border-radius:6px;background:var(--todo-bg);overflow:hidden;margin-bottom:14px;}
+  .s-fill{height:100%;border-radius:6px;background:linear-gradient(90deg,var(--c1),var(--c2));width:0;transition:width 1s cubic-bezier(.22,1,.36,1);}
+  .scard .btn{width:100%;justify-content:center;margin-top:auto;}
+  .promo{display:flex;align-items:center;gap:20px;}
+  .promo .pt{font-weight:750;color:var(--ink-strong);font-size:14px;}
+  .promo .pd{color:var(--muted);font-size:12.5px;margin:5px 0 14px;max-width:560px;}
+  .promo .pa{display:flex;align-items:center;gap:14px;}
+  .promo .pa .link{color:var(--accent);font-weight:700;font-size:12.5px;cursor:pointer;}
+  html[data-theme="dark"] .promo .pa .link{color:#b79bff;}
+  .promo .mascot{width:110px;height:110px;border-radius:50%;flex:none;margin-left:auto;background:radial-gradient(circle at 40% 35%,#fde047,#f59e0b 60%,#1e1b4b);display:flex;align-items:center;justify-content:center;font-size:46px;box-shadow:0 10px 24px rgba(245,158,11,.4);}
+  .footer{text-align:center;color:var(--muted-2);font-size:12px;padding:6px;display:flex;align-items:center;justify-content:center;gap:6px;}
+  .footer b{color:var(--accent);font-weight:700;}
+  html[data-theme="dark"] .footer b{color:#b79bff;}
+
+  /* Training data */
+  .td-head{display:flex;align-items:center;gap:12px;}
+  .back{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;color:var(--muted);cursor:pointer;background:var(--surface);box-shadow:var(--shadow-sm);}
+  .back:hover{background:var(--border);color:var(--accent);}
+  .td-head h1{font-size:21px;font-weight:750;color:var(--ink-strong);margin:0;flex:1;letter-spacing:-.3px;}
+  .tabbar{display:flex;gap:4px;background:var(--surface);border-radius:12px;padding:5px;box-shadow:var(--shadow-sm);width:fit-content;flex-wrap:wrap;}
+  .tabbar button{border:none;background:transparent;font-family:inherit;font-size:13px;font-weight:650;color:var(--muted);padding:8px 15px;border-radius:8px;cursor:pointer;transition:.13s;}
+  .tabbar button.active{background:linear-gradient(135deg,#6d3bf5,#3b82f6);color:#fff;box-shadow:0 3px 9px rgba(109,59,245,.32);}
+  .tabbar button:not(.active):hover{color:var(--ink);}
+  .learn-card{display:flex;align-items:center;gap:14px;}
+  .learn-card .lc-t{font-weight:750;color:var(--ink-strong);font-size:14.5px;display:flex;align-items:center;gap:9px;}
+  .chip{font-size:11px;font-weight:700;color:var(--muted);background:var(--todo-bg);border-radius:20px;padding:3px 10px;}
+  .learn-card .lc-d{color:var(--muted);font-size:12.5px;margin-top:4px;}
+  .switch{display:inline-block;vertical-align:middle;width:34px;height:20px;border-radius:20px;background:var(--border-strong);position:relative;cursor:pointer;transition:.15s;flex:none;margin-left:auto;}
+  .switch.on{background:var(--accent);}
+  .switch::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.15s;}
+  .switch.on::after{left:16px;}
+  .switch.sm{width:32px;height:18px;margin:0;}
+  .switch.sm::after{width:14px;height:14px;top:2px;left:2px;}
+  .switch.sm.on::after{left:16px;}
+  .manage-head{display:flex;align-items:flex-start;gap:12px;margin-bottom:14px;}
+  .manage-head h2{font-size:14.5px;font-weight:750;color:var(--ink-strong);margin:0;}
+  .manage-head .md-d{color:var(--muted);font-size:12.5px;margin:5px 0 0;}
+  .manage-head .md-meta{color:var(--muted-2);font-size:11.5px;margin-top:6px;display:flex;align-items:center;gap:6px;}
+  .manage-head .actions{margin-left:auto;display:flex;gap:8px;flex:none;}
+  .subtabs{display:flex;align-items:center;gap:4px;background:var(--surface-2);border-radius:10px;padding:3px;box-shadow:inset 0 0 0 1px var(--border);width:fit-content;}
+  .subtabs button{border:none;background:transparent;font-family:inherit;font-size:12px;font-weight:700;color:var(--muted);padding:6px 13px;border-radius:8px;cursor:pointer;}
+  .subtabs button.active{background:var(--surface);color:var(--ink-strong);box-shadow:var(--shadow-sm);}
+  .filt-ic{width:34px;height:34px;border-radius:9px;background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--border-strong);display:flex;align-items:center;justify-content:center;color:var(--muted);cursor:pointer;}
+  .tbl-h,.tbl-r{display:grid;gap:12px;align-items:center;}
+  .tbl-h{padding:0 6px 10px;box-shadow:inset 0 -1px 0 var(--border);}
+  .tbl-h span{font-size:11px;font-weight:700;color:var(--muted-2);text-transform:uppercase;letter-spacing:.5px;}
+  .tbl-r{padding:11px 6px;box-shadow:inset 0 -1px 0 var(--border);border-radius:9px;transition:.12s;}
+  .tbl-r:hover{background:var(--surface-2);}
+  .prod-cols{grid-template-columns:24px 2.3fr 1fr 1.6fr 0.9fr 0.6fr 0.7fr;}
+  .coll-cols{grid-template-columns:24px 1.6fr 2fr 1.1fr 0.8fr 0.9fr 0.7fr;}
+  .ck-cols{grid-template-columns:24px 2.4fr 0.8fr 0.9fr 1.3fr 0.4fr;}
+  .ds-cols{grid-template-columns:minmax(0,2fr) 100px 110px 130px 180px;}
+  .ds-cols .tbl-h span:last-child{text-align:left;}
+  .src-name{font-weight:600;color:var(--ink-strong);font-size:12.5px;}
+  .src-sub{color:var(--muted-2);font-size:11.5px;}
+  .tbadge{display:inline-flex;align-items:center;font-size:11px;font-weight:700;border-radius:20px;padding:3px 10px;background:var(--todo-bg);color:var(--todo-ink);}
+  .tbadge.cat{background:var(--info-bg);color:var(--info-ink);}
+  .status.pending{background:var(--todo-bg);color:var(--todo-ink);}
+  .dsact{display:flex;align-items:center;gap:14px;font-size:12.5px;font-weight:600;}
+  .dsa{cursor:pointer;color:var(--ink);}
+  .dsa:hover{color:var(--accent);}
+  .dsa.del{color:#e11d48;}
+  .dsa.auto{color:var(--muted-2);cursor:default;}
+  .fld-note{font-size:12px;color:var(--muted);margin:-8px 0 6px;}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;}
+  .chip2{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;color:var(--ink);background:var(--surface);box-shadow:inset 0 0 0 1px var(--border-strong);border-radius:20px;padding:6px 12px;}
+  .chip2 .cx{cursor:pointer;color:var(--muted-2);font-weight:700;}
+  .chip2 .cx:hover{color:#e11d48;}
+  .syn-row{display:flex;gap:10px;}
+  .syn-row .inp{flex:1;}
+  .syn-row .btn{flex:none;}
+  .qa-2col{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  textarea.inp{resize:vertical;min-height:70px;font-family:inherit;line-height:1.5;}
+  .step-lbl{font-size:11px;font-weight:700;color:var(--muted-2);text-transform:uppercase;letter-spacing:.5px;margin:16px 0 8px;}
+  .step-lbl.first{margin-top:2px;}
+  .ub-lbl{font-size:12.5px;font-weight:650;color:var(--ink-strong);margin:16px 0 4px;}
+  .optcard{display:flex;gap:11px;align-items:flex-start;border:1px solid var(--border-strong);border-radius:11px;padding:13px 14px;cursor:pointer;margin-bottom:8px;transition:.13s;}
+  .optcard:hover{border-color:var(--muted-2);}
+  .optcard.sel{border-color:#16a34a;box-shadow:0 0 0 1px #16a34a;}
+  .oc-radio{width:18px;height:18px;border-radius:50%;border:1.5px solid var(--border-strong);flex:none;margin-top:1px;display:flex;align-items:center;justify-content:center;}
+  .optcard.sel .oc-radio{border-color:#16a34a;}
+  .optcard.sel .oc-radio::after{content:"";width:9px;height:9px;border-radius:50%;background:#16a34a;}
+  .oc-t{font-weight:650;color:var(--ink-strong);font-size:13px;}
+  .oc-d{color:var(--muted);font-size:12px;margin-top:3px;line-height:1.5;}
+  .note-box{background:var(--surface-2);border-radius:10px;padding:12px 14px;color:var(--muted);font-size:12.5px;box-shadow:inset 0 0 0 1px var(--border);line-height:1.5;}
+  .dz-click{display:flex;align-items:center;justify-content:center;gap:8px;color:var(--muted);font-size:13px;font-weight:600;cursor:pointer;}
+  .pol-sub{color:var(--muted);font-size:12.5px;margin:3px 0 4px;line-height:1.5;}
+  .pol-used{font-size:12px;color:var(--muted-2);font-weight:650;margin-bottom:6px;}
+  .pol-row{display:flex;align-items:center;gap:12px;padding:11px 4px;box-shadow:inset 0 -1px 0 var(--border);}
+  .pol-info{flex:1;min-width:0;}
+  .pol-name{font-weight:650;color:var(--ink-strong);font-size:12.5px;}
+  .pol-url{color:var(--muted-2);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .pol-badge{font-size:10.5px;font-weight:700;color:var(--muted);background:var(--todo-bg);border-radius:6px;padding:2px 8px;flex:none;}
+  .bullets{margin:16px 0 2px;padding-left:18px;color:var(--muted);font-size:12.5px;line-height:1.9;}
+  .filebox{display:flex;align-items:center;gap:9px;background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--border-strong);border-radius:10px;padding:11px 13px;font-size:13px;color:var(--ink-strong);font-weight:650;}
+  .filebox .fmeta{color:var(--muted-2);font-weight:500;font-size:12px;}
+  .sec-title{font-size:16px;font-weight:750;color:var(--ink-strong);margin:0;letter-spacing:-.2px;background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-sm);padding:15px 18px;}
+  .rec-cols{grid-template-columns:minmax(0,2fr) 90px 170px 80px 80px;}
+  .tbl-h.rec-cols{background:var(--surface-2);border-radius:8px;padding:11px 12px;box-shadow:inset 0 0 0 1px var(--border);margin-bottom:2px;}
+  .tbl-h.rec-cols span:nth-child(n+2){text-align:center;}
+  .tbl-r.rec-cols{padding:13px 12px;}
+  .tbl-r.rec-cols>*:nth-child(n+2){text-align:center;justify-self:center;}
+  .rec-title{font-weight:700;color:var(--ink-strong);font-size:13px;display:flex;align-items:center;gap:8px;}
+  .rec-desc{color:var(--muted);font-size:12px;margin-top:3px;}
+  .up-badge{display:inline-flex;align-items:center;gap:5px;background:#fbe6a2;color:#8a5a00;font-size:11px;font-weight:750;border-radius:20px;padding:3px 9px;vertical-align:middle;margin-left:8px;}
+  .new-badge{display:inline-flex;background:var(--green-bg);color:var(--green-ink);font-size:10.5px;font-weight:750;border-radius:20px;padding:2px 9px;}
+  .rec-edit{color:var(--muted);cursor:pointer;}
+  .rec-edit:hover{color:var(--accent);}
+  .rec-edit.dis{opacity:.35;cursor:default;}
+  .rec-act{display:inline-flex;align-items:center;gap:13px;justify-content:center;}
+  .rec-del{color:var(--muted);cursor:pointer;display:flex;}
+  .rec-del:hover{color:#e11d48;}
+  .term-row{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
+  .term-row .inp{flex:1;}
+  .term-del{width:40px;height:40px;flex:none;border-radius:9px;display:flex;align-items:center;justify-content:center;color:var(--muted);cursor:pointer;box-shadow:inset 0 0 0 1px var(--border-strong);background:var(--surface);}
+  .term-del:hover{color:#e11d48;background:var(--surface-2);}
+  .cond-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:4px;}
+  .cond-card{background:var(--surface-2);border-radius:12px;box-shadow:inset 0 0 0 1px var(--border);padding:15px 16px;}
+  .cond-card .cc-t{font-weight:750;color:var(--ink-strong);font-size:13px;}
+  .cond-card .cc-d{color:var(--muted);font-size:12px;margin:4px 0 12px;line-height:1.5;}
+  .cond-card .btn{width:100%;justify-content:center;}
+  .cond-card .cc-count{color:var(--muted-2);font-size:12px;margin-top:10px;}
+  .sel-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;}
+  .sel-chip{display:inline-flex;align-items:center;gap:7px;font-size:11.5px;font-weight:600;color:var(--ink);background:var(--surface);box-shadow:inset 0 0 0 1px var(--border-strong);border-radius:16px;padding:4px 10px;}
+  .sel-chip .cx{cursor:pointer;color:var(--muted-2);font-weight:700;}
+  .sel-chip .cx:hover{color:#e11d48;}
+  .ex-panel{margin-top:14px;background:var(--surface-2);border-radius:12px;box-shadow:inset 0 0 0 1px var(--border);padding:15px 16px;}
+  .ex-h{font-weight:750;color:var(--ink-strong);font-size:13px;margin-bottom:8px;}
+  .ex-terms{display:flex;flex-wrap:wrap;gap:8px;}
+  .ex-term{font-size:12px;font-weight:600;color:var(--ink);background:var(--surface);box-shadow:inset 0 0 0 1px var(--border-strong);border-radius:8px;padding:6px 12px;cursor:pointer;}
+  .ex-term:hover{background:var(--border);border-color:var(--accent);}
+  .ex-chev{transition:transform .2s;}
+  .ex-chev.up{transform:rotate(180deg);}
+  .sel-exp{margin-top:12px;}
+  .sel-head{display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;color:var(--muted);font-size:12px;font-weight:600;padding:2px 0;}
+  .sel-head .exp-chev{transition:transform .2s;color:var(--muted-2);}
+  .sel-head.open .exp-chev{transform:rotate(180deg);}
+  .sel-body{display:none;margin-top:8px;}
+  .sel-body.open{display:block;}
+  .sel-item{display:flex;align-items:center;gap:11px;padding:9px 0;box-shadow:inset 0 -1px 0 var(--border);}
+  .sel-item .si-thumb{width:34px;height:34px;border-radius:8px;flex:none;background:linear-gradient(135deg,#e9d5ff,#c7d2fe);box-shadow:inset 0 0 0 1px var(--border);}
+  .sel-item .si-name{flex:1;font-weight:650;color:var(--ink-strong);font-size:12.5px;min-width:0;}
+  .sel-item .si-meta{color:var(--accent);font-size:12px;font-weight:600;}
+  .sel-item .si-x{color:#e11d48;cursor:pointer;font-weight:700;font-size:14px;}
+  .mini-pager{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:8px;color:var(--muted-2);font-size:12px;}
+  .mini-pager .mp{width:26px;height:26px;border-radius:7px;box-shadow:inset 0 0 0 1px var(--border-strong);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--muted);}
+  .prev-cols{grid-template-columns:minmax(0,2fr) 1.3fr 1.6fr 0.6fr;}
+  .grp-h{font-size:13.5px;font-weight:750;color:var(--ink-strong);margin:18px 0 12px;background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-sm);padding:14px 18px;}
+  .on-pill{background:var(--green-bg);color:var(--green-ink);font-size:10.5px;font-weight:700;border-radius:20px;padding:2px 9px;}
+  .rec-badge{background:var(--info-bg);color:var(--info-ink);font-size:10.5px;font-weight:700;border-radius:20px;padding:2px 9px;}
+  .hopt{display:flex;gap:12px;align-items:flex-start;padding:16px 0;box-shadow:inset 0 -1px 0 var(--border);cursor:pointer;}
+  .hopt:last-child{box-shadow:none;}
+  .hopt .hr{width:19px;height:19px;border-radius:50%;border:1.5px solid var(--border-strong);flex:none;margin-top:1px;display:flex;align-items:center;justify-content:center;}
+  .hopt.sel .hr{border-color:var(--ink-strong);}
+  .hopt.sel .hr::after{content:"";width:10px;height:10px;border-radius:50%;background:var(--ink-strong);}
+  .hopt .ht{font-weight:700;color:var(--ink-strong);font-size:13px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .hopt .hd{color:var(--muted);font-size:12px;margin-top:3px;line-height:1.55;}
+  .hopt .hd a{color:var(--accent);text-decoration:none;}
+  .hextra{display:none;margin-top:12px;}
+  .hopt.sel .hextra{display:block;}
+  .acc-head{display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-sm);padding:15px 18px;cursor:pointer;font-size:15px;font-weight:750;color:var(--ink-strong);letter-spacing:-.2px;margin-bottom:14px;transition:.13s;}
+  .acc-head:hover{background:var(--surface-2);}
+  .acc-head .acc-chev{color:var(--muted);transition:transform .2s;flex:none;}
+  .acc-head.open .acc-chev{transform:rotate(180deg);}
+  .acc-body{display:none;margin-bottom:6px;}
+  .acc-body.show{display:block;}
+  .hgrp-t{font-weight:750;color:var(--ink-strong);font-size:12.5px;margin:16px 0 8px;}
+  .hbox{border:1px solid var(--border);border-radius:11px;padding:0 14px;margin-top:2px;}
+  .subopt,.waitopt{display:flex;gap:12px;align-items:flex-start;padding:14px 0;box-shadow:inset 0 -1px 0 var(--border);cursor:pointer;}
+  .subopt:last-child,.waitopt:last-child{box-shadow:none;}
+  .subr{width:18px;height:18px;border-radius:50%;border:1.5px solid var(--border-strong);flex:none;margin-top:1px;display:flex;align-items:center;justify-content:center;}
+  .subopt.sel .subr,.waitopt.sel .subr{border-color:var(--ink-strong);}
+  .subopt.sel .subr::after,.waitopt.sel .subr::after{content:"";width:9px;height:9px;border-radius:50%;background:var(--ink-strong);}
+  .subopt .st,.waitopt .st{font-weight:700;color:var(--ink-strong);font-size:13px;}
+  .subopt .sd,.waitopt .sd{color:var(--muted);font-size:12px;margin-top:3px;line-height:1.5;}
+  .subextra{display:none;margin-top:12px;}
+  .subopt.sel .subextra{display:block;}
+  @media(max-width:700px){.cond-grid{grid-template-columns:1fr;}}
+  .recp-cols{grid-template-columns:24px 2fr 1.3fr 1.6fr 0.7fr;}
+  .rec-toggle-row{display:flex;align-items:center;gap:11px;padding:15px 16px;box-shadow:inset 0 -1px 0 var(--border);}
+  .rec-toggle-row:last-child{box-shadow:none;}
+  .rec-toggle-row .rti{color:var(--muted);flex:none;display:flex;}
+  .rec-toggle-row .rtl{flex:1;font-weight:650;color:var(--ink-strong);font-size:13px;}
+  .br-row{display:flex;align-items:center;gap:12px;padding:10px 4px;box-shadow:inset 0 -1px 0 var(--border);cursor:pointer;}
+  .br-cbx{width:17px;height:17px;border-radius:4px;box-shadow:inset 0 0 0 1.5px var(--border-strong);flex:none;display:flex;align-items:center;justify-content:center;color:transparent;}
+  .br-cbx.on{background:var(--ink-strong);box-shadow:none;color:#fff;}
+  .br-thumb{width:34px;height:34px;border-radius:8px;flex:none;background:linear-gradient(135deg,#e9d5ff,#c7d2fe);box-shadow:inset 0 0 0 1px var(--border);}
+  .br-info{flex:1;min-width:0;}
+  .br-name{font-weight:600;color:var(--ink-strong);font-size:12.5px;}
+  .br-stock{color:var(--muted-2);font-size:11.5px;}
+  .cbx{width:16px;height:16px;border-radius:4px;box-shadow:inset 0 0 0 1.5px var(--border-strong);cursor:pointer;display:inline-block;}
+  .pcell{display:flex;align-items:center;gap:10px;min-width:0;}
+  .pthumb{width:34px;height:34px;border-radius:8px;flex:none;background:linear-gradient(135deg,#e9d5ff,#c7d2fe);box-shadow:inset 0 0 0 1px var(--border);}
+  .pname{font-weight:600;color:var(--ink-strong);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .tags{display:flex;flex-wrap:wrap;gap:5px;}
+  .tag{font-size:10.5px;font-weight:600;color:var(--muted);background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--border);border-radius:6px;padding:2px 7px;}
+  .tag.more{color:var(--accent);}
+  html[data-theme="dark"] .tag.more{color:#b79bff;}
+  .status{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;border-radius:20px;padding:3px 9px;}
+  .status.active,.status.pub{background:var(--green-bg);color:var(--green-ink);}
+  .status.draft{background:var(--info-bg);color:var(--info-ink);}
+  .status .sd{width:5px;height:5px;border-radius:50%;background:currentColor;}
+  .muted-cell{color:var(--muted);font-size:12.5px;}
+  .rowact{display:flex;align-items:center;gap:10px;justify-content:flex-end;color:var(--muted);}
+  .rowact svg{cursor:pointer;}.rowact svg:hover{color:var(--accent);}
+  .pager{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:16px;color:var(--muted);font-size:12.5px;}
+  .pgbtn{width:30px;height:30px;border-radius:8px;box-shadow:inset 0 0 0 1px var(--border-strong);display:flex;align-items:center;justify-content:center;color:var(--muted);cursor:pointer;background:var(--surface);}
+  .pgbtn:hover{background:var(--border);}
+  .ipp{margin-left:auto;display:flex;align-items:center;gap:8px;}
+  .ipp .sel{box-shadow:inset 0 0 0 1px var(--border-strong);border-radius:8px;padding:5px 10px;font-weight:600;color:var(--ink);}
+  .up-banner{background:var(--info-bg);border-radius:12px;padding:15px 16px;display:flex;align-items:flex-start;gap:12px;}
+  .up-banner .bi{color:var(--info-ink);flex:none;margin-top:1px;}
+  .up-banner .ut{font-weight:750;color:var(--info-ink);font-size:13px;}
+  .up-banner .ud{color:var(--info-ink);opacity:.85;font-size:12.5px;margin:3px 0 10px;}
+  .empty{padding:44px;text-align:center;color:var(--muted);}
+  .empty .ei{width:60px;height:60px;border-radius:50%;background:var(--surface-2);display:flex;align-items:center;justify-content:center;margin:0 auto 12px;color:var(--muted-2);}
+  .empty .et{font-weight:750;color:var(--ink-strong);font-size:15px;}
+  .rev-banner{background:var(--info-bg);border-radius:12px;overflow:hidden;box-shadow:var(--shadow-sm);}
+  .rev-banner .rt{display:flex;align-items:center;gap:11px;padding:13px 16px;}
+  .rev-banner .rt .bi{color:var(--info-ink);}
+  .rev-banner .rt b{color:var(--info-ink);font-size:13px;}
+  .rev-banner .rt .bx{margin-left:auto;color:var(--info-ink);opacity:.7;cursor:pointer;}
+  .rev-banner .rb{background:var(--surface);padding:12px 16px 14px;color:var(--muted);font-size:12.5px;}
+  .rev-banner .rb .btn{margin-top:10px;}
+  .kgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;}
+  .kcard{background:var(--surface-2);border-radius:14px;box-shadow:inset 0 0 0 1px var(--border);padding:18px 16px;text-align:center;cursor:pointer;transition:.16s;}
+  .kcard:hover{transform:translateY(-3px);box-shadow:inset 0 0 0 1.5px var(--accent),var(--shadow-md);background:var(--surface);}
+  .kic{width:44px;height:44px;border-radius:12px;margin:0 auto 12px;display:flex;align-items:center;justify-content:center;color:#fff;}
+  .kt{font-weight:750;color:var(--ink-strong);font-size:13.5px;}
+  .kd{color:var(--muted);font-size:12px;margin-top:5px;min-height:32px;}
+  .usemeter .track{height:6px;border-radius:6px;background:var(--todo-bg);overflow:hidden;margin-top:12px;}
+  .usemeter .fill{height:100%;border-radius:6px;background:linear-gradient(90deg,#7c3aed,#3b82f6);width:0;transition:width 1s cubic-bezier(.22,1,.36,1);}
+  .usemeter .ut{font-size:11px;color:var(--muted-2);font-weight:600;margin-top:6px;}
+  .connect{margin-top:14px;background:var(--surface-2);border-radius:14px;box-shadow:inset 0 0 0 1.5px var(--border-strong);border-style:dashed;padding:26px;text-align:center;cursor:pointer;transition:.16s;}
+  .connect:hover{box-shadow:inset 0 0 0 1.5px var(--accent);background:var(--surface);}
+  .connect .cic{width:48px;height:48px;border-radius:14px;margin:0 auto 12px;display:flex;align-items:center;justify-content:center;background:var(--accent-soft);color:var(--accent);}
+  html[data-theme="dark"] .connect .cic{color:#b79bff;}
+  .connect .ct{font-weight:750;color:var(--ink-strong);font-size:14px;}
+  .connect .cs{color:var(--muted);font-size:12.5px;margin-top:4px;}
+  .connect .cu{display:inline-flex;align-items:center;gap:8px;margin-top:12px;font-size:11.5px;color:var(--muted-2);font-weight:600;}
+  .connect .cu .track{width:120px;height:6px;border-radius:6px;background:var(--todo-bg);overflow:hidden;}
+  .connect .cu .fill{height:100%;background:linear-gradient(90deg,#7c3aed,#3b82f6);width:10%;border-radius:6px;}
+
+  /* FAQ management (inline in FAQ tab) */
+  .faq-toolbar{display:flex;align-items:center;gap:12px;margin-bottom:14px;}
+  .bigsearch{display:flex;align-items:center;gap:9px;background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--border-strong);border-radius:10px;height:40px;padding:0 13px;}
+  .faq-toolbar .bigsearch{flex:0 0 50%;max-width:50%;}
+  .bigsearch input{border:none;background:transparent;outline:none;font-family:inherit;font-size:13px;color:var(--ink);width:100%;}
+  .flt{display:flex;gap:8px;margin-left:auto;}
+  .flt .fchip{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:var(--ink);background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--border-strong);border-radius:9px;padding:7px 12px;cursor:pointer;}
+  .thead{display:grid;grid-template-columns:minmax(0,1fr) 180px 180px;gap:12px;padding:11px 12px;background:var(--surface-2);border-radius:9px;box-shadow:inset 0 0 0 1px var(--border);margin-bottom:2px;}
+  .thead span{font-size:11px;font-weight:700;color:var(--muted-2);text-transform:uppercase;letter-spacing:.5px;}
+  .thead span:nth-child(n+2){text-align:center;}
+  .cat-row>div:nth-child(2),.faq-row>div:nth-child(2){text-align:center;}
+  .cat{box-shadow:inset 0 -1px 0 var(--border);}
+  .cat-row{display:grid;grid-template-columns:minmax(0,1fr) 180px 180px;gap:12px;align-items:center;padding:13px 12px;cursor:pointer;}
+  .cat-row:hover{background:var(--surface-2);border-radius:9px;}
+  .cat-left{display:flex;align-items:center;gap:9px;min-width:0;}
+  .drag{color:var(--muted-2);cursor:grab;flex:none;}
+  .chev2{color:var(--muted);transition:transform .2s;flex:none;}
+  .cat.collapsed .chev2{transform:rotate(-90deg);}
+  .cat-name{font-weight:700;color:var(--ink-strong);font-size:13.5px;display:flex;align-items:center;gap:8px;}
+  .cat-count{color:var(--muted-2);font-weight:600;font-size:12.5px;}
+  .def{font-size:10.5px;font-weight:700;color:var(--todo-ink);background:var(--todo-bg);border-radius:6px;padding:2px 8px;}
+  .star{justify-self:center;color:var(--muted-2);cursor:pointer;transition:.13s;}
+  .star.on{color:var(--star);}
+  .star:hover{color:var(--star);}
+  .cat.collapsed .faq-list{display:none;}
+  .faq-row{display:grid;grid-template-columns:minmax(0,1fr) 180px 180px;gap:12px;align-items:center;padding:11px 12px;box-shadow:inset 0 -1px 0 var(--border);}
+  .faq-row:hover{background:var(--surface-2);}
+  .faq-q{display:flex;align-items:center;gap:9px;color:var(--ink);font-size:13px;min-width:0;padding-left:24px;}
+  .faq-q .q{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .addfaq{display:inline-flex;align-items:center;gap:6px;margin:12px 0 12px 30px;font-size:12px;font-weight:600;color:var(--ink);background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--border-strong);border-radius:8px;padding:6px 11px;cursor:pointer;}
+  .addfaq:hover{background:var(--border);}
+
+  /* Modals */
+  .modal-ov{position:fixed;inset:0;background:rgba(20,20,25,.5);display:none;align-items:center;justify-content:center;z-index:200;padding:24px 16px;overflow-y:auto;}
+  .modal-ov.show{display:flex;}
+  .modal{background:var(--surface);border-radius:16px;box-shadow:var(--shadow-md);width:100%;max-width:720px;max-height:calc(100vh - 48px);display:flex;flex-direction:column;overflow:hidden;animation:mpop .18s ease;}
+  .modal.wide{max-width:960px;}
+  @keyframes mpop{from{opacity:0;transform:translateY(8px) scale(.99);}to{opacity:1;transform:none;}}
+  .modal-hd{display:flex;align-items:center;justify-content:space-between;padding:15px 20px;box-shadow:inset 0 -1px 0 var(--border);flex:none;}
+  .modal-hd h3{margin:0;font-size:16px;font-weight:750;color:var(--ink-strong);}
+  .modal-hd .hd-r{display:flex;align-items:center;gap:10px;}
+  .modal-x{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--muted);cursor:pointer;}
+  .modal-x:hover{background:var(--border);}
+  .modal-bd{padding:4px 20px 18px;flex:1;min-height:0;overflow-y:auto;}
+  .modal-ft{display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;box-shadow:inset 0 1px 0 var(--border);flex:none;}
+  /* view product */
+  .vp-row{display:grid;grid-template-columns:150px 1fr;gap:16px;padding:14px 0;box-shadow:inset 0 -1px 0 var(--border);align-items:start;}
+  .vp-row .vl{font-weight:650;color:var(--muted);font-size:12.5px;}
+  .vp-row .vv{color:var(--ink-strong);font-size:12.5px;line-height:1.55;}
+  .vp-link{color:var(--accent);text-decoration:none;word-break:break-all;}
+  .vp-sec{font-weight:750;color:var(--ink-strong);font-size:13px;padding:16px 0 8px;}
+  .vp-tbl{width:100%;border-collapse:collapse;box-shadow:inset 0 0 0 1px var(--border);border-radius:10px;overflow:hidden;}
+  .vp-tbl th,.vp-tbl td{text-align:left;padding:10px 13px;font-size:12.5px;box-shadow:inset 0 -1px 0 var(--border);}
+  .vp-tbl th{background:var(--surface-2);color:var(--muted);font-weight:700;}
+  .vp-tbl td{color:var(--ink-strong);}
+  .vp-tbl td.r,.vp-tbl th.r{text-align:right;}
+  /* form controls */
+  .fld{margin:14px 0;}
+  .fld label{display:block;font-size:12.5px;font-weight:650;color:var(--ink-strong);margin-bottom:7px;}
+  .inp,.selc{width:100%;font-family:inherit;font-size:13px;color:var(--ink);background:var(--surface);border:1px solid var(--border-strong);border-radius:9px;padding:10px 12px;outline:none;}
+  .inp:focus,.selc:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
+  .selc{appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 20 20' fill='none'><path d='M6 8l4 4 4-4' stroke='%236b6b73' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");background-repeat:no-repeat;background-position:right 11px center;padding-right:34px;}
+  .iconpick{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .iconpick .ip{width:52px;height:52px;border-radius:11px;border:1px solid var(--border-strong);background:var(--surface);display:flex;align-items:center;justify-content:center;color:var(--ink-strong);cursor:pointer;transition:.13s;}
+  .iconpick .ip:hover{border-color:var(--accent);}
+  .iconpick .ip.sel{border:2px solid var(--ink-strong);}
+  .iconpick .ip.up{border-style:dashed;color:var(--muted);}
+  .iconpick .vm{color:var(--accent);font-weight:650;font-size:12.5px;cursor:pointer;}
+  .chkrow{display:flex;align-items:flex-start;gap:10px;margin-top:6px;}
+  .chkbox{width:19px;height:19px;border-radius:5px;border:1.5px solid var(--border-strong);flex:none;cursor:pointer;display:flex;align-items:center;justify-content:center;color:transparent;margin-top:1px;}
+  .chkbox.on{background:var(--ink-strong);border-color:var(--ink-strong);color:#fff;}
+  .chk-t{font-size:13px;font-weight:650;color:var(--ink-strong);}
+  .chk-d{font-size:12px;color:var(--muted);margin-top:3px;line-height:1.5;}
+  .rte{border:1px solid var(--border-strong);border-radius:10px;overflow:hidden;}
+  .rte-bar{display:flex;align-items:center;gap:4px;flex-wrap:wrap;padding:7px 9px;box-shadow:inset 0 -1px 0 var(--border);color:var(--muted);}
+  .rte-bar .rb{width:28px;height:28px;border-radius:7px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:13px;font-weight:700;}
+  .rte-bar .rb:hover{background:var(--surface-2);color:var(--ink);}
+  .rte-bar .sep{width:1px;height:18px;background:var(--border);margin:0 3px;}
+  .rte-area{min-height:150px;padding:12px 13px;font-size:13px;color:var(--ink);outline:none;line-height:1.55;}
+  .form-2col{display:grid;grid-template-columns:1fr 300px;gap:16px;align-items:start;}
+  .fcard{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 15px;}
+  .fcard h4{margin:0 0 10px;font-size:13px;font-weight:750;color:var(--ink-strong);}
+  .btn.danger-soft{background:var(--info-bg);color:#e11d48;}
+  @media(max-width:820px){.form-2col{grid-template-columns:1fr;}}
+  /* dropdown menus */
+  .btn-cv{flex:none;opacity:.85;display:block;}
+  .dd-wrap{position:relative;}
+  .filt-menu{min-width:190px;left:0;right:auto;}
+  .fm-h{font-size:12.5px;font-weight:750;color:var(--ink-strong);padding:8px 11px 6px;}
+  .fm-opt{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:8px;font-size:13px;color:var(--ink);cursor:pointer;}
+  .fm-opt:hover{background:var(--surface-2);}
+  .fm-opt .radio{width:17px;height:17px;}
+  .fm-opt.sel .radio{border-color:var(--ink-strong);}
+  .fm-opt.sel .radio::after{content:"";width:9px;height:9px;border-radius:50%;background:var(--ink-strong);}
+  .fm-clear{padding:9px 11px 5px;font-size:12.5px;color:var(--muted-2);cursor:pointer;}
+  .fm-clear:hover{color:var(--ink);}
+  .dd-menu{position:absolute;top:calc(100% + 6px);right:0;min-width:180px;background:var(--surface);border:1px solid var(--border);border-radius:11px;box-shadow:var(--shadow-md);padding:6px;display:none;z-index:80;}
+  .dd-menu.show{display:block;}
+  .dd-item{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:8px;font-size:13px;font-weight:600;color:var(--ink);cursor:pointer;}
+  .dd-item:hover{background:var(--surface-2);}
+  .dd-item svg{color:var(--muted);flex:none;}
+  /* radio + dropzone */
+  .radio-row{display:flex;align-items:center;gap:11px;padding:12px 2px;cursor:pointer;}
+  .radio{width:19px;height:19px;border-radius:50%;border:1.5px solid var(--border-strong);flex:none;display:flex;align-items:center;justify-content:center;}
+  .radio-row.sel .radio{border-color:var(--ink-strong);}
+  .radio-row.sel .radio::after{content:"";width:10px;height:10px;border-radius:50%;background:var(--ink-strong);}
+  .radio-t{font-size:13px;font-weight:600;color:var(--ink-strong);}
+  .dropzone{border:1.5px dashed var(--border-strong);border-radius:12px;padding:34px;display:flex;align-items:center;justify-content:center;}
+  .dz-btn{background:var(--surface);border:1px solid var(--border-strong);border-radius:9px;font-family:inherit;font-size:13px;font-weight:650;color:var(--ink);padding:9px 18px;cursor:pointer;}
+  .dz-btn:hover{background:var(--surface-2);}
+  .dz-note{color:var(--muted);font-size:12.5px;margin-top:10px;}
+  .modal-ft .lnk{margin-right:auto;color:var(--accent);font-weight:650;font-size:13px;cursor:pointer;display:flex;align-items:center;}
+
+  /* Instructions forms */
+  .ihead{font-size:14.5px;font-weight:750;color:var(--ink-strong);margin:0 0 4px;}
+  .idesc{color:var(--muted);font-size:12.5px;margin:0 0 14px;}
+  .empty-note{color:var(--muted-2);font-size:12.5px;margin:12px 0 0;}
+  .tog-row{display:flex;gap:12px;align-items:flex-start;padding:14px 0;box-shadow:inset 0 -1px 0 var(--border);}
+  .tog-row:last-child{box-shadow:none;padding-bottom:0;}
+  .tog-row:first-of-type{padding-top:4px;}
+  .tog-row .switch{margin-left:0;flex:none;margin-top:1px;}
+  .tog-t{font-weight:650;color:var(--ink-strong);font-size:13px;}
+  .tog-d{color:var(--muted);font-size:12.5px;margin-top:5px;line-height:1.5;}
+  .ta{width:100%;min-height:58px;resize:vertical;border:none;background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--border-strong);border-radius:10px;padding:11px 13px;font-family:inherit;font-size:13px;color:var(--ink);outline:none;line-height:1.5;}
+  .ta:focus{box-shadow:inset 0 0 0 1.5px var(--accent);}
+  .flabel{font-size:12.5px;font-weight:600;color:var(--ink);margin:0 0 7px;}
+  .ta-wrap{position:relative;}
+  .ta-wrap .ta{padding-bottom:28px;}
+  .ta-count{position:absolute;right:13px;bottom:11px;font-size:12px;color:var(--muted-2);pointer-events:none;}
+  .presets{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;}
+  .preset{border:none;font-family:inherit;font-size:12.5px;font-weight:650;color:var(--ink);background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--border-strong);border-radius:9px;padding:8px 15px;cursor:pointer;transition:.13s;}
+  .preset:hover{background:var(--border);}
+  .preset.active{background:linear-gradient(135deg,#6d3bf5,#3b82f6);color:#fff;box-shadow:0 3px 9px rgba(109,59,245,.32);}
+  .checkrow{display:flex;align-items:center;gap:10px;padding:9px 0;}
+  .checkrow input{width:17px;height:17px;accent-color:var(--accent);cursor:pointer;}
+  .checkrow label{font-size:13px;color:var(--ink);font-weight:550;cursor:pointer;}
+  .selectbox{position:relative;display:flex;align-items:center;background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--border-strong);border-radius:10px;height:40px;padding:0 34px 0 13px;font-size:13px;color:var(--ink);cursor:pointer;font-weight:550;}
+  .selectbox svg{position:absolute;right:11px;color:var(--muted);pointer-events:none;}
+  .selectbox select{position:absolute;inset:0;opacity:0;font-family:inherit;cursor:pointer;}
+  .save-row{display:flex;justify-content:flex-end;gap:10px;}
+  .btn.ghost2{background:transparent;color:var(--muted);box-shadow:inset 0 0 0 1px var(--border-strong);}
+  .btn.ghost2:hover{background:var(--border);}
+
+  /* Test AI view */
+  .test-grid{display:grid;grid-template-columns:1fr 330px;gap:16px;align-items:start;}
+  .chat-card{background:var(--surface);border-radius:16px;box-shadow:var(--shadow-sm);display:flex;flex-direction:column;height:600px;overflow:hidden;}
+  .chat-head{padding:14px 18px;box-shadow:inset 0 -1px 0 var(--border);display:flex;align-items:center;justify-content:space-between;}
+  .chat-head .t{font-weight:750;color:var(--ink-strong);font-size:15px;}
+  .chat-head .refresh{color:var(--muted);cursor:pointer;width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;}
+  .chat-head .refresh:hover{background:var(--border);color:var(--accent);}
+  .chat-body{flex:1;overflow-y:auto;padding:18px 20px;display:flex;flex-direction:column;gap:12px;}
+  .chat-body::-webkit-scrollbar{width:8px;}.chat-body::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:8px;}
+  .today{align-self:center;font-size:11px;color:var(--muted-2);background:var(--surface-2);border-radius:20px;padding:3px 12px;margin-bottom:2px;}
+  .cmsg{display:flex;gap:10px;max-width:82%;}
+  .cmsg.bot{align-self:flex-start;}
+  .cmsg.user{align-self:flex-end;}
+  .cav{width:34px;height:34px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#6d3bf5,#3b82f6);color:#fff;align-self:flex-end;}
+  .cbub{padding:11px 14px;border-radius:14px;font-size:13.5px;line-height:1.55;}
+  .cbub.bot{background:var(--surface-2);color:var(--ink);border-bottom-left-radius:5px;box-shadow:inset 0 0 0 1px var(--border);}
+  .cbub.user{background:linear-gradient(135deg,#6d3bf5,#3b82f6);color:#fff;border-bottom-right-radius:5px;}
+  .ask-label{align-self:flex-end;font-size:12px;color:var(--muted-2);margin-top:4px;}
+  .sugg{align-self:flex-end;display:flex;flex-direction:column;gap:8px;align-items:flex-end;}
+  .chipbtn{border:none;font-family:inherit;font-size:13px;font-weight:600;color:var(--ink);background:var(--surface);box-shadow:inset 0 0 0 1px var(--border-strong);border-radius:10px;padding:9px 14px;cursor:pointer;transition:.13s;display:inline-flex;align-items:center;gap:6px;}
+  .chipbtn:hover{background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--accent);color:var(--accent);}
+  .chat-input{padding:12px 16px;box-shadow:inset 0 1px 0 var(--border);display:flex;align-items:center;gap:10px;}
+  .chat-input input{flex:1;border:none;background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--border-strong);border-radius:10px;height:44px;padding:0 14px;font-family:inherit;font-size:13.5px;color:var(--ink);outline:none;}
+  .chat-input input:focus{box-shadow:inset 0 0 0 1.5px var(--accent);}
+  .chat-input .sendc{width:44px;height:44px;border-radius:10px;border:none;background:linear-gradient(135deg,#6d3bf5,#3b82f6);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;flex:none;}
+  .chat-input .sendc:hover{transform:translateY(-1px);}
+  .info-box{background:var(--info-bg);border-radius:10px;padding:11px 12px;display:flex;gap:9px;align-items:flex-start;color:var(--info-ink);font-size:12.5px;line-height:1.5;margin-top:12px;}
+  .info-box a{color:var(--info-ink);font-weight:700;}
+  .info-box .x{margin-left:auto;cursor:pointer;opacity:.7;flex:none;}
+  .feedback{display:flex;align-items:center;justify-content:space-between;}
+  .feedback .ft{font-weight:750;color:var(--ink-strong);font-size:13.5px;}
+  .faces{display:flex;gap:8px;}
+  .face{width:40px;height:40px;border-radius:10px;box-shadow:inset 0 0 0 1px var(--border-strong);display:flex;align-items:center;justify-content:center;color:var(--muted);cursor:pointer;background:var(--surface);transition:.13s;}
+  .face:hover,.face.sel{box-shadow:inset 0 0 0 1.5px var(--accent);color:var(--accent);transform:translateY(-2px);}
+
+  .tab-panel{display:none;flex-direction:column;gap:16px;}
+  .tab-panel.show{display:flex;}
+  @media (max-width:980px){.setup-grid{grid-template-columns:1fr;}.promo .mascot{display:none;}.kgrid{grid-template-columns:repeat(2,1fr);}.sidebar{display:none;}.tbl-h{display:none;}.tbl-r{grid-template-columns:1fr 1fr!important;}}
+html{overflow-y:scroll;}.content{max-width:1120px!important;margin-left:auto!important;margin-right:auto!important;}:root{--ink:#4a4a53;--ink-strong:#2e2e37;--muted:#78787f;--muted-2:#a2a2ab;}
+</style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><div class="logo">C</div><span class="wordmark">ChatConvert</span><span class="release">Summer '26</span></div>
+    <div class="search"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="6" stroke="#a9a9b3" stroke-width="1.6"/><path d="M14 14l3.5 3.5" stroke="#a9a9b3" stroke-width="1.6" stroke-linecap="round"/></svg><span class="ph">Search</span><span class="kbd">CTRL K</span></div>
+    <div class="topbar-right">
+      <div class="icon-btn"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M10 3a4 4 0 0 0-4 4v3l-1.3 2.2c-.3.5.1 1.1.7 1.1h9.2c.6 0 1-.6.7-1.1L14 10V7a4 4 0 0 0-4-4Z" stroke="#c9c9d0" stroke-width="1.4"/></svg></div>
+      <div class="userchip"><div class="av">CC</div><span class="name">chatconvert-store</span><span class="badge">dev</span></div>
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="nav-item"><span class="ico"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M3 8.5 10 3l7 5.5V16a1 1 0 0 1-1 1h-3v-5H7v5H4a1 1 0 0 1-1-1V8.5Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span><span class="label">Home</span></div>
+      <div class="nav-item"><span class="ico"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M4 6h12l-1 9H5L4 6Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M7 6a3 3 0 0 1 6 0" stroke="currentColor" stroke-width="1.4"/></svg></span><span class="label">Orders</span><span class="count">31</span></div>
+      <div class="nav-item"><span class="ico"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M10 3 4 6v8l6 3 6-3V6l-6-3Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span><span class="label">Products</span></div>
+      <div class="nav-item"><span class="ico"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="7" r="3" stroke="currentColor" stroke-width="1.4"/><path d="M4.5 16a5.5 5.5 0 0 1 11 0" stroke="currentColor" stroke-width="1.4"/></svg></span><span class="label">Customers</span></div>
+      <div class="nav-item"><span class="ico"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M4 8 8 4h8v8l-4 4-8-8Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span><span class="label">Discounts</span></div>
+      <div class="nav-item"><span class="ico"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><rect x="4" y="4" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.4"/><path d="M4 8h12M8 8v8" stroke="currentColor" stroke-width="1.4"/></svg></span><span class="label">Content</span></div>
+      <div class="nav-item"><span class="ico"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.4"/><path d="M3 10h14M10 3c2 2.5 2 11.5 0 14M10 3c-2 2.5-2 11.5 0 14" stroke="currentColor" stroke-width="1.4"/></svg></span><span class="label">Markets</span></div>
+      <div class="nav-item"><span class="ico"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M4 16V9M8 16V5M12 16v-4M16 16V7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span><span class="label">Analytics</span></div>
+      <div class="nav-section-label">Sales channels</div>
+      <div class="nav-item"><span class="ico"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.4"/><path d="M3 10h14" stroke="currentColor" stroke-width="1.4"/></svg></span><span class="label">Online Store</span></div>
+      <div class="nav-item"><span class="ico"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M10 3v14M6 6l4-3 4 3" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span><span class="label">Agentic</span></div>
+      <div class="nav-section-label">Apps</div>
+      <div class="sub-rail">
+        <div class="app-head"><span class="app-ico"></span><span class="label" style="flex:1;">chatconvert-develop…</span><span class="dot"></span></div>
+        <a class="sub-item" href="dashboard.html" style="text-decoration:none">Dashboard</a>
+        <a class="sub-item" href="inbox.html" style="text-decoration:none">Inbox</a>
+        <a class="sub-item" href="contacts.html" style="text-decoration:none">Contacts</a>
+        <a class="sub-item" href="chatbox.html" style="text-decoration:none">Chatbox</a>
+        <a class="sub-item active" href="ai-agent.html" style="text-decoration:none">AI Agent</a>
+        <a class="sub-item" href="proactive-chat.html" style="text-decoration:none">Proactive Chat</a>
+        <a class="sub-item" href="curated-answers.html" style="text-decoration:none">Curated Answers</a>
+        <a class="sub-item" href="analytics.html" style="text-decoration:none">Analytics</a>
+        <a class="sub-item" href="plan-usage.html" style="text-decoration:none">Plan &amp; Usage</a>
+        <a class="sub-item" href="settings.html" style="text-decoration:none">Settings</a>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="content">
+
+        <!-- VIEW: AI AGENT -->
+        <div class="view show" id="viewAgent">
+          <div class="ag-head">
+            <div>
+              <div class="ag-title"><h1>AI Agent</h1><span class="on-badge"><span class="d"></span>On</span></div>
+              <p class="ag-sub">Enhance support and increase sales with an AI agent. <a href="#">Learn more</a></p>
+            </div>
+            <div class="ag-actions">
+              <button class="btn light js-openTest"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M6 4l10 6-10 6V4Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>Test AI</button>
+              <button class="btn dark">Deactivate</button>
+            </div>
+          </div>
+
+          <div class="banner-wrap" id="agentBanner">
+            <div class="banner">
+              <span class="bi"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7.5" stroke="currentColor" stroke-width="1.4"/><path d="M10 9v4M10 6.5h.01" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+              <span class="bt">Your AI agent is on</span>
+              <span class="bx" onclick="document.getElementById('agentBanner').style.display='none'"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+            </div>
+            <div class="bb">AI is now responding to customers. Review and add training data to ensure accurate answers.</div>
+          </div>
+
+          <div class="card row-card">
+            <div>
+              <div class="rt">AI unresolved questions <span class="pending">1 pending</span></div>
+              <div class="rs">Monitor and improve AI agent responses</div>
+            </div>
+            <a class="rl" href="#">Go to review →</a>
+          </div>
+
+          <div class="card setup">
+            <h2>Setup AI agent</h2>
+            <div class="setup-grid">
+              <div class="scard" style="--c1:#6d3bf5;--c2:#3b82f6">
+                <div class="s-top">
+                  <span class="s-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"><ellipse cx="12" cy="6" rx="7" ry="2.6" stroke="#fff" stroke-width="1.6"/><path d="M5 6v6c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6V6" stroke="#fff" stroke-width="1.6"/><path d="M5 12v6c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6v-6" stroke="#fff" stroke-width="1.6"/></svg></span>
+                  <span class="s-step">STEP 1</span>
+                </div>
+                <div class="sn">Training data</div>
+                <div class="sd">What AI knows about your business</div>
+                <span class="s-status done"><span class="d"></span>76 items learned</span>
+                <div class="s-track"><div class="s-fill" data-pct="100"></div></div>
+                <button class="btn light" id="openTraining">Manage <svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M7 5l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+              </div>
+
+              <div class="scard" style="--c1:#8b5cf6;--c2:#ec4899">
+                <div class="s-top">
+                  <span class="s-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M6 3h8l4 4v14H6z" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/><path d="M14 3v4h4" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 12h6M9 15.5h4" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+                  <span class="s-step">STEP 2</span>
+                </div>
+                <div class="sn">Instructions</div>
+                <div class="sd">How AI responds to your customers</div>
+                <span class="s-status todo"><span class="d"></span>Needs a few tweaks</span>
+                <div class="s-track"><div class="s-fill" data-pct="40"></div></div>
+                <button class="btn light" id="openInstructions">Manage <svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M7 5l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+              </div>
+
+              <div class="scard" style="--c1:#06b6d4;--c2:#3b82f6">
+                <div class="s-top">
+                  <span class="s-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M4 5h16v11H10l-4 4V5Z" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/><path d="M10 8l5 2.5L10 13V8Z" fill="#fff"/></svg></span>
+                  <span class="s-step">STEP 3</span>
+                </div>
+                <div class="sn">Test AI</div>
+                <div class="sd">Chat with your AI to test responses</div>
+                <span class="s-status ready"><span class="d"></span>Ready to test</span>
+                <div class="s-track"><div class="s-fill" data-pct="100"></div></div>
+                <button class="btn light js-openTest">Test now <svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M6 4l10 6-10 6V4Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card promo">
+            <div>
+              <div class="pt">Want us to set up your AI agent?</div>
+              <div class="pd">Our team trains it on your store, writes the instructions, and gets it ready — so you can switch it on with confidence.</div>
+              <div class="pa"><button class="btn dark"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="m10 3 1.8 4.2L16 9l-4.2 1.8L10 15l-1.8-4.2L4 9l4.2-1.8L10 3Z" stroke="#fff" stroke-width="1.3" stroke-linejoin="round"/></svg>Set it up for me</button><span class="link">or chat with us</span></div>
+            </div>
+            <div class="mascot">🤖</div>
+          </div>
+
+          <div class="footer"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7.5" stroke="currentColor" stroke-width="1.3"/><path d="M10 9v4M10 6.5h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> Powered by <b>ChatConvert</b> with love</div>
+        </div>
+
+        <!-- VIEW: TRAINING DATA -->
+        <div class="view" id="viewTraining">
+          <div class="td-head">
+            <div class="back" id="backToAgent"><svg width="17" height="17" viewBox="0 0 20 20" fill="none"><path d="M12 5l-5 5 5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+            <h1>Training data</h1>
+            <button class="btn light js-openTest"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M6 4l10 6-10 6V4Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>Test AI</button>
+          </div>
+
+          <div class="tabbar" id="tabbar">
+            <button class="active" data-tab="products">Products</button>
+            <button data-tab="collections">Collections</button>
+            <button data-tab="discounts">Discounts</button>
+            <button data-tab="faqs">FAQs</button>
+            <button data-tab="custom">Custom knowledge</button>
+          </div>
+
+          <!-- PRODUCTS -->
+          <div class="tab-panel show" data-panel="products">
+            <div class="card learn-card">
+              <div><div class="lc-t">Products <span class="chip">76 of 76 products learned</span></div><div class="lc-d">Help customers discover products, get details about features and pricing, and find what they're looking for.</div></div>
+              <div class="switch on"></div>
+            </div>
+            <div class="card">
+              <div class="manage-head">
+                <div><h2>Manage data</h2><div class="md-meta"><svg width="13" height="13" viewBox="0 0 20 20" fill="none"><path d="M15 6a6 6 0 1 0 1.5 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M15 3v3h-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Auto sync: Daily · Last updated: 7/29/26, 5:37 AM</div></div>
+                <div class="actions"><button class="btn light">Manage metafields</button><button class="btn dark">Sync products</button></div>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+                <div class="subtabs"><button class="active">All</button><button>Active</button><button>Inactive</button></div>
+                <div style="margin-left:auto;display:flex;gap:6px;"><div class="filt-ic"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="6" stroke="currentColor" stroke-width="1.5"/><path d="M14 14l3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div><div class="filt-ic"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M4 6h12M6 10h8M8 14h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div></div>
+              </div>
+              <div class="tbl-h prod-cols"><span><span class="cbx"></span></span><span>Product</span><span>Collections</span><span>Tags</span><span>Status</span><span>FAQs</span><span style="text-align:right">Actions</span></div>
+              <div id="prodRows"></div>
+              <div class="pager"><span class="pgbtn">‹</span><span>Page 1 / 8</span><span class="pgbtn">›</span><span class="ipp">Items per page <span class="sel">10 ⌄</span></span></div>
+            </div>
+          </div>
+
+          <!-- COLLECTIONS -->
+          <div class="tab-panel" data-panel="collections">
+            <div class="card learn-card"><div><div class="lc-t">Collections <span class="chip">5 of 5 collections learned</span></div><div class="lc-d">Help customers discover collections, understand product groupings and curated selections in your store.</div></div><div class="switch"></div></div>
+            <div class="card">
+              <div class="manage-head"><div><h2>Manage data</h2><div class="md-meta"><svg width="13" height="13" viewBox="0 0 20 20" fill="none"><path d="M15 6a6 6 0 1 0 1.5 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M15 3v3h-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Auto sync: Daily · Last updated: 7/29/26, 5:37 AM</div></div><div class="actions"><button class="btn dark">Sync collections</button></div></div>
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;"><div class="subtabs"><button class="active">All</button><button>Active</button><button>Inactive</button></div></div>
+              <div class="tbl-h coll-cols"><span><span class="cbx"></span></span><span>Title</span><span>Description</span><span>Conditions</span><span>Products</span><span>Status</span><span style="text-align:right">Actions</span></div>
+              <div id="collRows"></div>
+              <div class="pager"><span class="pgbtn" style="opacity:.4">‹</span><span>Page 1 / 1</span><span class="pgbtn" style="opacity:.4">›</span><span class="ipp">Items per page <span class="sel">10 ⌄</span></span></div>
+            </div>
+          </div>
+
+          <!-- DISCOUNTS -->
+          <div class="tab-panel" data-panel="discounts">
+            <div class="up-banner"><span class="bi"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7.5" stroke="currentColor" stroke-width="1.4"/><path d="M10 9v4M10 6.5h.01" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span><div><div class="ut">Upgrade to real-time discount sync</div><div class="ud">Pro/Plus plans sync discounts instantly when you edit them in Shopify via webhooks. No manual sync needed.</div><button class="btn dark">Upgrade to Pro</button></div></div>
+            <div class="card learn-card"><div><div class="lc-t">Discounts <span class="chip">0 discounts learned</span></div><div class="lc-d">Enable your AI agent to answer customer questions about discounts.</div></div><div class="switch"></div></div>
+            <div class="card">
+              <div class="manage-head"><div><h2>Manage data</h2><div class="md-d">Pull the latest discount data from your Shopify store including discount codes and automatic discounts.</div><div class="md-meta"><span class="switch sm"></span> Real-time sync · Last updated: N/A</div></div><div class="actions"><button class="btn light">Manage</button><button class="btn dark">Sync now</button></div></div>
+              <div class="subtabs" style="margin-bottom:6px"><button class="active">All</button><button>Active</button><button>Inactive</button></div>
+              <div class="empty"><div class="ei"><svg width="26" height="26" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="6" stroke="currentColor" stroke-width="1.6"/><path d="M14 14l4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div><div class="et">No items found</div></div>
+            </div>
+          </div>
+
+          <!-- FAQS (inline management, no sub-tabs, no promo banner) -->
+          <div class="tab-panel" data-panel="faqs">
+            <div class="card">
+              <div class="manage-head">
+                <div><h2>Manage FAQs</h2><div class="md-d">Create and publish FAQs to provide knowledge for training the AI agent.</div></div>
+                <div class="actions">
+                  <div class="dd-wrap">
+                    <button class="btn light" id="faqMoreBtn">More actions<svg class="btn-cv" width="13" height="13" viewBox="0 0 20 20" fill="none"><path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                    <div class="dd-menu" id="faqMoreMenu">
+                      <div class="dd-item" data-act="import"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M10 3v9m0 0 3.5-3.5M10 12 6.5 8.5M4 16h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Import</div>
+                      <div class="dd-item" data-act="export"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M10 13V4m0 0L6.5 7.5M10 4l3.5 3.5M4 16h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Export</div>
+                    </div>
+                  </div>
+                  <div class="dd-wrap">
+                    <button class="btn dark" id="faqAddBtn">Add new<svg class="btn-cv" width="13" height="13" viewBox="0 0 20 20" fill="none"><path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                    <div class="dd-menu" id="faqAddMenu">
+                      <div class="dd-item" data-act="addfaq">Add FAQ</div>
+                      <div class="dd-item" data-act="addcat">Add category</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="faq-toolbar">
+              <div class="bigsearch"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="6" stroke="var(--muted-2)" stroke-width="1.5"/><path d="M14 14l3.5 3.5" stroke="var(--muted-2)" stroke-width="1.5" stroke-linecap="round"/></svg><input placeholder="Search all categories and FAQs"></div>
+              <div class="flt">
+                <div class="dd-wrap">
+                  <span class="fchip" id="fltStatus">Status<svg class="btn-cv" width="13" height="13" viewBox="0 0 20 20" fill="none"><path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                  <div class="dd-menu filt-menu" id="fltStatusMenu">
+                    <div class="fm-h">Status</div>
+                    <div class="fm-opt js-fopt"><span class="radio"></span>Published</div>
+                    <div class="fm-opt js-fopt"><span class="radio"></span>Draft</div>
+                    <div class="fm-clear js-fclear">Clear</div>
+                  </div>
+                </div>
+                <div class="dd-wrap">
+                  <span class="fchip" id="fltFeatured">Featured<svg class="btn-cv" width="13" height="13" viewBox="0 0 20 20" fill="none"><path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                  <div class="dd-menu filt-menu" id="fltFeaturedMenu">
+                    <div class="fm-h">Featured</div>
+                    <div class="fm-opt js-fopt"><span class="radio"></span>Featured</div>
+                    <div class="fm-opt js-fopt"><span class="radio"></span>Not featured</div>
+                    <div class="fm-clear js-fclear">Clear</div>
+                  </div>
+                </div>
+              </div>
+              </div>
+              <div class="thead"><span>FAQs</span><span>Status</span><span>Featured</span></div>
+              <div id="cats"></div>
+            </div>
+          </div>
+
+          <!-- CUSTOM KNOWLEDGE -->
+          <div class="tab-panel" data-panel="custom">
+            <div class="card learn-card"><div><div class="lc-t">Custom knowledge <span class="chip">6 items learned</span></div><div class="lc-d">Train your AI with custom Q&amp;As, website URLs, and files for more accurate and personalized responses.</div></div></div>
+            <div class="rev-banner">
+              <div class="rt"><span class="bi"><svg width="17" height="17" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7.5" stroke="currentColor" stroke-width="1.4"/><path d="M10 9v4M10 6.5h.01" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span><b>15 suggested Q&amp;As waiting for review</b><span class="bx" onclick="this.closest('.rev-banner').style.display='none'"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span></div>
+              <div class="rb">We generated 15 Q&amp;As from your store data. Review and add them to improve AI accuracy.<br><button class="btn light">Review now</button></div>
+            </div>
+            <div class="card">
+              <div class="manage-head"><div><h2>Manage data</h2><div class="md-d">What the assistant knows. Knowledge is indexed when you add it.</div></div><div class="actions"><button class="btn dark" id="addDataBtn">Add data</button></div></div>
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;"><div class="subtabs" id="dsSubtabs"><button class="active" data-t="all">All</button><button data-t="URL">URL</button><button data-t="Manual">Manual</button><button data-t="CSV">CSV</button><button data-t="File">File</button><button data-t="Pages">Pages</button></div></div>
+              <div class="tbl-h ds-cols"><span>Source</span><span>Type</span><span>Status</span><span>Last synced</span><span>Actions</span></div>
+              <div id="dsRows"></div>
+              <div class="md-d" style="margin-top:14px">Re-sync re-reads a source and rebuilds its chunks — use it after your website content changes.</div>
+            </div>
+            <div class="card" id="addKnowledge">
+              <div class="manage-head"><div><h2>Add Data</h2><div class="md-d">Choose how to feed the assistant — click any option.</div></div></div>
+              <div class="kgrid">
+                <div class="kcard" data-add="url"><div class="kic" style="background:linear-gradient(135deg,#38bdf8,#3b82f6)"><svg width="22" height="22" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="#fff" stroke-width="1.5"/><path d="M3 10h14M10 3c2.2 2.5 2.2 11.5 0 14M10 3c-2.2 2.5-2.2 11.5 0 14" stroke="#fff" stroke-width="1.5"/></svg></div><div class="kt">Website URL</div><div class="kd">Crawl pages from your site</div><div class="usemeter"><div class="track"><div class="fill" data-pct="10"></div></div><div class="ut">2 of 20 pages used</div></div></div>
+                <div class="kcard" data-add="manual"><div class="kic" style="background:linear-gradient(135deg,#a78bfa,#7c3aed)"><svg width="22" height="22" viewBox="0 0 20 20" fill="none"><path d="M13 4l3 3-8 8-4 1 1-4 8-8Z" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg></div><div class="kt">Manual Q&amp;A</div><div class="kd">Write your own answer</div><div class="usemeter"><div class="track"><div class="fill" data-pct="0"></div></div><div class="ut">0 of 50 used</div></div></div>
+                <div class="kcard" data-add="csv"><div class="kic" style="background:linear-gradient(135deg,#34d399,#10b981)"><svg width="22" height="22" viewBox="0 0 20 20" fill="none"><path d="M10 3v9m0 0 3-3m-3 3-3-3M4 15h12" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="kt">Import CSV</div><div class="kd">Bulk add Q&amp;As</div><div class="usemeter"><div class="track"><div class="fill" data-pct="6"></div></div><div class="ut">Up to 50 Q&amp;A rows per file</div></div></div>
+                <div class="kcard" data-add="file"><div class="kic" style="background:linear-gradient(135deg,#fb7185,#f43f5e)"><svg width="22" height="22" viewBox="0 0 20 20" fill="none"><path d="M6 3h5l3 3v11H6z" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/><path d="M11 3v3h3" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg></div><div class="kt">Upload file</div><div class="kd">PDF, DOCX, TXT — guides, catalogs, FAQs</div><div class="usemeter"><div class="track"><div class="fill" data-pct="0"></div></div><div class="ut">0 of 5 used</div></div></div>
+              </div>
+              <div class="connect" data-add="policies"><div class="cic"><svg width="24" height="24" viewBox="0 0 20 20" fill="none"><rect x="3" y="6" width="14" height="9" rx="2" stroke="currentColor" stroke-width="1.4"/><path d="M3 9h14M7 6V4h6v2" stroke="currentColor" stroke-width="1.4"/></svg></div><div class="ct">Connect policies and pages</div><div class="cs">Shipping, returns, FAQ pages etc.</div><div class="cu"><span>2 of 20 pages used</span><div class="track"><div class="fill"></div></div></div></div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- VIEW: INSTRUCTIONS -->
+        <div class="view" id="viewInstructions">
+          <div class="td-head">
+            <div class="back" id="backFromIns"><svg width="17" height="17" viewBox="0 0 20 20" fill="none"><path d="M12 5l-5 5 5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+            <h1>Instructions</h1>
+            <button class="btn light js-openTest"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M6 4l10 6-10 6V4Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>Test AI</button>
+          </div>
+
+          <div class="tabbar" id="tabbarIns">
+            <button class="active" data-itab="persona">General Instructions</button>
+            <button data-itab="prod">Product recommendations</button>
+            <button data-itab="handover">Human handover</button>
+          </div>
+
+          <!-- RECOMMENDATION RULES -->
+          <div class="tab-panel" data-ipanel="prod">
+
+            <div class="card">
+              <div class="ihead">Rules</div>
+              <div class="idesc">How the AI recommends by default.</div>
+              <div class="tog-row"><span class="switch on"></span><div><div class="tog-t">Never recommend out-of-stock items</div><div class="tog-d">Suggest the closest available alternative instead. (Out-of-stock products are always excluded — this adds the substitution.)</div></div></div>
+              <div class="tog-row"><span class="switch"></span><div><div class="tog-t">Push overstock</div><div class="tog-d">Favor the products you're holding the most stock of, so high-inventory items sell through first. Automatic from your live inventory — no setup needed. (Optional: tag a product "overstock" to always push it.)</div></div></div>
+            </div>
+
+            <div class="card">
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px">
+                <div><div class="ihead" style="margin-bottom:4px">App recommendations</div><div class="idesc" style="margin:0">Pre-configured recommendations that automatically respond to common customer intents</div></div>
+                <button class="btn dark" id="addRecBtn" style="flex:none"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" style="margin-right:5px"><path d="M10 5v10M5 10h10" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>Add new</button>
+              </div>
+              <div class="tbl-h rec-cols"><span>Title</span><span>Products</span><span>Last modified</span><span>Status</span><span>Actions</span></div>
+              <div class="tbl-r rec-cols">
+                <span><div class="rec-title js-openrec" style="cursor:pointer" data-title="Best sellers" data-status="Active" data-trigs="What are your best sellers?;Show me your top products" data-sub='Product recommendations for "What are your best sellers?"'>Best sellers</div><div class="rec-desc">Product recommendations for "What are your best sellers?"</div></span>
+                <span class="muted-cell">20</span><span class="muted-cell">07/27/2026 12:43 PM</span>
+                <span><span class="switch on"></span></span>
+                <span class="rec-act"><span class="rec-edit" title="Edit"><svg width="17" height="17" viewBox="0 0 20 20" fill="none"><path d="M13 4l3 3-8 8-4 1 1-4 8-8Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span><span class="rec-del" title="Delete"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M5 6h10M8 6V4h4v2M6 6l1 9h6l1-9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span></span>
+              </div>
+              <div class="tbl-r rec-cols">
+                <span><div class="rec-title js-openrec" style="cursor:pointer" data-title="New arrivals" data-status="Active" data-trigs="Any new items?;What's new?" data-sub='Product recommendations for "Any new items?"'>New arrivals</div><div class="rec-desc">Product recommendations for "Any new items?"</div></span>
+                <span class="muted-cell">20</span><span class="muted-cell">07/27/2026 12:43 PM</span>
+                <span><span class="switch on"></span></span>
+                <span class="rec-act"><span class="rec-edit" title="Edit"><svg width="17" height="17" viewBox="0 0 20 20" fill="none"><path d="M13 4l3 3-8 8-4 1 1-4 8-8Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span><span class="rec-del" title="Delete"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M5 6h10M8 6V4h4v2M6 6l1 9h6l1-9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span></span>
+              </div>
+              <div class="pager"><span class="pgbtn" style="opacity:.4">‹</span><span>Page 1 / 1</span><span class="pgbtn" style="opacity:.4">›</span><span class="ipp">Items per page <span class="sel">10 ⌄</span></span></div>
+            </div>
+
+            <div class="card">
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px">
+                <div><div class="ihead" style="margin-bottom:4px">Custom recommendations</div><div class="idesc" style="margin:0">Create custom recommendation rules for specific use cases like gifts, occasions, or seasonal campaigns</div></div>
+                <button class="btn dark" id="addCustomBtn" style="flex:none"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" style="margin-right:5px"><path d="M10 5v10M5 10h10" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>Add new</button>
+              </div>
+              <div class="tbl-h rec-cols"><span>Title</span><span>Products</span><span>Last modified</span><span>Status</span><span>Actions</span></div>
+              <div class="tbl-r rec-cols">
+                <span><div class="rec-title js-opencustom" style="cursor:pointer" data-title="Special occasions" data-sub="Recommend products perfect for gifts and special events" data-terms="gift;birthday;anniversary">Special occasions</div><div class="rec-desc">Recommend products perfect for gifts and special events</div></span>
+                <span class="muted-cell">—</span><span class="muted-cell">—</span><span><span class="switch"></span></span>
+                <span class="rec-act"><span class="rec-edit" title="Edit"><svg width="17" height="17" viewBox="0 0 20 20" fill="none"><path d="M13 4l3 3-8 8-4 1 1-4 8-8Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span><span class="rec-del" title="Delete"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M5 6h10M8 6V4h4v2M6 6l1 9h6l1-9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span></span>
+              </div>
+              <div class="tbl-r rec-cols">
+                <span><div class="rec-title js-opencustom" style="cursor:pointer" data-title="Sale promotion" data-sub="Highlight discounted items and promotional offers" data-terms="sale;discount;offer">Sale promotion</div><div class="rec-desc">Highlight discounted items and promotional offers</div></span>
+                <span class="muted-cell">—</span><span class="muted-cell">—</span><span><span class="switch"></span></span>
+                <span class="rec-act"><span class="rec-edit" title="Edit"><svg width="17" height="17" viewBox="0 0 20 20" fill="none"><path d="M13 4l3 3-8 8-4 1 1-4 8-8Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span><span class="rec-del" title="Delete"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M5 6h10M8 6V4h4v2M6 6l1 9h6l1-9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span></span>
+              </div>
+              <div class="pager"><span class="pgbtn" style="opacity:.4">‹</span><span>Page 1 / 1</span><span class="pgbtn" style="opacity:.4">›</span><span class="ipp">Items per page <span class="sel">10 ⌄</span></span></div>
+            </div>
+
+            <div class="card">
+              <div class="ihead">Cross-sell pairs</div>
+              <div class="idesc">When recommending a specific product, also suggest its companions — e.g. a tent → sleeping bag.</div>
+              <button class="btn light"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M10 5v10M5 10h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg> Add pair</button>
+              <div class="empty-note">No pairs yet. Add one to attach companions to a product.</div>
+            </div>
+
+          </div>
+
+          <div class="tab-panel" data-ipanel="handover">
+            <div class="grp-h" style="margin-top:0">When should AI hand off to your team?</div>
+            <div class="card">
+              <div class="ihead">Auto triggers</div>
+              <div class="idesc">AI detects customer behavior and transfers automatically</div>
+              <div class="tog-row"><div style="flex:1"><div class="tog-t">Customer asks to talk to a person <span class="on-pill">Always on</span></div><div class="tog-d">AI detects intent: "talk to human", "speak to agent", "real person"</div></div><span class="switch"></span></div>
+              <div class="tog-row"><div style="flex:1"><div class="tog-t">AI cannot answer</div><div class="tog-d">Auto hand-off after 2 consecutive low-confidence responses</div></div><span class="switch on"></span></div>
+              <div class="tog-row"><div style="flex:1"><div class="tog-t">Customer repeats question</div><div class="tog-d">Auto hand-off when same question is asked 2+ times</div></div><span class="switch on"></span></div>
+              <div class="tog-row" style="box-shadow:none"><div style="flex:1"><div class="tog-t">Negative sentiment</div><div class="tog-d">Auto hand-off on frustration or anger — wording, ALL CAPS, repeated punctuation, negative emojis (👎 😠 💩), or 2+ thumb-down reactions on AI replies</div></div><span class="switch"></span></div>
+            </div>
+
+            <div class="card">
+              <div class="ihead">Intent rules</div>
+              <div class="idesc">You define topics — AI semantically matches and transfers immediately, no AI response first</div>
+              <button class="btn light" id="addRuleBtn"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M10 5v10M5 10h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg> Add rule</button>
+              <div id="ruleForm" style="display:none;margin-top:16px;box-shadow:inset 0 1px 0 var(--border);padding-top:16px">
+                <div class="ihead" style="font-size:13.5px">Add handover rule</div>
+                <div class="fld"><label>Topic name <span style="color:#e11d48">*</span></label>
+                  <div style="position:relative"><input class="inp" id="ruleTopic" maxlength="150" placeholder="e.g. Wholesale inquiry, Custom order, Partnership…" style="padding-right:56px"><span id="ruleCount" style="position:absolute;right:13px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--muted-2)">0/150</span></div>
+                </div>
+                <div class="empty-note" style="margin-top:0">AI semantically matches this topic — covers keyword variations. Avoid after-sales topics, already handled separately.</div>
+                <div style="display:flex;gap:10px;margin-top:14px"><button class="btn dark" id="ruleSubmit" disabled style="opacity:.5;cursor:default">Add rule</button><button class="btn light" id="ruleCancel">Cancel</button></div>
+              </div>
+            </div>
+
+            <div class="grp-h">Where does the customer go?</div>
+            <div class="card">
+              <div class="hopt js-hopt"><span class="hr"></span><div style="flex:1;min-width:0"><div class="ht">Transfer to human in Chatty inbox <span class="rec-badge">Recommended</span></div><div class="hd">Agent joins the chat directly - customer stays in the same window, no friction. Agent routing is managed in <a href="#">Automation settings</a></div>
+                <div class="hextra">
+                  <div class="info-box" style="margin-top:0"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="flex:none"><circle cx="10" cy="10" r="7.5" stroke="currentColor" stroke-width="1.4"/><path d="M10 9v4M10 6.5h.01" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span>Working hours are configured in <a href="#">Chat availability settings</a></span></div>
+
+                  <div class="hgrp-t">Messages while your team is online:</div>
+                  <div class="flabel">Ask before connecting</div>
+                  <div class="ta-wrap"><textarea class="ta" id="hoOnline1" maxlength="300" style="min-height:64px">Our team is online now and will assist you promptly. Do you want to connect to human support?</textarea><span class="ta-count" id="hoOnline1c">0/300</span></div>
+                  <div class="empty-note">AI asks the customer to confirm before handing the chat to your team.</div>
+                  <div class="flabel" style="margin-top:14px">After the chat is handed over</div>
+                  <div class="ta-wrap"><textarea class="ta" id="hoOnline2" maxlength="300" style="min-height:64px">I've forwarded your request to our human support team. One of our team members will be with you shortly.</textarea><span class="ta-count" id="hoOnline2c">0/300</span></div>
+                  <div class="empty-note">Sent once the customer confirms and the chat moves to your inbox.</div>
+
+                  <div class="hgrp-t">When your team is offline, show customers:</div>
+                  <div class="hbox">
+                    <div class="subopt sel js-hoff"><span class="subr"></span><div style="flex:1;min-width:0"><div class="st">Leave a message — we'll follow up</div>
+                      <div class="subextra">
+                        <div class="flabel">When customers can expect a reply</div>
+                        <select class="selc"><option>Within 24 hours</option><option>Within 12 hours</option><option>Within 48 hours</option><option>Same day</option></select>
+                        <div class="empty-note" style="margin-top:6px">Support email addresses: Not configured · <a href="#" style="color:var(--accent)">Edit in AI settings</a></div>
+                        <div class="flabel" style="margin-top:14px">Information collected from customer</div>
+                        <div class="checkrow"><input type="checkbox" checked disabled><label style="color:var(--muted-2)">Email</label></div>
+                        <div class="checkrow"><input type="checkbox" checked disabled><label style="color:var(--muted-2)">Issue description</label></div>
+                        <div class="checkrow"><input type="checkbox"><label>Order number</label></div>
+                        <div class="checkrow"><input type="checkbox"><label>Phone number</label></div>
+                        <div class="checkrow"><input type="checkbox"><label>Photo upload</label></div>
+                        <div class="empty-note" style="margin-top:2px">Email and issue description are required and always collected.</div>
+                        <div class="flabel" style="margin-top:14px">Message shown with the form</div>
+                        <div class="ta-wrap"><textarea class="ta" id="hoForm" maxlength="300" style="min-height:64px">Our team is currently offline. Let me collect your information so our team can follow up.</textarea><span class="ta-count" id="hoFormc">0/300</span></div>
+                        <div class="empty-note">The expected reply time above is appended automatically.</div>
+                        <div class="flabel" style="margin-top:14px">Message shown after the form is submitted</div>
+                        <div class="ta-wrap"><textarea class="ta" id="hoSubmit" maxlength="300" style="min-height:64px">Thanks for your submission. We have received your issue and will address it as soon as possible.</textarea><span class="ta-count" id="hoSubmitc">0/300</span></div>
+                        <div class="empty-note">Shown once the customer submits the form. Translations for other languages are managed in Translation settings.</div>
+                      </div>
+                    </div></div>
+                    <div class="subopt js-hoff"><span class="subr"></span><div><div class="st">Show contact methods</div><div class="sd">AI shows the contact methods configured in your <a href="#" style="color:var(--accent)">Chatbox settings</a> so the customer can reach out while your team is back.</div></div></div>
+                  </div>
+
+                  <div class="hgrp-t">While the customer waits for your team, let AI keep replying:</div>
+                  <div class="hbox">
+                    <div class="waitopt js-hwait"><span class="subr"></span><div><div class="st">Don't allow</div><div class="sd">AI stops replying once the customer is waiting for an agent.</div></div></div>
+                    <div class="waitopt sel js-hwait"><span class="subr"></span><div><div class="st">Allow only outside business hours</div><div class="sd">AI keeps handling the conversation instead of handing off.</div></div></div>
+                    <div class="waitopt js-hwait"><span class="subr"></span><div><div class="st">Allow all the time</div><div class="sd">AI keeps replying while the customer waits — even during business hours.</div></div></div>
+                  </div>
+                </div>
+              </div></div>
+              <div class="hopt js-hopt"><span class="hr"></span><div style="flex:1;min-width:0"><div class="ht">Collect info &amp; follow up by email</div><div class="hd">No live agents needed — AI collects customer details and sends a summary to your team email</div>
+                <div class="hextra">
+                  <div class="empty-note" style="margin-top:0">Support email addresses: Not configured · <a href="#" style="color:var(--accent)">Edit in AI settings</a></div>
+                  <div class="flabel" style="margin-top:12px">When customers can expect a reply</div>
+                  <select class="selc"><option>Within 24 hours</option><option>Within 12 hours</option><option>Within 48 hours</option><option>Same day</option></select>
+                  <div class="empty-note" style="margin-top:6px">Customers see: Within 24 hours</div>
+                  <div class="hbox" style="padding:14px;margin-top:14px">
+                    <div style="font-weight:750;color:var(--ink-strong);font-size:12.5px;margin-bottom:6px">Information collected from customer</div>
+                    <div class="checkrow"><input type="checkbox" checked disabled><label style="color:var(--muted-2)">Email</label></div>
+                    <div class="checkrow"><input type="checkbox" checked disabled><label style="color:var(--muted-2)">Issue description</label></div>
+                    <div class="checkrow"><input type="checkbox"><label>Order number</label></div>
+                    <div class="checkrow"><input type="checkbox"><label>Phone number</label></div>
+                    <div class="checkrow"><input type="checkbox"><label>Photo upload</label></div>
+                    <div class="empty-note" style="margin-top:2px">Email and Issue description are required and always collected.</div>
+                  </div>
+                  <div class="flabel" style="margin-top:14px">Message shown with the form</div>
+                  <div class="ta-wrap"><textarea class="ta" id="ceForm" maxlength="300" style="min-height:64px">Let me collect your information so our team can follow up.</textarea><span class="ta-count" id="ceFormc">0/300</span></div>
+                  <div class="empty-note">The expected reply time above is appended automatically.</div>
+                  <div class="flabel" style="margin-top:14px">Message shown after the form is submitted</div>
+                  <div class="ta-wrap"><textarea class="ta" id="ceSubmit" maxlength="300" style="min-height:64px">Thanks for your submission. We have received your issue and will address it as soon as possible.</textarea><span class="ta-count" id="ceSubmitc">0/300</span></div>
+                  <div class="empty-note">Shown once the customer submits the form. Translations for other languages are managed in Translation settings.</div>
+                </div>
+              </div></div>
+              <div class="hopt sel js-hopt"><span class="hr"></span><div style="flex:1;min-width:0"><div class="ht">Show contact methods</div><div class="hd">AI shows the contact methods configured in your <a href="#">Chatbox settings</a> (phone, WhatsApp, email) and lets the customer pick how to reach out.</div>
+                <div class="hextra">
+                  <div class="flabel">Message shown with the contact methods</div>
+                  <div class="ta-wrap"><textarea class="ta" id="hMsg" maxlength="300" style="min-height:100px">Sorry. I'm unable to transfer you to human support. You can contact us through the contact methods below, our human support will get back to you as soon as possible</textarea><span class="ta-count" id="hMsgCount">0/300</span></div>
+                  <div class="empty-note">You can include a link, for example to your contact page. The same message is used when your team is offline and the fallback is Show contact methods.</div>
+                </div>
+              </div></div>
+            </div>
+          </div>
+
+          <!-- GENERAL INSTRUCTIONS -->
+          <div class="tab-panel show" data-ipanel="persona">
+            <div class="card">
+              <div class="ihead">Role</div>
+              <div class="idesc">Define who your assistant is and what they help customers with</div>
+              <div class="ta-wrap"><textarea class="ta" id="roleTa" maxlength="250" style="min-height:78px" placeholder="e.g., You are a friendly customer support assistant for an online accessories store. Your goal is to help customers find products, answer questions and provide excellent service."></textarea><span class="ta-count" id="roleCount">0/250</span></div>
+            </div>
+
+            <div class="card">
+              <div class="ihead">Communication style</div>
+              <div class="idesc">Define the personality and speaking style of your assistant</div>
+              <div class="presets">
+                <button class="preset active">Friendly</button>
+                <button class="preset">Professional</button>
+                <button class="preset">Empathetic</button>
+                <button class="preset">Custom</button>
+              </div>
+              <textarea class="ta" style="min-height:70px">Warm, approachable, and enthusiastic tone. Use light-hearted greetings, conversational language, and occasionally emojis to make the customer feel welcome and at ease.</textarea>
+            </div>
+
+            <div class="card">
+              <div class="ihead">Behaviours</div>
+              <div class="idesc">Define how your assistant should respond to customers and handle conversations</div>
+              <div class="ta-wrap"><textarea class="ta" id="behTa" maxlength="1000" style="min-height:340px">ROLE:
+- Act as a knowledgeable apparel and accessories consultant
+- Represent the brand as a trusted advisor focused on quality and customer satisfaction
+- Assist customers with product recommendations and policy inquiries
+
+KNOWLEDGE:
+- Be familiar with the full range of apparel and accessories products offered
+- Know store policies including returns, exchanges, and shipping
+
+COMMUNICATION STYLE:
+- Use a friendly, clear, and helpful tone
+- Maintain professionalism while being approachable and supportive
+
+GUIDELINES:
+- Highlight the quality of products and commitment to customer satisfaction
+- Emphasize easy and customer-friendly store policies
+
+AVOID:
+- Don't suggest products or policies that are not in the store knowledge base
+- Avoid providing vague or uncertain answers regarding policies or product availability</textarea><span class="ta-count" id="behCount">0/1000</span></div>
+            </div>
+
+            <div class="card">
+              <div class="ihead">Default language</div>
+              <div class="selectbox" style="margin-top:10px">English<select><option>English</option><option>Hindi</option><option>Spanish</option><option>French</option><option>German</option></select><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+            </div>
+
+            <div class="card">
+              <div class="ihead">Auto-detect shopper's language</div>
+              <div class="tog-row" style="padding-top:8px"><span class="switch on"></span><div><div style="font-weight:400;color:var(--muted);font-size:12.5px;line-height:1.5;">When enabled, the assistant answers in the shopper's detected language</div></div></div>
+            </div>
+
+            <div class="card">
+              <div class="ihead">Banned topics &amp; phrases</div>
+              <div class="idesc">One topic or phrase per line</div>
+              <textarea class="ta" style="min-height:90px">medical advice
+competitor pricing</textarea>
+              <div class="empty-note">If a shopper's message contains one of these, the assistant declines and shows the fallback message.</div>
+            </div>
+
+            <div class="card">
+              <div class="ihead">Fallback message</div>
+              <div class="idesc">Shown when the assistant can't confidently help</div>
+              <textarea class="ta" style="min-height:70px">I'm not sure about that one — leave your email and our team will get back to you.</textarea>
+              <div class="empty-note">Leave blank to use the built-in default. The assistant captures the shopper's email as a lead after showing this.</div>
+            </div>
+
+            <div class="save-row"><button class="btn ghost2">Cancel</button><button class="btn dark">Save</button></div>
+          </div>
+
+          <!-- GUARDRAILS -->
+        </div>
+
+        <!-- VIEW: TEST AI -->
+        <div class="view" id="viewTest">
+          <div class="td-head">
+            <div class="back" id="backFromTest"><svg width="17" height="17" viewBox="0 0 20 20" fill="none"><path d="M12 5l-5 5 5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+            <h1>Test AI</h1>
+          </div>
+
+          <div class="test-grid">
+            <div class="chat-card">
+              <div class="chat-head"><span class="t">Test your AI</span><span class="refresh" id="chatReset"><svg width="17" height="17" viewBox="0 0 20 20" fill="none"><path d="M15 8a6 6 0 1 0 .5 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M15 4v4h-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
+              <div class="chat-body" id="chatBody">
+                <div class="today">Today</div>
+                <div class="cmsg bot"><span class="cav"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M4 5h12v8H8l-3 3V5Z" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg></span><div class="cbub bot">Hello 👋 I'm the ChatConvert AI agent, here to help you find what you're looking for. How can I help you?</div></div>
+                <div class="ask-label">Not sure what to ask?</div>
+                <div class="sugg">
+                  <button class="chipbtn">FAQ <svg width="13" height="13" viewBox="0 0 20 20" fill="none"><path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                  <button class="chipbtn js-ask">What payment methods do you accept?</button>
+                  <button class="chipbtn js-ask">Can I cancel or change my order?</button>
+                  <button class="chipbtn js-ask">dgf</button>
+                </div>
+              </div>
+              <div class="chat-input">
+                <input id="chatInput" placeholder="Type your message">
+                <button class="sendc" id="chatSend"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M3 10l14-6-6 14-2-6-6-2Z" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg></button>
+              </div>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:16px;">
+              <div class="card">
+                <div class="ihead">Review sources</div>
+                <div class="idesc" style="margin-bottom:0">Click 'Review source' on each AI response to view related data sources.</div>
+                <div class="info-box"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="flex:none"><circle cx="10" cy="10" r="7.5" stroke="currentColor" stroke-width="1.4"/><path d="M10 9v4M10 6.5h.01" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span>Keep adding more data sources to enhance AI's capabilities, quality and efficiency. <a href="#">Read guide</a></span><span class="x" onclick="this.parentElement.style.display='none'"><svg width="13" height="13" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span></div>
+              </div>
+
+              <div class="card feedback">
+                <span class="ft">👋 Share your feedback</span>
+                <div class="faces">
+                  <span class="face"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5"/><path d="M8 15c1-1.5 2.4-2 4-2s3 .5 4 2M9 9.5h.01M15 9.5h.01" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+                  <span class="face"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5"/><path d="M8.5 15h7M9 9.5h.01M15 9.5h.01" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+                  <span class="face"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5"/><path d="M8 14c1 1.5 2.4 2 4 2s3-.5 4-2M9 9.5h.01M15 9.5h.01" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- VIEW: RECOMMENDATION DETAIL -->
+        <div class="view" id="viewRec">
+          <div class="td-head">
+            <div class="back" id="backFromRec"><svg width="17" height="17" viewBox="0 0 20 20" fill="none"><path d="M12 5l-5 5 5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+            <div style="flex:1;min-width:0"><h1 id="recTitle" style="margin:0">Best sellers</h1><div class="idesc" id="recSub" style="margin:2px 0 0">Product recommendations for "What are your best sellers?"</div></div>
+            <button class="btn light js-reccancel">Cancel</button><button class="btn dark js-recsave">Save</button>
+          </div>
+
+          <div class="card" style="margin-top:16px">
+            <div class="ihead">Recommendation details</div>
+            <div class="fld"><label>Title</label><input class="inp" id="recTitleInput" placeholder="e.g. Trending now"></div>
+            <div class="fld"><label>Trigger questions</label>
+              <div class="chips" id="recTrigChips"></div>
+              <div class="syn-row"><input class="inp" id="recTrigInput" placeholder="e.g. What are your best sellers?"><button class="btn light" id="recTrigAdd">Add</button></div>
+            </div>
+            <div class="fld"><label>Status</label><select class="selc" id="recStatusSel"><option>Active</option><option>Inactive</option></select></div>
+          </div>
+
+          <div class="card">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px"><div class="ihead" style="margin:0">Products</div><button class="btn dark" id="addProductsBtn" style="flex:none"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" style="margin-right:5px"><path d="M10 5v10M5 10h10" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>Add products</button></div>
+            <div class="bigsearch" style="width:100%;margin-bottom:12px"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="6" stroke="var(--muted-2)" stroke-width="1.5"/><path d="M14 14l3.5 3.5" stroke="var(--muted-2)" stroke-width="1.5" stroke-linecap="round"/></svg><input placeholder="Search products by name"></div>
+            <div class="flt" style="margin-bottom:14px"><span class="fchip">Vendors<svg class="btn-cv" width="12" height="12" viewBox="0 0 20 20" fill="none" style="margin-left:4px"><path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="fchip">Tag<svg class="btn-cv" width="12" height="12" viewBox="0 0 20 20" fill="none" style="margin-left:4px"><path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="fchip">Collections<svg class="btn-cv" width="12" height="12" viewBox="0 0 20 20" fill="none" style="margin-left:4px"><path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
+            <div class="tbl-h recp-cols"><span><span class="cbx"></span></span><span>Product</span><span>Collections</span><span>Tags</span><span style="text-align:right">Actions</span></div>
+            <div id="recProdRows"></div>
+            <div class="pager"><span class="pgbtn">‹</span><span>Page 1 / 2</span><span class="pgbtn">›</span><span class="ipp">Items per page <span class="sel">10 ⌄</span></span></div>
+          </div>
+        </div>
+
+        <!-- VIEW: CUSTOM RECOMMENDATION DETAIL -->
+        <div class="view" id="viewCustomRec">
+          <div class="td-head">
+            <div class="back" id="backFromCustom"><svg width="17" height="17" viewBox="0 0 20 20" fill="none"><path d="M12 5l-5 5 5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+            <div style="flex:1;min-width:0"><h1 id="customTitle" style="margin:0">Special occasions</h1><div class="idesc" id="customSub" style="margin:2px 0 0">Recommend products perfect for gifts and special events</div></div>
+            <button class="btn light js-reccancel">Cancel</button><button class="btn dark js-recsave">Save</button>
+          </div>
+
+          <div class="card" style="margin-top:16px">
+            <div class="ihead">Search terms</div>
+            <div class="idesc">When customers mention these terms, Chatty will suggest products from this recommendation</div>
+            <div id="termRows"></div>
+            <div style="display:flex;align-items:center;gap:18px;margin-top:2px">
+              <button class="btn light" id="addTermBtn"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M10 5v10M5 10h10" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>Add search term</button>
+              <span id="viewExBtn" style="color:var(--accent);font-weight:600;font-size:12.5px;cursor:pointer;display:inline-flex;align-items:center;gap:5px"><span id="viewExText">View examples</span><svg class="ex-chev" width="12" height="12" viewBox="0 0 20 20" fill="none"><path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            </div>
+            <div class="ex-panel" id="exPanel" style="display:none">
+              <div class="ex-h">Best practices</div>
+              <ul class="bullets" style="margin:0 0 12px">
+                <li>Include specific holidays (Christmas, Valentine's, Mother's Day)</li>
+                <li>Add occasion types (wedding, graduation, anniversary)</li>
+                <li>Consider recipient types (mom, dad, boyfriend, girlfriend)</li>
+              </ul>
+              <div class="ex-h">Example terms</div>
+              <div class="ex-terms">
+                <span class="ex-term">wedding gift</span><span class="ex-term">mother's day</span><span class="ex-term">graduation</span><span class="ex-term">valentine</span><span class="ex-term">christmas</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="ihead">Products conditions</div>
+            <div class="idesc">Select which products Chatty should recommend when these terms are triggered</div>
+            <div class="cond-grid">
+              <div class="cond-card"><div class="cc-t">Add by Product</div><div class="cc-d">Choose individual products to include in recommendations</div><button class="btn light" id="condBrowseProd">Browse products</button>
+                <div class="sel-exp"><div class="sel-head js-selhead" data-body="prodSelBody"><span id="prodSelCount">0 products selected</span><svg class="exp-chev" width="13" height="13" viewBox="0 0 20 20" fill="none"><path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="sel-body" id="prodSelBody"></div></div>
+              </div>
+              <div class="cond-card"><div class="cc-t">Add by Collection</div><div class="cc-d">Add all products from existing collections automatically</div><button class="btn light" id="condBrowseColl">Browse collections</button>
+                <div class="sel-exp"><div class="sel-head js-selhead" data-body="collSelBody"><span id="collSelCount">0 collections selected</span><svg class="exp-chev" width="13" height="13" viewBox="0 0 20 20" fill="none"><path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="sel-body" id="collSelBody"></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="ihead">Products preview</div>
+            <div class="idesc">Products matching the conditions above will be recommended to customers</div>
+            <div class="bigsearch" style="width:100%;margin-bottom:12px"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="6" stroke="var(--muted-2)" stroke-width="1.5"/><path d="M14 14l3.5 3.5" stroke="var(--muted-2)" stroke-width="1.5" stroke-linecap="round"/></svg><input placeholder="Search products by name"></div>
+            <div class="flt" style="margin-bottom:14px"><span class="fchip">Vendors<svg class="btn-cv" width="12" height="12" viewBox="0 0 20 20" fill="none" style="margin-left:4px"><path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="fchip">Tag<svg class="btn-cv" width="12" height="12" viewBox="0 0 20 20" fill="none" style="margin-left:4px"><path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="fchip">Collections<svg class="btn-cv" width="12" height="12" viewBox="0 0 20 20" fill="none" style="margin-left:4px"><path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
+            <div class="tbl-h prev-cols"><span>Product</span><span>Collections</span><span>Tags</span><span style="text-align:right">Actions</span></div>
+            <div id="previewRows"></div>
+            <div class="pager"><span class="pgbtn" style="opacity:.4">‹</span><span>Page 1 / 1</span><span class="pgbtn" style="opacity:.4">›</span><span class="ipp">Items per page <span class="sel">10 ⌄</span></span></div>
+          </div>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <!-- MODAL: Browse collections -->
+  <div class="modal-ov" id="mBrowseColl">
+    <div class="modal" style="max-width:560px">
+      <div class="modal-hd"><h3>Browse collections</h3><div class="modal-x js-mclose"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div></div>
+      <div class="modal-bd">
+        <div class="bigsearch" style="width:100%;margin-bottom:12px"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="6" stroke="var(--muted-2)" stroke-width="1.5"/><path d="M14 14l3.5 3.5" stroke="var(--muted-2)" stroke-width="1.5" stroke-linecap="round"/></svg><input placeholder="Search collections"></div>
+        <div id="collBrowseRows"></div>
+      </div>
+      <div class="modal-ft"><span id="collBrowseCount" style="margin-right:auto;color:var(--muted);font-size:12.5px;font-weight:600">0 collections selected</span><button class="btn light js-mclose">Cancel</button><button class="btn dark">Add</button></div>
+    </div>
+  </div>
+
+  <!-- MODAL: Browse products -->
+  <div class="modal-ov" id="mBrowse">
+    <div class="modal" style="max-width:560px">
+      <div class="modal-hd"><h3>Browse products</h3><div class="modal-x js-mclose"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div></div>
+      <div class="modal-bd">
+        <div class="bigsearch" style="width:100%;margin-bottom:12px"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="6" stroke="var(--muted-2)" stroke-width="1.5"/><path d="M14 14l3.5 3.5" stroke="var(--muted-2)" stroke-width="1.5" stroke-linecap="round"/></svg><input placeholder="Search products"></div>
+        <button class="btn light" style="margin-bottom:6px">Add filter +</button>
+        <div id="browseRows"></div>
+      </div>
+      <div class="modal-ft"><span id="browseCount" style="margin-right:auto;color:var(--muted);font-size:12.5px;font-weight:600">0 products selected</span><button class="btn light js-mclose">Cancel</button><button class="btn dark">Add</button></div>
+    </div>
+  </div>
+
+  <!-- MODAL: View product -->
+  <div class="modal-ov" id="mProduct">
+    <div class="modal">
+      <div class="modal-hd"><h3>View product</h3><div class="modal-x js-mclose"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div></div>
+      <div class="modal-bd">
+        <div class="vp-row"><span class="vl">ID</span><span class="vv"><a class="vp-link" id="vpId" href="#">9106868830364</a></span></div>
+        <div class="vp-row"><span class="vl">Title</span><span class="vv" id="vpTitle">7 Chakra Bracelet</span></div>
+        <div class="vp-row"><span class="vl">Status</span><span class="vv"><span class="status active"><span class="sd"></span>Active</span></span></div>
+        <div class="vp-row"><span class="vl">URL</span><span class="vv"><a class="vp-link" id="vpUrl" href="#" target="_blank">—</a></span></div>
+        <div class="vp-row"><span class="vl">Vendor</span><span class="vv">Ankastra</span></div>
+        <div class="vp-row"><span class="vl">FAQs</span><span class="vv">0</span></div>
+        <div class="vp-row"><span class="vl">Description</span><span class="vv" id="vpDesc">A thoughtfully handcrafted piece from Ankastra that blends meaningful symbolism with a modern, wearable look. Lightweight and comfortable, suitable for daily wear, meditation, travel, or special occasions. The unisex design makes it a wonderful gift for friends, family, or anyone beginning a wellness journey.</span></div>
+        <div class="vp-sec">Tags</div>
+        <div class="tags" id="vpTags"></div>
+        <div class="vp-sec">Prices</div>
+        <table class="vp-tbl"><thead><tr><th>Variant</th><th class="r">Price</th></tr></thead>
+          <tbody><tr><td>Default</td><td class="r">₹1,499</td></tr><tr><td>Female (6.5 Inches) · Male (7.5 Inches) · Extra Large (8.5 Inches)</td><td class="r">₹1,499</td></tr></tbody></table>
+        <div class="vp-sec">Inventory</div>
+        <table class="vp-tbl"><thead><tr><th>Variant</th><th class="r">Status</th></tr></thead>
+          <tbody><tr><td>Female (6.5 Inches) · Male (7.5 Inches) · Extra Large (8.5 Inches)</td><td class="r"><span class="status draft"><span class="sd"></span>Sold out</span></td></tr></tbody></table>
+        <div class="vp-sec">Options</div>
+        <table class="vp-tbl"><thead><tr><th>Option</th><th>Values</th></tr></thead>
+          <tbody><tr><td>Choose your correct wrist size</td><td>Female (6.5 Inches), Male (7.5 Inches), Extra Large (8.5 Inches)</td></tr></tbody></table>
+      </div>
+      <div class="modal-ft"><button class="btn light js-mclose">Close</button></div>
+    </div>
+  </div>
+
+  <!-- MODAL: Edit category -->
+  <div class="modal-ov" id="mCat">
+    <div class="modal" style="max-width:560px">
+      <div class="modal-hd"><h3 id="ecTitle">Edit category</h3><div class="modal-x js-mclose"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div></div>
+      <div class="modal-bd">
+        <div class="fld"><label>Category name</label><input class="inp" id="ecName" placeholder="New category" value="Order & Shipping"></div>
+        <div class="fld"><label>Icon</label>
+          <div class="iconpick">
+            <span class="ip sel"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 6h12l-1 7H5L4 6Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M7 6a3 3 0 0 1 6 0" stroke="currentColor" stroke-width="1.4"/></svg></span>
+            <span class="ip"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 8l3-3v2h6M15 12l-3 3v-2H6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="ip"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 5h12v8H8l-3 3V5Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span>
+            <span class="ip"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.4"/><path d="M5 5l10 10" stroke="currentColor" stroke-width="1.4"/></svg></span>
+            <span class="ip up"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M10 4v9M6.5 7.5 10 4l3.5 3.5M4 16h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="vm">View more</span>
+          </div>
+        </div>
+        <div class="fld"><label>Position</label><select class="selc"><option>1 (current)</option><option>2</option><option>3</option><option>4</option><option>5</option></select></div>
+        <div class="fld"><label>Status</label><select class="selc"><option>Published</option><option>Draft</option></select></div>
+        <div class="chkrow"><span class="chkbox on js-chk" id="ecFeature"><svg width="12" height="12" viewBox="0 0 20 20" fill="none"><path d="M4 10l4 4 8-9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><div><div class="chk-t">Feature category</div><div class="chk-d">Enable to show this category on the first page of FAQs chatbox. If not, it will only be shown when viewing all categories.</div></div></div>
+      </div>
+      <div class="modal-ft"><button class="btn light js-mclose">Cancel</button><button class="btn dark">Save</button></div>
+    </div>
+  </div>
+
+  <!-- MODAL: Edit FAQ -->
+  <div class="modal-ov" id="mFaq">
+    <div class="modal wide">
+      <div class="modal-hd"><h3 id="efTitle">Edit FAQ</h3><div class="hd-r"><button class="btn danger-soft" id="efDelete"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M5 6h10M8 6V4h4v2M6 6l1 9h6l1-9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Delete FAQ</button><div class="modal-x js-mclose"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div></div></div>
+      <div class="modal-bd">
+        <div class="form-2col">
+          <div>
+            <div class="fld" style="margin-top:4px"><label>Question</label><input class="inp" id="efQ" value="How long will it take to receive my order?"></div>
+            <div class="fld"><label>Answer</label>
+              <div class="rte">
+                <div class="rte-bar"><span class="rb" style="font-size:11px">Paragraph ⌄</span><span class="sep"></span><span class="rb" style="text-decoration:underline">A</span><span class="rb"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.4"/><path d="M5 5l10 10" stroke="currentColor" stroke-width="1.4"/></svg></span><span class="sep"></span><span class="rb" style="font-weight:800">B</span><span class="rb" style="font-style:italic">I</span><span class="rb" style="text-decoration:underline">U</span><span class="sep"></span><span class="rb">1.</span><span class="rb">•</span><span class="sep"></span><span class="rb"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M8 12a3 3 0 0 0 4 0l2-2a3 3 0 0 0-4-4l-1 1M12 8a3 3 0 0 0-4 0L6 10a3 3 0 0 0 4 4l1-1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></span><span class="rb"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><rect x="3" y="4" width="14" height="12" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="m4 13 4-3 3 2 2-2 3 3" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg></span><span class="rb"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.3"/><path d="M8 7l5 3-5 3V7Z" fill="currentColor"/></svg></span></div>
+                <div class="rte-area" id="efA" contenteditable="true">Typically, it takes 3-5 business days to receive your order. We're doing our best to deliver it promptly for you.</div>
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:14px">
+            <div class="fcard"><h4>Status</h4><select class="selc"><option>Published</option><option>Draft</option></select></div>
+            <div class="fcard"><h4>Category</h4><select class="selc" id="efCat"><option value="">Select a category</option><option>Order & Shipping</option><option>Exchange & Return</option><option>Payment</option><option>Contact & Pickup</option><option>Uncategorized</option></select></div>
+            <div class="fcard"><h4>Settings</h4><div class="chkrow"><span class="chkbox on js-chk" id="efFeature"><svg width="12" height="12" viewBox="0 0 20 20" fill="none"><path d="M4 10l4 4 8-9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><div><div class="chk-t">Featured question</div><div class="chk-d">Enable to show this question on the first page of chatbox. If not, it will only be shown in category.</div></div></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-ft"><button class="btn light js-mclose">Cancel</button><button class="btn dark">Save FAQ</button></div>
+    </div>
+  </div>
+
+  <!-- MODAL: Edit Q&A (manual source) -->
+  <div class="modal-ov" id="mQA">
+    <div class="modal" style="max-width:640px">
+      <div class="modal-hd"><h3>Question &amp; answer</h3><div class="modal-x js-mclose"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div></div>
+      <div class="modal-bd">
+        <div class="fld"><label>When a shopper asks…</label><input class="inp" id="qaQ" placeholder="e.g. Do you offer gift wrapping?"></div>
+        <div class="fld-note">Add a few phrasings below so the assistant matches more questions.</div>
+        <div class="fld"><label>Also matches (synonyms)</label>
+          <div class="chips" id="qaChips"></div>
+          <div class="syn-row"><input class="inp" id="qaSyn" placeholder="e.g. gift wrap"><button class="btn light" id="qaSynAdd">Add</button></div>
+        </div>
+        <div class="fld"><label>Answer</label><textarea class="inp" id="qaA" rows="3" placeholder="e.g. Yes — add gift wrapping at checkout for ₹49."></textarea></div>
+        <div class="fld"><label>Status</label><select class="selc"><option>Active</option><option>Inactive</option></select></div>
+      </div>
+      <div class="modal-ft"><button class="btn light js-mclose">Cancel</button><button class="btn dark">Save</button></div>
+    </div>
+  </div>
+
+  <!-- MODAL: Upload CSV (Import CSV card) -->
+  <div class="modal-ov" id="mUploadCSV">
+    <div class="modal" style="max-width:600px">
+      <div class="modal-hd"><h3>Upload</h3><div class="modal-x js-mclose"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div></div>
+      <div class="modal-bd">
+        <div class="step-lbl first">Step 1 · Upload</div>
+        <div class="dropzone" style="padding:28px;cursor:pointer"><div class="dz-click"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M10 3v9m0 0 3.5-3.5M10 12 6.5 8.5M4 16h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Click to choose a .csv file</div></div>
+        <div class="dz-note">One question,answer pair per line. A header row is optional — map the columns in the next step.</div>
+      </div>
+      <div class="modal-ft"><span class="lnk"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" style="margin-right:5px"><path d="M10 3v9m0 0 3.5-3.5M10 12 6.5 8.5M4 16h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Download a sample CSV</span><button class="btn light js-mclose">Cancel</button><button class="btn dark" disabled style="opacity:.5;cursor:default">Import</button></div>
+    </div>
+  </div>
+
+  <!-- MODAL: Edit file -->
+  <div class="modal-ov" id="mFileEdit">
+    <div class="modal" style="max-width:520px">
+      <div class="modal-hd"><h3>Edit file</h3><div class="modal-x js-mclose"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div></div>
+      <div class="modal-bd">
+        <div class="fld" style="margin-top:6px"><label>File</label><div class="filebox"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M6 3h5l3 3v11H6z" stroke="var(--muted)" stroke-width="1.5" stroke-linejoin="round"/><path d="M11 3v3h3" stroke="var(--muted)" stroke-width="1.5" stroke-linejoin="round"/></svg><span id="feName">Sizing guide.pdf</span><span class="fmeta" id="feMeta">· 4 chunks</span></div></div>
+        <div class="fld"><label>Status</label><select class="selc"><option>Active</option><option>Inactive</option></select></div>
+      </div>
+      <div class="modal-ft"><button class="btn light js-mclose">Cancel</button><button class="btn dark">Save</button></div>
+    </div>
+  </div>
+
+  <!-- MODAL: Add file (Upload file card) -->
+  <div class="modal-ov" id="mUploadFile">
+    <div class="modal" style="max-width:640px">
+      <div class="modal-hd"><h3>Add file</h3><div class="modal-x js-mclose"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div></div>
+      <div class="modal-bd">
+        <div class="ub-lbl" style="margin-top:2px">File upload</div>
+        <div class="dropzone" style="padding:40px"><button class="dz-btn">Add file</button></div>
+        <ul class="bullets"><li>Supported formats: .json, .txt, .pdf, .csv</li><li>Maximum file size: 2MB</li><li>Images and PDFs with tables are not yet supported.</li></ul>
+      </div>
+      <div class="modal-ft"><button class="btn light js-mclose">Back</button><button class="btn dark" disabled style="opacity:.5;cursor:default">Add</button></div>
+    </div>
+  </div>
+
+  <!-- MODAL: Source (Website URL card) -->
+  <div class="modal-ov" id="mSource">
+    <div class="modal" style="max-width:640px">
+      <div class="modal-hd"><h3>Source URL</h3><div class="modal-x js-mclose"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div></div>
+      <div class="modal-bd">
+        <div class="step-lbl first">Step 1 · Source</div>
+        <div class="fld" style="margin-top:0"><label>Website URL</label><input class="inp" id="srcUrl" value="https://ankastra.com/"></div>
+        <div class="fld-note">Paste a page from your store. We fetch it, strip it to text, and index it.</div>
+        <div class="step-lbl">Step 2 · What to crawl</div>
+        <div class="optcard sel js-opt"><span class="oc-radio"></span><div><div class="oc-t">This page only</div><div class="oc-d">Fastest. Just the URL above.</div></div></div>
+        <div class="optcard js-opt"><span class="oc-radio"></span><div><div class="oc-t">This page + linked pages</div><div class="oc-d">Also follows same-site links from this page (up to 20 pages).</div></div></div>
+        <div class="optcard js-opt"><span class="oc-radio"></span><div><div class="oc-t">Entire site (via sitemap)</div><div class="oc-d">Reads your site's sitemap.xml (up to 20 pages).</div></div></div>
+        <div class="chkrow" style="margin-top:14px"><span class="chkbox on js-chk"><svg width="12" height="12" viewBox="0 0 20 20" fill="none"><path d="M4 10l4 4 8-9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><div class="chk-t">Re-crawl weekly — keep knowledge fresh as your site changes</div></div>
+        <div class="fld"><label>Status</label><select class="selc"><option>Active</option><option>Inactive</option></select></div>
+        <div class="note-box" style="margin-top:14px">We'll read this page and generate answerable content the assistant can cite.</div>
+      </div>
+      <div class="modal-ft"><button class="btn light js-mclose">Cancel</button><button class="btn dark">Save</button></div>
+    </div>
+  </div>
+
+  <!-- MODAL: Connect store policies -->
+  <div class="modal-ov" id="mPolicies">
+    <div class="modal" style="max-width:680px">
+      <div class="modal-hd"><h3>Connect store policies and pages</h3><div class="modal-x js-mclose"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div></div>
+      <div class="modal-bd">
+        <div style="font-weight:750;color:var(--ink-strong);font-size:13.5px;">Your store pages</div>
+        <div class="pol-sub">We found these pages in your Shopify store. Turn a page on to import it for FAQ answers — it's indexed right away; turn it off to remove it.</div>
+        <div class="pol-used"><span id="polUsed">2</span> of 20 pages used</div>
+        <div id="polRows"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: CSV content (csv source) -->
+  <div class="modal-ov" id="mCSV">
+    <div class="modal" style="max-width:680px">
+      <div class="modal-hd"><h3>CSV content</h3><div class="modal-x js-mclose"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div></div>
+      <div class="modal-bd">
+        <div class="fld-note" style="margin:2px 0 8px">question,answer per row</div>
+        <textarea class="inp" id="csvArea" rows="9" style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;"></textarea>
+        <div class="fld"><label>Status</label><select class="selc"><option>Active</option><option>Inactive</option></select></div>
+      </div>
+      <div class="modal-ft"><button class="btn light js-mclose">Cancel</button><button class="btn dark">Save</button></div>
+    </div>
+  </div>
+
+  <!-- MODAL: Import FAQs -->
+  <div class="modal-ov" id="mImport">
+    <div class="modal" style="max-width:560px">
+      <div class="modal-hd"><h3>Import FAQs</h3><div class="modal-x js-mclose"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div></div>
+      <div class="modal-bd">
+        <div class="dropzone"><button class="dz-btn">Add file</button></div>
+        <div class="dz-note">Accept CSV only, maximum size is 1MB</div>
+      </div>
+      <div class="modal-ft"><span class="lnk">Download a sample CSV</span><button class="btn light js-mclose">Cancel</button><button class="btn dark" disabled style="opacity:.5;cursor:default">Import</button></div>
+    </div>
+  </div>
+
+  <!-- MODAL: Export FAQs -->
+  <div class="modal-ov" id="mExport">
+    <div class="modal" style="max-width:520px">
+      <div class="modal-hd"><h3>Export FAQs</h3><div class="modal-x js-mclose"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div></div>
+      <div class="modal-bd">
+        <div class="radio-row sel js-radio"><span class="radio"></span><span class="radio-t">All FAQs</span></div>
+        <div class="radio-row js-radio"><span class="radio"></span><span class="radio-t">Only published FAQs</span></div>
+      </div>
+      <div class="modal-ft"><button class="btn light js-mclose">Cancel</button><button class="btn dark">Export</button></div>
+    </div>
+  </div>
+
+<script>
+  const html=document.documentElement,tt=document.getElementById('themeToggle'),tl=document.getElementById('themeLabel');
+  if(tt) tt.addEventListener('click',()=>{const d=html.getAttribute('data-theme')==='dark';html.setAttribute('data-theme',d?'light':'dark');tl.textContent=d?'Dark':'Light';setFills();});
+
+  // view switching (in-page)
+  function showView(v){
+    document.getElementById('viewAgent').classList.toggle('show',v==='agent');
+    document.getElementById('viewTraining').classList.toggle('show',v==='training');
+    document.getElementById('viewInstructions').classList.toggle('show',v==='instructions');
+    document.getElementById('viewTest').classList.toggle('show',v==='test');
+    const vr=document.getElementById('viewRec');if(vr)vr.classList.toggle('show',v==='rec');
+    const vc=document.getElementById('viewCustomRec');if(vc)vc.classList.toggle('show',v==='customrec');
+    window.scrollTo({top:0,behavior:'smooth'});
+    if(v==='training'||v==='instructions') setFills();
+  }
+  document.getElementById('openTraining').addEventListener('click',()=>showView('training'));
+  document.getElementById('backToAgent').addEventListener('click',()=>showView('agent'));
+  document.getElementById('openInstructions').addEventListener('click',()=>showView('instructions'));
+  document.getElementById('backFromIns').addEventListener('click',()=>showView('agent'));
+  document.querySelectorAll('.js-openTest').forEach(b=>b.addEventListener('click',()=>showView('test')));
+  document.getElementById('backFromTest').addEventListener('click',()=>showView('agent'));
+
+  // Test AI chat
+  const chatBody=document.getElementById('chatBody'),chatInput=document.getElementById('chatInput'),chatSend=document.getElementById('chatSend');
+  const botReplies={
+    'What payment methods do you accept?':'We accept all major cards, UPI, net-banking and cash on delivery. 💳',
+    'Can I cancel or change my order?':'Yes! You can cancel or edit your order within 2 hours of placing it — just share your order number.',
+    'dgf':"I'm not sure about that one — leave your email and our team will get back to you."
+  };
+  function addMsg(text,who){
+    const wrap=document.createElement('div');wrap.className='cmsg '+who;
+    if(who==='bot'){wrap.innerHTML=`<span class="cav"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M4 5h12v8H8l-3 3V5Z" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg></span><div class="cbub bot">${text}</div>`;}
+    else{wrap.innerHTML=`<div class="cbub user">${text}</div>`;}
+    chatBody.appendChild(wrap);chatBody.scrollTop=chatBody.scrollHeight;
+  }
+  function ask(text){
+    if(!text.trim())return;
+    addMsg(text,'user');
+    setTimeout(()=>addMsg(botReplies[text]||'Got it! Let me find the best answer from your store knowledge. ✨','bot'),450);
+  }
+  document.querySelectorAll('.js-ask').forEach(b=>b.addEventListener('click',()=>ask(b.textContent.trim())));
+  chatSend.addEventListener('click',()=>{ask(chatInput.value);chatInput.value='';});
+  chatInput.addEventListener('keydown',e=>{if(e.key==='Enter'){ask(chatInput.value);chatInput.value='';}});
+  document.getElementById('chatReset').addEventListener('click',()=>{chatBody.querySelectorAll('.cmsg.user, .cmsg.bot:not(:first-of-type)').forEach(n=>n.remove());});
+  document.querySelectorAll('.faces .face').forEach(f=>f.addEventListener('click',()=>{document.querySelectorAll('.faces .face').forEach(x=>x.classList.remove('sel'));f.classList.add('sel');}));
+
+  // training tab switching (scoped)
+  const tabbar=document.getElementById('tabbar');
+  tabbar.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;tabbar.querySelectorAll('button').forEach(x=>x.classList.remove('active'));b.classList.add('active');
+    document.querySelectorAll('#viewTraining .tab-panel').forEach(p=>p.classList.toggle('show',p.dataset.panel===b.dataset.tab));setFills();});
+  if(location.hash==='#faqs'){showView('training');const fb=tabbar.querySelector('button[data-tab="faqs"]');if(fb){tabbar.querySelectorAll('button').forEach(x=>x.classList.remove('active'));fb.classList.add('active');document.querySelectorAll('#viewTraining .tab-panel').forEach(p=>p.classList.toggle('show',p.dataset.panel==='faqs'));setFills();}}
+
+  // assistant skills accordion sections
+  document.querySelectorAll('.js-acc').forEach(h=>h.addEventListener('click',()=>{h.classList.toggle('open');const body=h.nextElementSibling;if(body&&body.classList.contains('acc-body'))body.classList.toggle('show');}));
+
+  // instructions tab switching (scoped)
+  const tabbarIns=document.getElementById('tabbarIns');
+  tabbarIns.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;tabbarIns.querySelectorAll('button').forEach(x=>x.classList.remove('active'));b.classList.add('active');
+    document.querySelectorAll('#viewInstructions .tab-panel').forEach(p=>p.classList.toggle('show',p.dataset.ipanel===b.dataset.itab));});
+
+  // communication style presets
+  document.querySelectorAll('.presets').forEach(g=>g.addEventListener('click',e=>{const b=e.target.closest('.preset');if(!b)return;g.querySelectorAll('.preset').forEach(x=>x.classList.remove('active'));b.classList.add('active');}));
+  // character counters
+  document.querySelectorAll('.js-hoff').forEach(o=>o.addEventListener('click',()=>{document.querySelectorAll('.js-hoff').forEach(x=>x.classList.remove('sel'));o.classList.add('sel');}));
+  document.querySelectorAll('.js-hwait').forEach(o=>o.addEventListener('click',()=>{document.querySelectorAll('.js-hwait').forEach(x=>x.classList.remove('sel'));o.classList.add('sel');}));
+  [['roleTa','roleCount',250],['behTa','behCount',1000],['hMsg','hMsgCount',300],['hoOnline1','hoOnline1c',300],['hoOnline2','hoOnline2c',300],['hoForm','hoFormc',300],['hoSubmit','hoSubmitc',300],['ceForm','ceFormc',300],['ceSubmit','ceSubmitc',300]].forEach(([ta,ct,max])=>{
+    const t=document.getElementById(ta),c=document.getElementById(ct);
+    if(t&&c){const upd=()=>c.textContent=t.value.length+'/'+max;t.addEventListener('input',upd);upd();}
+  });
+  document.querySelectorAll('.js-hopt').forEach(o=>o.addEventListener('click',()=>{document.querySelectorAll('.js-hopt').forEach(x=>x.classList.remove('sel'));o.classList.add('sel');}));
+  (function(){
+    const btn=document.getElementById('addRuleBtn'),form=document.getElementById('ruleForm'),cancel=document.getElementById('ruleCancel'),topic=document.getElementById('ruleTopic'),cnt=document.getElementById('ruleCount'),sub=document.getElementById('ruleSubmit');
+    if(!btn)return;
+    btn.addEventListener('click',()=>{form.style.display='block';btn.style.display='none';topic.focus();});
+    cancel.addEventListener('click',()=>{form.style.display='none';btn.style.display='';topic.value='';cnt.textContent='0/150';sub.disabled=true;sub.style.opacity='.5';sub.style.cursor='default';});
+    topic.addEventListener('input',()=>{cnt.textContent=topic.value.length+'/150';const has=topic.value.trim().length>0;sub.disabled=!has;sub.style.opacity=has?'1':'.5';sub.style.cursor=has?'pointer':'default';});
+    sub.addEventListener('click',()=>{if(sub.disabled)return;cancel.click();});
+  })();
+
+  document.querySelectorAll('.switch').forEach(s=>s.addEventListener('click',()=>s.classList.toggle('on')));
+
+  // product/collection/ck data
+  const products=[['7 Chakra Bracelet',['SEO','best_selling','newest']],['Amber Bracelet',['SEO']],['Amethyst Bracelet for Calming Mind & Peace',['Amethyst','Beads Bracelet','For Her','+4']],['Amethyst Womens Bracelet | Numerology N…',['Amethyst','Chips Bracelet','Crown','+4']],['Ametrine Bracelet',['SEO']],['Black Obsidian Bracelet For Evil Eye Protection',['Beads Bracelet','by problem','For Her','+2']],['Black Rutilated Quartz Chips Bracelet Adjust…',['Black Rutilated','Chips Bracelet','Crown','+4']],['Black Tourmaline Bracelet',['SEO','best_selling','newest']],['Blue Apatite Bracelets',['SEO']],['Blue Lace Agate Bracelet',['SEO']]];
+  const eye='<svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M2 10s3-5 8-5 8 5 8 5-3 5-8 5-8-5-8-5Z" stroke="currentColor" stroke-width="1.4"/><circle cx="10" cy="10" r="2" stroke="currentColor" stroke-width="1.4"/></svg>';
+  const kebab='<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><circle cx="4" cy="10" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="16" cy="10" r="1.5"/></svg>';
+  document.getElementById('prodRows').innerHTML=products.map((p,i)=>`<div class="tbl-r prod-cols js-viewprod" data-i="${i}" style="cursor:pointer"><span><span class="cbx"></span></span><span class="pcell"><span class="pthumb"></span><span class="pname">${p[0]}</span></span><span class="muted-cell">—</span><span class="tags">${p[1].map(t=>`<span class="tag${t.startsWith('+')?' more':''}">${t}</span>`).join('')}</span><span><span class="status active"><span class="sd"></span>Active</span></span><span class="muted-cell">0</span><span class="rowact">${eye}${kebab}</span></div>`).join('');
+  document.querySelectorAll('.js-viewprod').forEach(r=>r.addEventListener('click',e=>{if(e.target.closest('.cbx'))return;openViewProduct(+r.dataset.i);}));
+  const colls=[['all-products','—','Manual','11'],['Shop','—','Manual','5'],['Rise One','—','Manual','6'],['Tennis ab','—','Manual','1'],['Marble','in marble collection stored all the handicraft material','Manual','1']];
+  document.getElementById('collRows').innerHTML=colls.map(c=>`<div class="tbl-r coll-cols"><span><span class="cbx"></span></span><span class="pcell"><span class="pthumb"></span><span class="pname">${c[0]}</span></span><span class="muted-cell">${c[1]}</span><span class="muted-cell">${c[2]}</span><span class="muted-cell">${c[3]}</span><span><span class="status active"><span class="sd"></span>Active</span></span><span class="rowact">${eye}${kebab}</span></div>`).join('');
+  const sources=[
+    {name:'is free shipping available for up',chunks:'1 chunk',type:'Manual',status:'Active',by:'FAQ',sync:'46 min ago',answer:'no, free shipping is available for delhi only',syns:['bestseller products']},
+    {name:'https://ankastra.com/',chunks:'3 chunks',type:'URL',status:'Active',by:'FAQ',sync:'47 min ago'},
+    {name:'What is your return policy? (+2 more)',chunks:'3 chunks',type:'CSV',status:'Active',by:'FAQ',sync:'7/17/2026',csv:"What is your return policy?,You can return any item within 30 days of delivery for a full refund.\nDo you ship internationally?,Yes — we ship worldwide. International orders arrive in 7–14 business days.\nHow do I track my order?,Once your order ships, we'll email you a tracking link."},
+    {name:'Privacy Policy',chunks:'5 chunks',type:'Pages',status:'Active',by:'FAQ',sync:'7/9/2026',url:'https://jgw-check.myshopify.com/pages/privacy-policy'},
+    {name:'shipping policy',chunks:'1 chunk',type:'Pages',status:'Active',by:'FAQ',sync:'7/9/2026',url:'https://jgw-check.myshopify.com/pages/shipping-policy'},
+    {name:'Sizing guide.pdf',chunks:'4 chunks',type:'File',status:'Active',by:'FAQ',sync:'7/10/2026'},
+  ];
+  function renderDs(filter){
+    const list=(!filter||filter==='all')?sources:sources.filter(s=>s.type===filter);
+    document.getElementById('dsRows').innerHTML=list.length?list.map(s=>`<div class="tbl-r ds-cols"><span><span class="src-name">${s.name}</span><span class="src-sub"> · ${s.chunks}</span></span><span><span class="tbadge">${s.type}</span></span><span><span class="status active"><span class="sd"></span>${s.status}</span></span><span class="muted-cell">${s.sync}</span><span class="dsact"><span class="dsa js-dsedit" data-name="${s.name.replace(/"/g,'&quot;')}">Edit</span>${(s.type==='URL'||s.type==='Pages')?'<span class="dsa">Re-sync</span>':''}<span class="dsa del">Delete</span></span></div>`).join(''):'<div class="empty" style="padding:30px"><div class="et" style="font-size:14px">No sources of this type.</div></div>';
+    document.querySelectorAll('#dsRows .js-dsedit').forEach(el=>el.addEventListener('click',()=>{
+      const src=sources.find(x=>x.name===el.dataset.name);if(!src)return;
+      if(src.type==='Manual')openEditQA(src);
+      else if(src.type==='CSV')openEditCSV(src);
+      else if(src.type==='URL')openEditURL(src);
+      else if(src.type==='Pages'){buildPolicies();openM('mPolicies');}
+      else if(src.type==='File')openEditFile(src);
+    }));
+  }
+  function renderChips(arr){document.getElementById('qaChips').innerHTML=(arr||[]).map(t=>`<span class="chip2">${t} <span class="cx">×</span></span>`).join('');}
+  function openEditQA(src){document.getElementById('qaQ').value=src.name;document.getElementById('qaA').value=src.answer||'';renderChips(src.syns||[]);document.getElementById('qaSyn').value='';openM('mQA');}
+  function openEditCSV(src){document.getElementById('csvArea').value=src.csv||'';openM('mCSV');}
+  function openEditURL(src){const u=document.getElementById('srcUrl');if(u)u.value=src.url||src.name;openM('mSource');}
+  function openEditFile(src){document.getElementById('feName').textContent=src.name;document.getElementById('feMeta').textContent='· '+src.chunks;openM('mFileEdit');}
+  (function(){
+    const add=document.getElementById('qaSynAdd'),inp=document.getElementById('qaSyn'),chips=document.getElementById('qaChips');
+    function addSyn(){const v=inp.value.trim();if(!v)return;chips.insertAdjacentHTML('beforeend',`<span class="chip2">${v} <span class="cx">×</span></span>`);inp.value='';inp.focus();}
+    if(add)add.addEventListener('click',addSyn);
+    if(inp)inp.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();addSyn();}});
+    if(chips)chips.addEventListener('click',e=>{if(e.target.classList.contains('cx'))e.target.closest('.chip2').remove();});
+  })();
+  renderDs('all');
+  const dsSub=document.getElementById('dsSubtabs');
+  if(dsSub)dsSub.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;dsSub.querySelectorAll('button').forEach(x=>x.classList.remove('active'));b.classList.add('active');renderDs(b.dataset.t);});
+  const addDataBtn=document.getElementById('addDataBtn');
+  if(addDataBtn)addDataBtn.addEventListener('click',()=>{const el=document.getElementById('addKnowledge');if(el)el.scrollIntoView({behavior:'smooth',block:'start'});});
+
+  // Add-knowledge cards -> dialogs
+  function openAddQA(){document.getElementById('qaQ').value='';document.getElementById('qaA').value='';renderChips([]);document.getElementById('qaSyn').value='';openM('mQA');}
+  document.querySelectorAll('[data-add]').forEach(k=>k.addEventListener('click',()=>{
+    const a=k.dataset.add;
+    if(a==='manual')openAddQA();
+    else if(a==='csv')openM('mUploadCSV');
+    else if(a==='file')openM('mUploadFile');
+    else if(a==='url')openM('mSource');
+    else if(a==='policies'){buildPolicies();openM('mPolicies');}
+  }));
+  document.querySelectorAll('#mSource .js-opt').forEach(o=>o.addEventListener('click',()=>{document.querySelectorAll('#mSource .js-opt').forEach(x=>x.classList.remove('sel'));o.classList.add('sel');}));
+
+  // Connect store policies list
+  const storePages=[
+    ['About Us','/pages/about-us','Page',false],['check','/pages/check','Page',false],
+    ['collections','/pages/collections','Page',false],['contact','/pages/contact','Page',false],
+    ['Crazy Neon Page','/pages/crazy-neon-page','Page',false],["FAQ's",'/pages/faqs','Page',false],
+    ['Frequently Asked Questions','/pages/avada-faqs','Page',false],['Gallery','/pages/gallery-nutrition','Page',false],
+    ['membership area','/pages/membership-area','Page',false],['Our Stores','/pages/our-stores','Page',false],
+    ['Privacy policy','/policies/privacy','Policy',false],['Privacy Policy','/pages/privacy-policy','Page',true],
+    ['Referral Program','/pages/referral-program','Page',false],['Rewards Program','/pages/reward-program','Page',false],
+    ['shipping policy','/pages/shipping-policy','Page',true],['Thank You','/pages/thank-you','Page',false],
+    ['The Story','/pages/the-story','Page',false],['Wishlist','/pages/wishlist','Page',false],
+  ];
+  let polBuilt=false;
+  function updatePolCount(){document.getElementById('polUsed').textContent=document.querySelectorAll('#polRows .switch.on').length;}
+  function buildPolicies(){
+    if(polBuilt)return;polBuilt=true;
+    const base='https://jgw-check.myshopify.com';
+    document.getElementById('polRows').innerHTML=storePages.map(p=>`<div class="pol-row"><span class="switch sm${p[3]?' on':''}"></span><div class="pol-info"><div class="pol-name">${p[0]}</div><div class="pol-url">${base}${p[1]}</div></div><span class="pol-badge">${p[2]}</span></div>`).join('');
+    document.querySelectorAll('#polRows .switch').forEach(s=>s.addEventListener('click',()=>{s.classList.toggle('on');updatePolCount();}));
+    updatePolCount();
+  }
+
+  // Recommendation detail view
+  const trash='<svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M5 6h10M8 6V4h4v2M6 6l1 9h6l1-9" stroke="#e11d48" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const recProducts=[
+    ['7 Chakra Bracelet','',['SEO','best_selling','newest']],
+    ['Amethyst Bracelet for Calming Mind & Peace','',['Amethyst','Beads Bracelet','For Her','+4']],
+    ['Black Obsidian Bracelet For Evil Eye Protection','',['Beads Bracelet','by problem','For Her','+2']],
+    ['Black Tourmaline Bracelet','',['SEO','best_selling','newest']],
+    ['EWW','all-products',['best_selling']],
+    ['Earthen Pack of 10','Shop, Rise One',['10 pack','Earthen','Large','+5']],
+    ['Earthen Pack of 25','Shop, Rise One, all-products',['25 pack','Earthen','Large','+4']],
+    ['Green Jade Bracelet','',['SEO','best_selling','newest']],
+    ['Happy Birthday','Tennis ab, all-products',['best_selling']],
+    ['Item Personalization','all-products',['best_selling']],
+  ];
+  function renderRecProds(empty){
+    const box=document.getElementById('recProdRows');if(!box)return;
+    box.innerHTML=empty?'<div class="empty" style="padding:34px"><div class="et" style="font-size:14px">No products yet</div><div style="color:var(--muted);font-size:12.5px;margin-top:5px">Click "Add products" above to add items to this recommendation.</div></div>':recProducts.map(p=>`<div class="tbl-r recp-cols"><span><span class="cbx"></span></span><span class="pcell"><span class="pthumb"></span><span class="pname">${p[0]}</span></span><span class="muted-cell">${p[1]||'—'}</span><span class="tags">${p[2].map(t=>`<span class="tag${t.startsWith('+')?' more':''}">${t}</span>`).join('')}</span><span class="rowact">${eye}${trash}</span></div>`).join('');
+  }
+  function renderRecTrigs(arr){document.getElementById('recTrigChips').innerHTML=(arr||[]).map(t=>`<span class="chip2">${t} <span class="cx">×</span></span>`).join('');}
+  function openRec(title,trigs,status,isNew,sub){
+    document.getElementById('recTitle').textContent=isNew?'New recommendation':(title||'Recommendation');
+    document.getElementById('recSub').textContent=sub||'Product recommendation';
+    document.getElementById('recTitleInput').value=title||'';
+    renderRecTrigs(trigs||[]);
+    document.getElementById('recStatusSel').value=status||'Active';
+    document.getElementById('recTrigInput').value='';
+    renderRecProds(isNew);showView('rec');
+  }
+  document.querySelectorAll('.js-openrec').forEach(el=>el.addEventListener('click',()=>openRec(el.dataset.title,(el.dataset.trigs||'').split(';').filter(Boolean),el.dataset.status||'Active',false,el.dataset.sub)));
+  (function(){
+    const add=document.getElementById('recTrigAdd'),inp=document.getElementById('recTrigInput'),chips=document.getElementById('recTrigChips');
+    function addT(){const v=inp.value.trim();if(!v)return;chips.insertAdjacentHTML('beforeend',`<span class="chip2">${v} <span class="cx">×</span></span>`);inp.value='';inp.focus();}
+    if(add)add.addEventListener('click',addT);
+    if(inp)inp.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();addT();}});
+    if(chips)chips.addEventListener('click',e=>{if(e.target.classList.contains('cx'))e.target.closest('.chip2').remove();});
+  })();
+  const backRec=document.getElementById('backFromRec');if(backRec)backRec.addEventListener('click',()=>showView('instructions'));
+
+  // Browse products modal
+  const browseProducts=[
+    ['7 Chakra Bracelet','0 in stock for 3 variants'],['Amber Bracelet','0 in stock for 3 variants'],
+    ['Amethyst Bracelet for Calming Mind & Peace','297 in stock for 3 variants'],['Amethyst Womens Bracelet | Numerology No. 7 Bracelet','Inventory not tracked'],
+    ['Ametrine Bracelet','0 in stock for 3 variants'],['Black Obsidian Bracelet For Evil Eye Protection','297 in stock for 3 variants'],
+    ['Black Rutilated Quartz Chips Bracelet Adjustable','Inventory not tracked'],['Black Tourmaline Bracelet','0 in stock for 3 variants'],
+    ['Blue Apatite Bracelets','0 in stock for 3 variants'],['Blue Lace Agate Bracelet','0 in stock for 3 variants'],
+    ['Botswana agate Chips Bracelet Adjustable','Inventory not tracked'],
+  ];
+  const checkSvg='<svg width="11" height="11" viewBox="0 0 20 20" fill="none"><path d="M4 10l4 4 8-9" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  function updateBrowseCount(){const n=document.querySelectorAll('#browseRows .br-cbx.on').length;document.getElementById('browseCount').textContent=n+' product'+(n===1?'':'s')+' selected';}
+  let browseBuilt=false;
+  function openBrowse(){
+    if(!browseBuilt){browseBuilt=true;
+      document.getElementById('browseRows').innerHTML=browseProducts.map(p=>`<div class="br-row"><span class="br-cbx">${checkSvg}</span><span class="br-thumb"></span><div class="br-info"><div class="br-name">${p[0]}</div><div class="br-stock">${p[1]}</div></div></div>`).join('');
+      document.querySelectorAll('#browseRows .br-row').forEach(r=>r.addEventListener('click',()=>{r.querySelector('.br-cbx').classList.toggle('on');updateBrowseCount();}));
+    }
+    openM('mBrowse');
+  }
+  const addProdBtn=document.getElementById('addProductsBtn');if(addProdBtn)addProdBtn.addEventListener('click',openBrowse);
+
+  // App recommendations: edit (pencil), delete, add new
+  document.querySelectorAll('.tbl-r.rec-cols .rec-edit:not(.dis)').forEach(ed=>ed.addEventListener('click',()=>{const row=ed.closest('.tbl-r');const a=row.querySelector('.js-openrec');const c=row.querySelector('.js-opencustom');
+    if(a)openRec(a.dataset.title,(a.dataset.trigs||'').split(';').filter(Boolean),a.dataset.status||'Active',false,a.dataset.sub);
+    else if(c)openCustomRec(c.dataset.title,c.dataset.sub,(c.dataset.terms||'').split(';').filter(Boolean));}));
+  document.querySelectorAll('.tbl-r.rec-cols .rec-del').forEach(d=>d.addEventListener('click',()=>d.closest('.tbl-r').remove()));
+  const addRecBtn=document.getElementById('addRecBtn');if(addRecBtn)addRecBtn.addEventListener('click',()=>openRec('',[],'Active',true,'New product recommendation'));
+
+  // Custom recommendation detail view
+  function renderTermRows(terms){
+    document.getElementById('termRows').innerHTML=(terms&&terms.length?terms:['']).map(t=>`<div class="term-row"><input class="inp" value="${(t||'').replace(/"/g,'&quot;')}" placeholder="Enter a search term"><span class="term-del"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M5 6h10M8 6V4h4v2M6 6l1 9h6l1-9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>`).join('');
+    document.querySelectorAll('#termRows .term-del').forEach(d=>d.addEventListener('click',()=>{if(document.querySelectorAll('#termRows .term-row').length>1)d.closest('.term-row').remove();else d.closest('.term-row').querySelector('input').value='';}));
+  }
+  const customData={
+    'Special occasions':{products:[{name:'7 Chakra Bracelet'}],collections:[{name:'Rise One',meta:'6 products'}]},
+    'Sale promotion':{products:[{name:'Amber Bracelet'},{name:'Clearance Bundle'}],collections:[{name:'Sale',meta:'12 products'},{name:'Clearance',meta:'8 products'}]},
+  };
+  function renderSelExp(bodyId,countId,items,noun){
+    const body=document.getElementById(bodyId),cnt=document.getElementById(countId);
+    const n=(items||[]).length;cnt.textContent=n+' '+noun+(n===1?'':'s')+' selected';
+    body.innerHTML=(items||[]).map(it=>`<div class="sel-item"><span class="si-thumb"></span><span class="si-name">${it.name}</span>${it.meta?`<span class="si-meta">${it.meta}</span>`:''}<span class="si-x">×</span></div>`).join('')+(n?`<div class="mini-pager"><span class="mp">‹</span><span>1 / 1</span><span class="mp">›</span></div>`:'');
+    body.querySelectorAll('.si-x').forEach(x=>x.addEventListener('click',()=>{x.closest('.sel-item').remove();const m=body.querySelectorAll('.sel-item').length;cnt.textContent=m+' '+noun+(m===1?'':'s')+' selected';if(!m){const mp=body.querySelector('.mini-pager');if(mp)mp.remove();}}));
+  }
+  function renderPreview(){
+    const box=document.getElementById('previewRows');if(!box)return;
+    box.innerHTML=recProducts.slice(0,4).map(p=>`<div class="tbl-r prev-cols"><span class="pcell"><span class="pthumb"></span><span class="pname">${p[0]}</span></span><span class="muted-cell">${p[1]||'—'}</span><span class="tags">${p[2].map(t=>`<span class="tag${t.startsWith('+')?' more':''}">${t}</span>`).join('')}</span><span class="rowact">${eye}</span></div>`).join('');
+  }
+  function openCustomRec(title,sub,terms){
+    document.getElementById('customTitle').textContent=title;document.getElementById('customSub').textContent=sub;
+    renderTermRows(terms);
+    const d=customData[title]||{products:[],collections:[]};
+    renderSelExp('prodSelBody','prodSelCount',d.products,'product');
+    renderSelExp('collSelBody','collSelCount',d.collections,'collection');
+    renderPreview();
+    document.querySelectorAll('#viewCustomRec .sel-head, #viewCustomRec .sel-body').forEach(el=>el.classList.remove('open'));
+    showView('customrec');
+  }
+  document.querySelectorAll('.js-selhead').forEach(h=>h.addEventListener('click',()=>{const b=document.getElementById(h.dataset.body);h.classList.toggle('open');if(b)b.classList.toggle('open');}));
+  document.querySelectorAll('.js-opencustom').forEach(el=>el.addEventListener('click',()=>openCustomRec(el.dataset.title,el.dataset.sub,(el.dataset.terms||'').split(';').filter(Boolean))));
+  const backCustom=document.getElementById('backFromCustom');if(backCustom)backCustom.addEventListener('click',()=>showView('instructions'));
+  const addCustomBtn=document.getElementById('addCustomBtn');if(addCustomBtn)addCustomBtn.addEventListener('click',()=>openCustomRec('New recommendation','Custom product recommendation',['']));
+  document.querySelectorAll('.js-reccancel, .js-recsave').forEach(b=>b.addEventListener('click',()=>showView('instructions')));
+  const addTermBtn=document.getElementById('addTermBtn');if(addTermBtn)addTermBtn.addEventListener('click',()=>{document.getElementById('termRows').insertAdjacentHTML('beforeend',`<div class="term-row"><input class="inp" placeholder="Enter a search term"><span class="term-del"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M5 6h10M8 6V4h4v2M6 6l1 9h6l1-9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>`);const rows=document.querySelectorAll('#termRows .term-row');const last=rows[rows.length-1];last.querySelector('.term-del').addEventListener('click',()=>{if(document.querySelectorAll('#termRows .term-row').length>1)last.remove();else last.querySelector('input').value='';});last.querySelector('input').focus();});
+  const viewExBtn=document.getElementById('viewExBtn');
+  if(viewExBtn)viewExBtn.addEventListener('click',()=>{const p=document.getElementById('exPanel'),open=p.style.display!=='none';p.style.display=open?'none':'block';document.getElementById('viewExText').textContent=open?'View examples':'Hide examples';viewExBtn.querySelector('.ex-chev').classList.toggle('up',!open);});
+  document.querySelectorAll('.ex-term').forEach(t=>t.addEventListener('click',()=>{const rows=document.querySelectorAll('#termRows .term-row');const empty=[...rows].find(r=>!r.querySelector('input').value.trim());if(empty){empty.querySelector('input').value=t.textContent;}else{document.getElementById('addTermBtn').click();const nr=document.querySelectorAll('#termRows .term-row');nr[nr.length-1].querySelector('input').value=t.textContent;}}));
+  const condBrowseProd=document.getElementById('condBrowseProd');if(condBrowseProd)condBrowseProd.addEventListener('click',openBrowse);
+  const browseColls=[['all-products','11 products'],['Shop','5 products'],['Rise One','6 products'],['Tennis ab','1 product'],['Marble','1 product'],['Best Sellers','8 products'],['New Arrivals','12 products']];
+  let collBuilt=false;
+  function updateCollCount(){const n=document.querySelectorAll('#collBrowseRows .br-cbx.on').length;document.getElementById('collBrowseCount').textContent=n+' collection'+(n===1?'':'s')+' selected';}
+  function openBrowseColl(){
+    if(!collBuilt){collBuilt=true;
+      document.getElementById('collBrowseRows').innerHTML=browseColls.map(c=>`<div class="br-row"><span class="br-cbx">${checkSvg}</span><span class="br-thumb"></span><div class="br-info"><div class="br-name">${c[0]}</div><div class="br-stock">${c[1]}</div></div></div>`).join('');
+      document.querySelectorAll('#collBrowseRows .br-row').forEach(r=>r.addEventListener('click',()=>{r.querySelector('.br-cbx').classList.toggle('on');updateCollCount();}));
+    }
+    openM('mBrowseColl');
+  }
+  const condBrowseColl=document.getElementById('condBrowseColl');if(condBrowseColl)condBrowseColl.addEventListener('click',openBrowseColl);
+
+  // FAQ management
+  const cats=[
+    {name:'Order & Shipping',icon:'🛒',status:'pub',star:true,def:false,open:true,faqs:[{q:'How long will it take to receive my order?',status:'pub',star:true},{q:'How to track my order?',status:'pub',star:true},{q:'Do you ship internationally?',status:'pub',star:true},{q:'Do you offer free shipping?',status:'pub',star:true}]},
+    {name:'Exchange & Return',icon:'🔁',status:'pub',star:true,def:false,open:false,faqs:[{q:'What is your return policy?',status:'pub',star:true},{q:'How do I request an exchange?',status:'pub',star:false},{q:'How long do refunds take?',status:'pub',star:true}]},
+    {name:'Payment',icon:'💳',status:'pub',star:true,def:false,open:true,faqs:[{q:'What payment methods do you accept?',status:'pub',star:true},{q:'Do you accept store credit?',status:'pub',star:true}]},
+    {name:'Contact & Pickup',icon:'🚚',status:'pub',star:true,def:false,open:true,faqs:[{q:'How can I contact you?',status:'draft',star:true}]},
+    {name:'Uncategorized',icon:'📄',status:'draft',star:false,def:true,open:true,faqs:[{q:'ergsdws',status:'pub',star:false},{q:'product warrenty for bracelets',status:'pub',star:true}]},
+  ];
+  const sPill=s=>`<span class="status ${s}"><span class="sd"></span>${s==='pub'?'Published':'Draft'}</span>`;
+  const starSvg=on=>`<svg class="star${on?' on':''}" width="19" height="19" viewBox="0 0 20 20" fill="${on?'currentColor':'none'}"><path d="m10 3 2 4.3 4.7.6-3.4 3.3.8 4.6L10 13.6 5.9 15.8l.8-4.6L3.3 7.9l4.7-.6L10 3Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>`;
+  const drag='<svg class="drag" width="15" height="15" viewBox="0 0 20 20" fill="currentColor"><circle cx="7" cy="5" r="1.3"/><circle cx="13" cy="5" r="1.3"/><circle cx="7" cy="10" r="1.3"/><circle cx="13" cy="10" r="1.3"/><circle cx="7" cy="15" r="1.3"/><circle cx="13" cy="15" r="1.3"/></svg>';
+  const chev2='<svg class="chev2" width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  let fStatus=null,fFeatured=null,fSearch='';
+  function faqPass(f){
+    if(fStatus && f.status!==fStatus) return false;
+    if(fFeatured!==null && !!f.star!==fFeatured) return false;
+    if(fSearch && !f.q.toLowerCase().includes(fSearch)) return false;
+    return true;
+  }
+  function renderCats(){
+    const anyFilter=fStatus||fFeatured!==null||fSearch;
+    const html=cats.map((c,ci)=>{
+      const faqs=c.faqs.map((f,fi)=>({f,fi})).filter(o=>faqPass(o.f));
+      const nameHit=fSearch && c.name.toLowerCase().includes(fSearch);
+      if(anyFilter && faqs.length===0 && !nameHit) return '';
+      const rows=faqs.map(o=>`<div class="faq-row js-editfaq" data-ci="${ci}" data-fi="${o.fi}"><div class="faq-q">${drag}<span class="q">${o.f.q}</span></div><div>${sPill(o.f.status)}</div>${starSvg(o.f.star)}</div>`).join('');
+      return `<div class="cat"><div class="cat-row js-editcat" data-ci="${ci}"><div class="cat-left">${drag}<span class="cat-name">${c.icon} ${c.name} <span class="cat-count">(${faqs.length} FAQs)</span>${c.def?'<span class="def">Default</span>':''}</span></div><div>${sPill(c.status)}</div>${starSvg(c.star)}</div><div class="faq-list">${rows}<div class="addfaq"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M10 5v10M5 10h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg> Add FAQ</div></div></div>`;
+    }).join('');
+    document.getElementById('cats').innerHTML=html||'<div class="empty" style="padding:34px"><div class="et" style="font-size:14px">No FAQs match your filters.</div></div>';
+    attachCatHandlers();
+  }
+  function attachCatHandlers(){
+    document.querySelectorAll('#cats .js-editcat').forEach(r=>r.addEventListener('click',e=>{if(e.target.closest('.star')||e.target.closest('.drag'))return;openEditCat(+r.dataset.ci);}));
+    document.querySelectorAll('#cats .js-editfaq').forEach(r=>r.addEventListener('click',e=>{e.stopPropagation();if(e.target.closest('.star')||e.target.closest('.drag'))return;openEditFaq(+r.dataset.ci,+r.dataset.fi);}));
+    document.querySelectorAll('#cats .star').forEach(s=>s.addEventListener('click',e=>{e.stopPropagation();s.classList.toggle('on');s.setAttribute('fill',s.classList.contains('on')?'currentColor':'none');}));
+    document.querySelectorAll('#cats .addfaq').forEach(a=>a.addEventListener('click',e=>{e.stopPropagation();openAddFaq();}));
+  }
+  renderCats();
+
+  // Modals
+  function openM(id){document.getElementById(id).classList.add('show');document.body.style.overflow='hidden';}
+  function closeM(){document.querySelectorAll('.modal-ov.show').forEach(m=>m.classList.remove('show'));document.body.style.overflow='';}
+  document.querySelectorAll('.js-mclose').forEach(b=>b.addEventListener('click',closeM));
+  document.querySelectorAll('.modal-ov').forEach(ov=>ov.addEventListener('click',e=>{if(e.target===ov)closeM();}));
+  document.addEventListener('keydown',e=>{if(e.key==='Escape')closeM();});
+  document.querySelectorAll('.js-chk').forEach(c=>c.addEventListener('click',()=>c.classList.toggle('on')));
+  function slug(s){return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');}
+  function openViewProduct(i){const p=products[i],sl=slug(p[0]),url='https://jgw-check.myshopify.com/products/'+sl;
+    document.getElementById('vpTitle').textContent=p[0];
+    document.getElementById('vpUrl').textContent=url;document.getElementById('vpUrl').href=url;
+    document.getElementById('vpId').textContent=String(9106868830364+i*137);
+    document.getElementById('vpTags').innerHTML=p[1].map(t=>`<span class="tag${t.startsWith('+')?' more':''}">${t}</span>`).join('');
+    document.getElementById('mProduct').querySelector('.modal-bd').scrollTop=0;openM('mProduct');}
+  function setChk(el,on){if(el)el.classList.toggle('on',on);}
+  const DEF_ANS="Typically, it takes 3-5 business days to receive your order. We're doing our best to deliver it promptly for you.";
+  function openEditCat(ci){document.getElementById('ecTitle').textContent='Edit category';document.getElementById('ecName').value=cats[ci].name;setChk(document.getElementById('ecFeature'),!!cats[ci].star);openM('mCat');}
+  function openAddCat(){document.getElementById('ecTitle').textContent='Add category';document.getElementById('ecName').value='';setChk(document.getElementById('ecFeature'),false);openM('mCat');}
+  function openEditFaq(ci,fi){const f=cats[ci].faqs[fi];document.getElementById('efTitle').textContent='Edit FAQ';document.getElementById('efDelete').style.display='';document.getElementById('efQ').value=f.q;document.getElementById('efA').textContent=f.a||DEF_ANS;try{document.getElementById('efCat').value=cats[ci].name;}catch(e){}setChk(document.getElementById('efFeature'),!!f.star);openM('mFaq');}
+  function openAddFaq(){document.getElementById('efTitle').textContent='Add FAQ';document.getElementById('efDelete').style.display='none';document.getElementById('efQ').value='';document.getElementById('efA').textContent='';document.getElementById('efCat').value='';setChk(document.getElementById('efFeature'),false);openM('mFaq');}
+
+  // FAQ toolbar dropdowns
+  function closeMenus(){document.querySelectorAll('.dd-menu').forEach(m=>m.classList.remove('show'));}
+  function toggleMenu(menu){const open=menu.classList.contains('show');closeMenus();if(!open)menu.classList.add('show');}
+  const faqMoreBtn=document.getElementById('faqMoreBtn'),faqAddBtn=document.getElementById('faqAddBtn');
+  if(faqMoreBtn)faqMoreBtn.addEventListener('click',e=>{e.stopPropagation();toggleMenu(document.getElementById('faqMoreMenu'));});
+  if(faqAddBtn)faqAddBtn.addEventListener('click',e=>{e.stopPropagation();toggleMenu(document.getElementById('faqAddMenu'));});
+  document.addEventListener('click',closeMenus);
+  document.querySelectorAll('.dd-item').forEach(it=>it.addEventListener('click',e=>{e.stopPropagation();closeMenus();const a=it.dataset.act;if(a==='import')openM('mImport');else if(a==='export')openM('mExport');else if(a==='addfaq')openAddFaq();else if(a==='addcat')openAddCat();}));
+  document.querySelectorAll('#mExport .js-radio').forEach(r=>r.addEventListener('click',()=>{document.querySelectorAll('#mExport .js-radio').forEach(x=>x.classList.remove('sel'));r.classList.add('sel');}));
+  // FAQ filter dropdowns (Status / Featured) — functional
+  const fltStatus=document.getElementById('fltStatus'),fltFeatured=document.getElementById('fltFeatured');
+  const CV='<svg class="btn-cv" width="13" height="13" viewBox="0 0 20 20" fill="none"><path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  function setChip(id,base,label){const c=document.getElementById(id);if(!c)return;c.innerHTML=(label?base+': '+label:base)+CV;c.classList.toggle('on',!!label);}
+  if(fltStatus)fltStatus.addEventListener('click',e=>{e.stopPropagation();toggleMenu(document.getElementById('fltStatusMenu'));});
+  if(fltFeatured)fltFeatured.addEventListener('click',e=>{e.stopPropagation();toggleMenu(document.getElementById('fltFeaturedMenu'));});
+  const statusMap={'Published':'pub','Draft':'draft'},featMap={'Featured':true,'Not featured':false};
+  document.querySelectorAll('.filt-menu').forEach(menu=>{
+    const isStatus=menu.id==='fltStatusMenu';
+    menu.addEventListener('click',e=>e.stopPropagation());
+    menu.querySelectorAll('.js-fopt').forEach(o=>o.addEventListener('click',()=>{
+      menu.querySelectorAll('.js-fopt').forEach(x=>x.classList.remove('sel'));o.classList.add('sel');
+      const label=o.textContent.trim();
+      if(isStatus){fStatus=statusMap[label];setChip('fltStatus','Status',label);}
+      else{fFeatured=featMap[label];setChip('fltFeatured','Featured',label);}
+      closeMenus();renderCats();
+    }));
+    const clr=menu.querySelector('.js-fclear');
+    if(clr)clr.addEventListener('click',()=>{
+      menu.querySelectorAll('.js-fopt').forEach(x=>x.classList.remove('sel'));
+      if(isStatus){fStatus=null;setChip('fltStatus','Status',null);}else{fFeatured=null;setChip('fltFeatured','Featured',null);}
+      closeMenus();renderCats();
+    });
+  });
+  const faqSearchInput=document.querySelector('.bigsearch input');
+  if(faqSearchInput)faqSearchInput.addEventListener('input',e=>{fSearch=e.target.value.toLowerCase();renderCats();});
+
+  function setFills(){setTimeout(()=>{document.querySelectorAll('.usemeter .fill, .s-fill').forEach(f=>{f.style.width=f.getAttribute('data-pct')+'%';});},120);}
+  window.addEventListener('load',setFills);
+</script>
+</body>
+</html>
