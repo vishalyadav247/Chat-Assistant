@@ -1,34 +1,485 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
+// ChatConvert schema — Postgres + pgvector, multi-tenant (every domain table is shop-scoped).
+// Vector columns are Unsupported(): created here, WRITTEN only via raw SQL (see app/lib/embeddings).
+// Migration workflow: NEVER `prisma db push` — see .claude/skills/db-tenancy/SKILL.md.
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
-// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
-// enough when changing adapters.
-// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
 datasource db {
-  provider = "sqlite"
-  url      = "file:dev.sqlite"
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
 }
+
+// ── Shopify session storage (template) ──────────────────────────────────────
 
 model Session {
-  id            String    @id
-  shop          String
-  state         String
-  isOnline      Boolean   @default(false)
-  scope         String?
-  expires       DateTime?
-  accessToken   String
-  userId        BigInt?
-  firstName     String?
-  lastName      String?
-  email         String?
-  accountOwner  Boolean   @default(false)
-  locale        String?
-  collaborator  Boolean?  @default(false)
-  emailVerified Boolean?  @default(false)
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
   refreshToken        String?
   refreshTokenExpires DateTime?
+
+  @@map("sessions")
+}
+
+// ── Tenant root ─────────────────────────────────────────────────────────────
+
+model Shop {
+  id            String    @id @default(cuid())
+  domain        String    @unique // my-store.myshopify.com
+  name          String?
+  currency      String?
+  timezone      String?
+  plan          String    @default("free") // free | basic | pro | plus
+  planStatus    String    @default("none") // none | trial | active | cancelled
+  subscriptionId  String? // gid of the active AppSubscription
+  billingInterval String? // monthly | yearly
+  trialEndsAt     DateTime?
+  usageLineItemId String? // AppSubscriptionLineItem gid for usage records
+  aiEnabled     Boolean   @default(true)
+  installedAt   DateTime  @default(now())
+  uninstalledAt DateTime?
+
+  @@map("shops")
+}
+
+// ── Catalog mirror (spec 02) ────────────────────────────────────────────────
+
+model Product {
+  id               String                       @id @default(cuid())
+  shopId           String
+  shopifyProductId String
+  title            String
+  description      String                       @default("")
+  productType      String                       @default("")
+  vendor           String                       @default("")
+  tags             String[]                     @default([])
+  status           String                       @default("active")
+  price            Decimal                      @default(0)
+  stock            Int                          @default(0)
+  imageUrl         String?
+  handle           String                       @default("")
+  variants         Json?
+  contentHash      String? // title+description hash — re-embed only on change
+  learnEnabled     Boolean                      @default(true)
+  embedding        Unsupported("vector(1536)")?
+  searchText       Unsupported("tsvector")? // GENERATED column (see init migration)
+  createdAt        DateTime                     @default(now())
+  updatedAt        DateTime                     @updatedAt
+
+  @@unique([shopId, shopifyProductId])
+  @@index([shopId, price])
+  @@index([shopId, stock])
+  @@map("products")
+}
+
+model Collection {
+  id                  String   @id @default(cuid())
+  shopId              String
+  shopifyCollectionId String
+  title               String
+  description         String   @default("")
+  conditions          String   @default("Manual")
+  productCount        Int      @default(0)
+  learnEnabled        Boolean  @default(false)
+  updatedAt           DateTime @updatedAt
+
+  @@unique([shopId, shopifyCollectionId])
+  @@index([shopId])
+  @@map("collections")
+}
+
+model Discount {
+  id                String    @id @default(cuid())
+  shopId            String
+  shopifyDiscountId String
+  title             String
+  summary           String    @default("")
+  status            String    @default("active")
+  startsAt          DateTime?
+  endsAt            DateTime?
+  updatedAt         DateTime  @updatedAt
+
+  @@unique([shopId, shopifyDiscountId])
+  @@index([shopId])
+  @@map("discounts")
+}
+
+model SyncState {
+  id             String    @id @default(cuid())
+  shopId         String    @unique
+  productSyncAt  DateTime?
+  collectionSyncAt DateTime?
+  discountSyncAt DateTime?
+  productCount   Int       @default(0)
+  status         String    @default("idle") // idle | running | error
+  errorMessage   String?
+  cappedAt       Int?
+
+  @@map("sync_states")
+}
+
+// ── Knowledge / RAG (spec 04) ───────────────────────────────────────────────
+
+model DataSource {
+  id           String    @id @default(cuid())
+  shopId       String
+  type         String // url | manual | csv | file | pages | faq
+  name         String
+  url          String?
+  crawlScope   String? // page | linked | sitemap
+  reCrawlWeekly Boolean  @default(false)
+  status       String    @default("pending") // pending | active | inactive | error | suggested
+  chunkCount   Int       @default(0)
+  lastSyncedAt DateTime?
+  metadata     Json?
+  createdAt    DateTime  @default(now())
+
+  @@index([shopId, type])
+  @@map("data_sources")
+}
+
+model Knowledge {
+  id           String                       @id @default(cuid())
+  shopId       String
+  dataSourceId String?
+  topic        String
+  body         String
+  embedding    Unsupported("vector(1536)")?
+  createdAt    DateTime                     @default(now())
+
+  @@index([shopId])
+  @@index([dataSourceId])
+  @@map("knowledge")
+}
+
+// ── FAQs (spec 07) ──────────────────────────────────────────────────────────
+
+model FaqCategory {
+  id        String  @id @default(cuid())
+  shopId    String
+  name      String
+  icon      String  @default("📄")
+  position  Int     @default(0)
+  status    String  @default("published") // published | draft
+  featured  Boolean @default(false)
+  isDefault Boolean @default(false)
+
+  @@index([shopId])
+  @@map("faq_categories")
+}
+
+model Faq {
+  id         String  @id @default(cuid())
+  shopId     String
+  categoryId String?
+  question   String
+  answerHtml String  @default("")
+  status     String  @default("draft") // published | draft
+  featured   Boolean @default(false)
+  position   Int     @default(0)
+
+  @@index([shopId, status])
+  @@map("faqs")
+}
+
+// ── Curated answers (spec 09) ───────────────────────────────────────────────
+
+model CuratedAnswer {
+  id            String                       @id @default(cuid())
+  shopId        String
+  question      String
+  synonyms      String[]                     @default([])
+  productIds    String[]                     @default([]) // shopify product ids
+  talkingPoints String                       @default("")
+  status        String                       @default("draft") // draft | published
+  priority      String                       @default("normal") // low | normal | high
+  servedCount   Int                          @default(0)
+  stockIssue    Boolean                      @default(false) // dead-stock pick flag
+  embedding     Unsupported("vector(1536)")?
+  createdAt     DateTime                     @default(now())
+  updatedAt     DateTime                     @updatedAt
+
+  @@index([shopId, status])
+  @@map("curated_answers")
+}
+
+// ── Recommendations (spec 08) ───────────────────────────────────────────────
+
+model Recommendation {
+  id               String                       @id @default(cuid())
+  shopId           String
+  title            String
+  triggerQuestions String[]                     @default([])
+  productIds       String[]                     @default([])
+  status           String                       @default("active")
+  embedding        Unsupported("vector(1536)")?
+  updatedAt        DateTime                     @updatedAt
+
+  @@index([shopId])
+  @@map("recommendations")
+}
+
+model CrossSellPair {
+  id           String   @id @default(cuid())
+  shopId       String
+  productId    String // shopify product id (the anchor)
+  companionIds String[] @default([])
+  status       String   @default("active")
+  updatedAt    DateTime @updatedAt
+
+  @@unique([shopId, productId])
+  @@map("cross_sell_pairs")
+}
+
+model UnresolvedQuestion {
+  id             String   @id @default(cuid())
+  shopId         String
+  question       String
+  conversationId String?
+  reason         String   @default("fell_back") // fell_back | low_confidence | repeated
+  count          Int      @default(1)
+  status         String   @default("pending") // pending | handled | dismissed
+  createdAt      DateTime @default(now())
+
+  @@index([shopId, status])
+  @@map("unresolved_questions")
+}
+
+model CustomRecommendation {
+  id            String   @id @default(cuid())
+  shopId        String
+  name          String
+  searchTerms   String[] @default([])
+  productIds    String[] @default([])
+  collectionIds String[] @default([])
+  status        String   @default("inactive")
+  updatedAt     DateTime @updatedAt
+
+  @@index([shopId])
+  @@map("custom_recommendations")
+}
+
+// ── Per-shop AI config (specs 03/08) ────────────────────────────────────────
+
+model Persona {
+  id                 String   @id @default(cuid())
+  shopId             String   @unique
+  role               String   @default("")
+  communicationStyle String   @default("friendly")
+  brandVoice         String   @default("")
+  behaviours         String   @default("")
+  guidelines         String[] @default([])
+  avoid              String[] @default([])
+  scope              String   @default("")
+  offTopicMessage    String   @default("")
+  defaultLanguage    String   @default("en")
+  languages          String[] @default(["en"])
+  autoDetectLanguage Boolean  @default(false)
+  welcomeMessage     String   @default("")
+
+  @@map("personas")
+}
+
+model Guardrails {
+  id                      String   @id @default(cuid())
+  shopId                  String   @unique
+  answerOnlyFromKnowledge Boolean  @default(true)
+  bannedTopics            String[] @default([])
+  fallbackMessage         String   @default("")
+  minMeaningScore         Float    @default(0.30)
+  curatedMatchThreshold   Float    @default(0.80)
+  curatedBorderline       Float    @default(0.65)
+  bannedMatchThreshold    Float    @default(0.35)
+
+  @@map("guardrails")
+}
+
+model HandoverConfig {
+  id     String @id @default(cuid())
+  shopId String @unique
+  config Json // triggers + destination + nested options (zod-validated, spec 08)
+
+  @@map("handover_configs")
+}
+
+model WidgetSettings {
+  id       String @id @default(cuid())
+  shopId   String @unique
+  settings Json // full widget config (zod-validated, spec 06)
+
+  @@map("widget_settings")
+}
+
+model ShopSettings {
+  id       String @id @default(cuid())
+  shopId   String @unique
+  settings Json // store info, theme, inbox, availability, survey, tracking, retention (spec 16)
+
+  @@map("shop_settings")
+}
+
+// ── Conversations (specs 03/10) ─────────────────────────────────────────────
+
+model Conversation {
+  id            String    @id @default(cuid())
+  shopId        String
+  sessionId     String
+  contactId     String?
+  mode          String    @default("ai") // ai | human
+  status        String    @default("open") // open | resolved
+  outcome       String?
+  starred       Boolean   @default(false)
+  blocked       Boolean   @default(false)
+  unread        Boolean   @default(true)
+  handover      Boolean   @default(false)
+  assigneeId    String?
+  channel       String    @default("store")
+  isTest        Boolean   @default(false)
+  summary       String? // rolling history summary cache
+  summaryMessageCount Int @default(0) // messages covered when summary was last refreshed
+  meteredAt     DateTime? // last usage-meter tick (session metering, spec 15)
+  rating        Int?
+  pageContext   Json?
+  startedAt     DateTime  @default(now())
+  endedAt       DateTime?
+  lastMessageAt DateTime  @default(now())
+
+  @@index([shopId, status, lastMessageAt])
+  @@index([shopId, sessionId])
+  @@map("conversations")
+}
+
+model Message {
+  id             String    @id @default(cuid())
+  conversationId String
+  shopId         String
+  role           String // in | out | sys
+  author         String    @default("ai") // ai | agent | shopper | system
+  content        String
+  productCards   Json?
+  sourceLayer    String? // banned | curated | router | buy | question | chat | handover
+  intent         Json?
+  seenAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([conversationId, createdAt])
+  @@index([shopId])
+  @@map("messages")
+}
+
+model Contact {
+  id                String   @id @default(cuid())
+  shopId            String
+  sessionId         String?
+  name              String?
+  email             String?
+  phone             String?
+  type              String   @default("anonymous") // customer | lead | anonymous
+  channel           String   @default("store")
+  location          String?
+  marketingOptIn    Boolean  @default(false)
+  shopifyCustomerId String?
+  createdAt         DateTime @default(now())
+
+  @@index([shopId, email])
+  @@index([shopId, type])
+  @@map("contacts")
+}
+
+// ── Analytics & campaigns (specs 12/13/14) ──────────────────────────────────
+
+model AnalyticsEvent {
+  id         String   @id @default(cuid())
+  shopId     String
+  type       String
+  payload    Json?
+  occurredAt DateTime @default(now())
+
+  @@index([shopId, type, occurredAt])
+  @@map("analytics_events")
+}
+
+model MetricsDaily {
+  id       String   @id @default(cuid())
+  shopId   String
+  date     DateTime @db.Date
+  counters Json
+
+  @@unique([shopId, date])
+  @@map("metrics_daily")
+}
+
+model Campaign {
+  id           String   @id @default(cuid())
+  shopId       String
+  name         String
+  templateType String
+  status       String   @default("inactive")
+  priority     Int      @default(0)
+  settings     Json?
+  views        Int      @default(0)
+  clicks       Int      @default(0)
+  atcs         Int      @default(0)
+  revenue      Decimal  @default(0)
+  orders       Int      @default(0)
+  updatedAt    DateTime @updatedAt
+
+  @@index([shopId, priority])
+  @@map("campaigns")
+}
+
+// ── Billing (spec 15) ───────────────────────────────────────────────────────
+
+model PlanUsage {
+  id                String   @id @default(cuid())
+  shopId            String
+  periodStart       DateTime @db.Date
+  conversationCount Int      @default(0)
+  overageCount      Int      @default(0)
+
+  @@unique([shopId, periodStart])
+  @@map("plan_usage")
+}
+
+// ── Compliance (spec 17) ────────────────────────────────────────────────────
+
+model DataRequest {
+  id            String    @id @default(cuid())
+  shopId        String
+  customerEmail String
+  status        String    @default("pending") // pending | ready | completed
+  exportPath    String?
+  requestedAt   DateTime  @default(now())
+  dueAt         DateTime
+  completedAt   DateTime?
+
+  @@index([shopId])
+  @@map("data_requests")
+}
+
+model RedactLog {
+  id          String    @id @default(cuid())
+  shopId      String
+  type        String // customer | shop
+  receivedAt  DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([shopId])
+  @@map("redact_logs")
 }

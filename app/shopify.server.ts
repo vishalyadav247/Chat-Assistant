@@ -6,6 +6,9 @@ import {
 } from "@shopify/shopify-app-react-router/server";
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import prisma from "./db.server";
+import { env } from "./lib/env.server";
+
+env(); // validate environment at boot — fail fast on misconfiguration
 
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,
@@ -16,6 +19,15 @@ const shopify = shopifyApp({
   authPathPrefix: "/auth",
   sessionStorage: new PrismaSessionStorage(prisma),
   distribution: AppDistribution.AppStore,
+  hooks: {
+    afterAuth: async ({ session }) => {
+      // On install (and token refresh): ensure the shop row + default config,
+      // then kick the initial catalog sync. Lazy imports avoid a require cycle
+      // (these modules import authenticate/unauthenticated from this file).
+      const { onShopAuthenticated } = await import("./lib/install.server");
+      await onShopAuthenticated(session.shop);
+    },
+  },
   future: {
     expiringOfflineAccessTokens: true,
   },

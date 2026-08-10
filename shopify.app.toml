@@ -1,52 +1,72 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "d8b180fa8bf4edbda15692d2652516d7"
-application_url = "https://example.com"
-embedded = true
 name = "chat-convert"
+application_url = "https://stop-connecting-magical-gospel.trycloudflare.com"
+embedded = true
 
-[access_scopes]
-# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "write_products,write_metaobjects,write_metaobject_definitions"
-
-[product.metafields.app.demo_info]
-type = "single_line_text_field"
-name = "Demo Source Info"
-description = "Tracks products created by the Shopify app template for development"
-
-  [product.metafields.app.demo_info.access]
-  admin = "merchant_read_write"
-
-[metaobjects.app.example]
-name = "Example"
-description = "An example metaobject definition created by this template"
-
-  [metaobjects.app.example.access]
-  admin = "merchant_read_write"
-
-[metaobjects.app.example.fields.title]
-name = "Title"
-type = "single_line_text_field"
-required = true
-
-[metaobjects.app.example.fields.description]
-name = "Description"
-type = "multi_line_text_field"
+[build]
+automatically_update_urls_on_dev = true
 
 [webhooks]
-api_version = "2026-10"
+api_version = "2026-07"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/discounts"
+  topics = [ "discounts/create", "discounts/update", "discounts/delete" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/collections"
+  topics = [
+  "collections/create",
+  "collections/delete",
+  "collections/update"
+]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/products"
+  topics = [ "products/delete", "products/create", "products/update" ]
 
   [[webhooks.subscriptions]]
   uri = "/webhooks/app/uninstalled"
   topics = [ "app/uninstalled" ]
 
   [[webhooks.subscriptions]]
+  uri = "/webhooks/compliance"
+  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+
+  [[webhooks.subscriptions]]
   uri = "/webhooks/app/scopes_update"
   topics = [ "app/scopes_update" ]
 
-[auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app-subscriptions"
+  topics = [ "app_subscriptions/update" ]
 
-[build]
-include_config_on_deploy = true
-automatically_update_urls_on_dev = true
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_discounts,read_legal_policies,read_online_store_pages,read_products,write_app_proxy,write_files"
+
+[auth]
+redirect_urls = [
+  "https://stop-connecting-magical-gospel.trycloudflare.com/auth/callback",
+  "https://stop-connecting-magical-gospel.trycloudflare.com/auth/login",
+  "https://stop-connecting-magical-gospel.trycloudflare.com/api/auth"
+]
+
+[app_proxy]
+# 🚨 A STORE PINS THESE AT INSTALL TIME AND NEVER REFRESHES THEM.
+# Changing url / subpath / prefix requires `npm run deploy` AND a genuine
+# uninstall+reinstall on every store. Deploying alone, restarting `shopify app
+# dev`, or re-authorizing scopes will NOT update the store's record — the
+# storefront just 500s ("There was an error in the third-party application")
+# and the widget silently renders nothing. See README → Tunnels.
+#
+# url must be ABSOLUTE and end in /proxy (routes live at app/routes/proxy.*.tsx).
+# The relative form ("/proxy") is documented but did not resolve in practice.
+# The host must match the LIVE tunnel — run dev via:
+#   npm run dev -- --tunnel-url https://<host>.trycloudflare.com:3000
+# subpath must stay in sync with data-proxy-base in chat-widget.liquid.
+url = "https://stop-connecting-magical-gospel.trycloudflare.com/proxy"
+subpath = "ccwidget"
+prefix = "apps"

@@ -1,0 +1,27 @@
+{% comment %}
+  ChatConvert app embed (spec 05). Launcher shell loads immediately (deferred);
+  panel modules (renderer/transport) are lazy-injected on first launcher click
+  via the data-*-src attributes. No external CDNs; assets only.
+  The liquid layer reads ONLY customer.first_name + page type from the theme.
+  Manual SSE probe: append ?ccprobe=1 to any storefront URL.
+{% endcomment %}
+
+<div
+  id="chatconvert-root"
+  data-proxy-base="/apps/ccwidget"
+  {% if customer %}data-customer-name="{{ customer.first_name | escape }}"{% endif %}
+  data-page-type="{{ request.page_type | escape }}"
+  data-css-src="{{ 'chat-widget.css' | asset_url }}"
+  data-renderer-src="{{ 'widget-renderer.js' | asset_url }}"
+  data-transport-src="{{ 'widget-transport.js' | asset_url }}"
+></div>
+
+<script src="{{ 'chat-widget.js' | asset_url }}" defer></script>
+
+{% schema %}
+{
+  "name": "ChatConvert Chat Widget",
+  "target": "body",
+  "settings": []
+}
+{% endschema %}

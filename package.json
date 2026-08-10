@@ -17,7 +17,15 @@
     "prisma": "prisma",
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
-    "typecheck": "react-router typegen && tsc --noEmit"
+    "typecheck": "react-router typegen && tsc --noEmit",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "smoke": "tsx scripts/smoke-vector.ts",
+    "widget:size": "tsx scripts/check-widget-size.ts",
+    "migrate:new": "prisma migrate dev --create-only && tsx scripts/scrub-migration.ts && prisma migrate deploy && prisma generate"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   },
   "type": "module",
   "engines": {
@@ -33,11 +41,14 @@
     "@shopify/shopify-app-react-router": "^1.2.1",
     "@shopify/shopify-app-session-storage-prisma": "^9.0.0",
     "isbot": "^5.1.31",
+    "openai": "^7.4.0",
+    "pg-boss": "^12.27.0",
     "prisma": "^6.16.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router": "^7.12.0",
-    "vite-tsconfig-paths": "^5.1.4"
+    "vite-tsconfig-paths": "^5.1.4",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@shopify/api-codegen-preset": "^1.2.0",
@@ -56,6 +67,7 @@
     "eslint-plugin-react-hooks": "^4.6.2",
     "graphql-config": "^5.1.1",
     "prettier": "^3.6.2",
+    "tsx": "^4.23.8",
     "typescript": "^5.9.3",
     "vite": "^6.3.6"
   },

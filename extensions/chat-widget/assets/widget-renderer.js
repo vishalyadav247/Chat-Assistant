@@ -1,0 +1,831 @@
+/* ChatConvert widget renderer (spec 05).
+ * FRAMEWORK-FREE, DOM-API-pure view layer shared by the storefront shell
+ * (chat-widget.js) and the admin live preview (spec 06). Rules:
+ *   - all data in via arguments (config/state), all events out via callbacks
+ *   - no fetch, no Shopify globals, no reads outside the given elements
+ * Attached to window.ChatConvertRenderer (theme assets are not ESM-bundled).
+ */
+(function () {
+  "use strict";
+
+  // ── SVG icons (from the chatbox.html design) ─────────────────────────────
+  var ICONS = {
+    chat: '<svg width="24" height="24" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 5h12v8H8l-3 3V5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>',
+    help: '<svg width="24" height="24" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="10" cy="10" r="7.5" stroke="currentColor" stroke-width="1.4"/><path d="M8 8a2 2 0 1 1 2.6 1.9c-.4.2-.6.5-.6 1V11.5M10 14h.01" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+    back: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M12 4l-6 6 6 6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    close: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
+    send: '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 10l14-6-6 14-2-6-6-2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>',
+    chev: '<svg width="17" height="17" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M8 5l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    search: '<svg width="15" height="15" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="9" cy="9" r="5.5" stroke="currentColor" stroke-width="1.5"/><path d="m13.5 13.5 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+    whatsapp: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 16l1-3a6 6 0 1 1 2.4 2.4L4 16Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+    phone: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M5 4h3l1.5 3.5-2 1.2a8 8 0 0 0 3.8 3.8l1.2-2L16 15v3a1 1 0 0 1-1 1A11 11 0 0 1 4 5a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>',
+    email: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="3" y="5" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.4"/><path d="m4 6 6 5 6-5" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+  };
+
+  // ── helpers ──────────────────────────────────────────────────────────────
+  function el(tag, className, attrs) {
+    var node = document.createElement(tag);
+    if (className) node.className = className;
+    if (attrs) {
+      Object.keys(attrs).forEach(function (k) {
+        node.setAttribute(k, attrs[k]);
+      });
+    }
+    return node;
+  }
+
+  /** Set plain text preserving newlines (never innerHTML for untrusted text). */
+  function setText(node, text) {
+    node.textContent = "";
+    String(text == null ? "" : text)
+      .split("\n")
+      .forEach(function (line, i) {
+        if (i > 0) node.appendChild(document.createElement("br"));
+        node.appendChild(document.createTextNode(line));
+      });
+  }
+
+  function svg(node, markup) {
+    node.innerHTML = markup; // static, app-authored SVG only
+    return node;
+  }
+
+  function themeVars(appearance) {
+    if (appearance && appearance.colorMode === "solid") {
+      return { c1: appearance.solid, c2: appearance.solid };
+    }
+    var g = (appearance && appearance.gradient) || {};
+    return { c1: g.start || "#6d3bf5", c2: g.end || "#3b82f6" };
+  }
+
+  function applyTheme(node, appearance) {
+    var v = themeVars(appearance);
+    node.style.setProperty("--cw1", v.c1);
+    node.style.setProperty("--cw2", v.c2);
+  }
+
+  function formatPrice(price, currency) {
+    try {
+      return new Intl.NumberFormat(undefined, {
+        style: "currency",
+        currency: currency || "USD",
+      }).format(price);
+    } catch (e) {
+      return (currency || "USD") + " " + Number(price).toFixed(2);
+    }
+  }
+
+  function welcomeText(template, customerName) {
+    return String(template || "").replace(/\{\{\s*customer_name\s*\}\}/g, customerName || "there");
+  }
+
+  function digits(value) {
+    return String(value || "").replace(/[^\d+]/g, "");
+  }
+
+  function contactHref(method) {
+    var value = (method.countryCode || "") + (method.value || "");
+    if (method.type === "whatsapp") return "https://wa.me/" + digits(value).replace(/^\+/, "");
+    if (method.type === "phone") return "tel:" + digits(value);
+    return "mailto:" + (method.value || "");
+  }
+
+  // ── launcher ─────────────────────────────────────────────────────────────
+  /** Launcher button (style icon | label | icon_label, icon chat/help/custom). */
+  function launcher(widget, callbacks) {
+    var lc = ((widget.appearance || {}).launcher || {});
+    var style = lc.style || "icon";
+    var btn = el("button", "cw-launcher", {
+      type: "button",
+      "aria-label": lc.label || "Open chat",
+      "aria-haspopup": "dialog",
+    });
+    if (style !== "icon") btn.classList.add("cw-launcher--pill");
+
+    var iconMarkup = null;
+    if (style === "icon" || style === "icon_label") {
+      if (lc.icon === "custom" && lc.customIconUrl) {
+        var img = el("img", null, { src: lc.customIconUrl, alt: "" });
+        btn.appendChild(img);
+      } else {
+        iconMarkup = ICONS[lc.icon === "help" ? "help" : "chat"];
+        btn.appendChild(svg(el("span", null, { "aria-hidden": "true" }), iconMarkup));
+      }
+    }
+    if (style === "label" || style === "icon_label") {
+      var label = el("span");
+      label.textContent = lc.label || "Chat with us";
+      btn.appendChild(label);
+    }
+    if (callbacks && callbacks.onToggle) btn.addEventListener("click", callbacks.onToggle);
+    return btn;
+  }
+
+  // ── header ───────────────────────────────────────────────────────────────
+  /** Panel header. state: {showBack}. cb: {onBack, onClose}. */
+  function header(config, state, cb) {
+    var head = el("div", "cw-head");
+    var widget = config.widget;
+
+    var back = el("button", "cw-back", { type: "button", "aria-label": "Back" });
+    svg(back, ICONS.back);
+    back.style.display = state.showBack ? "" : "none";
+    if (cb && cb.onBack) back.addEventListener("click", cb.onBack);
+    head.appendChild(back);
+
+    var brand = el("div", "cw-brand");
+    var logo = el("span", "cw-logo");
+    if (widget.header.logoUrl) {
+      logo.appendChild(el("img", null, { src: widget.header.logoUrl, alt: "" }));
+    } else {
+      svg(logo, ICONS.chat);
+    }
+    brand.appendChild(logo);
+    var names = el("div");
+    var title = el("div", "cw-title");
+    title.textContent = widget.header.name || "ChatConvert";
+    var sub = el("div", "cw-sub");
+    sub.textContent = widget.header.description || "";
+    names.appendChild(title);
+    names.appendChild(sub);
+    brand.appendChild(names);
+    head.appendChild(brand);
+
+    var close = el("button", "cw-x", { type: "button", "aria-label": "Close chat" });
+    svg(close, ICONS.close);
+    if (cb && cb.onClose) close.addEventListener("click", cb.onClose);
+    head.appendChild(close);
+
+    return { el: head, backEl: back, titleEl: title };
+  }
+
+  // ── home screen ──────────────────────────────────────────────────────────
+  /**
+   * cb: {onOpenChat, onOpenTracking, onOpenFaq(faq), onContact(method)}.
+   * Each block branches on its settings toggle; all off → empty state.
+   */
+  function homeScreen(config, state, cb) {
+    var widget = config.widget;
+    var home = el("div", "cw-home");
+    home.style.display = "flex";
+    home.style.flexDirection = "column";
+    home.style.gap = "12px";
+    var hasBlock = false;
+
+    var showContactBlock =
+      widget.liveChat || (widget.contactMethods.enabled && widget.contactMethods.items.length > 0);
+    if (showContactBlock) {
+      hasBlock = true;
+      var blk = el("div", "cw-blk");
+      var t = el("div", "cw-blk-t");
+      t.textContent = "Contact us";
+      blk.appendChild(t);
+
+      if (widget.chatStatus && config.availability) {
+        var status = el("div", "cw-status cw-status--" + config.availability.status);
+        status.appendChild(el("span", "cw-d"));
+        status.appendChild(document.createTextNode(config.availability.message || ""));
+        blk.appendChild(status);
+      }
+
+      var actions = el("div", "cw-actions");
+      if (widget.liveChat) {
+        var chatNow = el("button", "cw-chatnow", { type: "button" });
+        svg(chatNow, ICONS.send);
+        chatNow.appendChild(document.createTextNode("Chat now"));
+        if (cb && cb.onOpenChat) chatNow.addEventListener("click", cb.onOpenChat);
+        actions.appendChild(chatNow);
+      }
+      if (widget.contactMethods.enabled) {
+        widget.contactMethods.items
+          .slice()
+          .sort(function (a, b) { return (a.order || 0) - (b.order || 0); })
+          .forEach(function (method) {
+            var chip = el("a", "cw-cm cw-cm--" + method.type, {
+              href: contactHref(method),
+              "aria-label": method.type,
+              target: method.type === "whatsapp" ? "_blank" : "_self",
+              rel: "noopener",
+            });
+            svg(chip, ICONS[method.type] || ICONS.email);
+            if (cb && cb.onContact) {
+              chip.addEventListener("click", function () { cb.onContact(method); });
+            }
+            actions.appendChild(chip);
+          });
+      }
+      blk.appendChild(actions);
+      home.appendChild(blk);
+    }
+
+    if (widget.orderTracking) {
+      hasBlock = true;
+      var row = el("button", "cw-blk cw-row", { type: "button" });
+      var left = el("div");
+      var rt = el("div", "cw-blk-t");
+      rt.textContent = "Order tracking";
+      var rs = el("div", "cw-row-sub");
+      rs.textContent = "Track your orders";
+      left.appendChild(rt);
+      left.appendChild(rs);
+      row.appendChild(left);
+      row.appendChild(svg(el("span"), ICONS.chev));
+      if (cb && cb.onOpenTracking) row.addEventListener("click", cb.onOpenTracking);
+      home.appendChild(row);
+    }
+
+    if (widget.faqs) {
+      hasBlock = true;
+      var faqBlk = el("div", "cw-blk");
+      var search = el("div", "cw-search");
+      var input = el("input", null, { type: "search", placeholder: "Search for help", "aria-label": "Search for help" });
+      search.appendChild(input);
+      search.appendChild(svg(el("span"), ICONS.search));
+      faqBlk.appendChild(search);
+
+      var list = el("div", "cw-faq-list");
+      var renderList = function (faqs) {
+        list.textContent = "";
+        faqs.forEach(function (faq) {
+          var item = el("button", "cw-faq", { type: "button" });
+          var q = el("span");
+          q.textContent = faq.question;
+          item.appendChild(q);
+          item.appendChild(svg(el("span"), ICONS.chev));
+          if (cb && cb.onOpenFaq) {
+            item.addEventListener("click", function () { cb.onOpenFaq(faq); });
+          }
+          list.appendChild(item);
+        });
+        if (faqs.length === 0) {
+          var none = el("div", "cw-row-sub");
+          none.textContent = "No matching questions.";
+          list.appendChild(none);
+        }
+      };
+      var featured = (config.featuredFaqs || []).slice();
+      if (featured.length > 0) {
+        renderList(featured);
+        input.addEventListener("input", function () {
+          var q = input.value.trim().toLowerCase();
+          renderList(
+            q
+              ? featured.filter(function (f) { return f.question.toLowerCase().indexOf(q) !== -1; })
+              : featured,
+          );
+        });
+      } else {
+        var noneYet = el("div", "cw-row-sub");
+        noneYet.textContent = "No featured questions yet.";
+        list.appendChild(noneYet);
+      }
+      faqBlk.appendChild(list);
+      home.appendChild(faqBlk);
+    }
+
+    if (!hasBlock) {
+      var empty = el("div", "cw-empty");
+      empty.textContent = "Enable a feature to see it here.";
+      home.appendChild(empty);
+    }
+    return home;
+  }
+
+  /** FAQ answer view (merchant-authored HTML from admin — trusted content). */
+  function faqAnswer(faq) {
+    var blk = el("div", "cw-blk");
+    var t = el("div", "cw-blk-t");
+    t.textContent = faq.question;
+    blk.appendChild(t);
+    if (faq.category) {
+      var c = el("div", "cw-faq-cat");
+      c.textContent = faq.category;
+      blk.appendChild(c);
+    }
+    var body = el("div", "cw-faq-answer");
+    body.innerHTML = faq.answerHtml || "";
+    blk.appendChild(body);
+    return blk;
+  }
+
+  // ── chat screen pieces ───────────────────────────────────────────────────
+  /**
+   * kind: "user" (shopper), "bot" (ai/agent), "sys". content is plain text.
+   * label (optional): small author caption above the bubble (e.g. "Team").
+   */
+  function messageBubble(kind, content, label) {
+    var row = el("div", "cw-msg cw-msg--" + (kind === "user" ? "in" : kind === "sys" ? "sys" : "out"));
+    if (kind === "bot") {
+      row.appendChild(svg(el("span", "cw-av"), ICONS.chat));
+    }
+    var bubble = el("div", "cw-bubble" + (kind === "user" ? " cw-bubble--user" : kind === "sys" ? " cw-bubble--sys" : ""));
+    setText(bubble, content);
+    if (label) {
+      var wrap = el("div", "cw-msg-wrap");
+      var meta = el("div", "cw-msg-meta");
+      meta.textContent = label;
+      wrap.appendChild(meta);
+      wrap.appendChild(bubble);
+      row.appendChild(wrap);
+    } else {
+      row.appendChild(bubble);
+    }
+    return { el: row, bubbleEl: bubble };
+  }
+
+  /** Canned bubble whose body is merchant-authored HTML (starter answers). */
+  function htmlBubble(html) {
+    var row = el("div", "cw-msg cw-msg--out");
+    row.appendChild(svg(el("span", "cw-av"), ICONS.chat));
+    var bubble = el("div", "cw-bubble");
+    bubble.innerHTML = html || "";
+    row.appendChild(bubble);
+    return { el: row, bubbleEl: bubble };
+  }
+
+  function typingIndicator() {
+    var row = el("div", "cw-msg cw-msg--out", { "aria-label": "Assistant is typing" });
+    row.appendChild(svg(el("span", "cw-av"), ICONS.chat));
+    var dots = el("div", "cw-bubble cw-typing");
+    dots.appendChild(el("span"));
+    dots.appendChild(el("span"));
+    dots.appendChild(el("span"));
+    row.appendChild(dots);
+    return row;
+  }
+
+  /** Starter chips. cb.onStarter(starter). */
+  function starterChips(starters, cb) {
+    var wrap = el("div", "cw-starters");
+    starters
+      .slice()
+      .sort(function (a, b) { return (a.order || 0) - (b.order || 0); })
+      .forEach(function (starter) {
+        if (!starter.question) return;
+        var chip = el("button", "cw-chip", { type: "button" });
+        chip.textContent = ((starter.emoji || "") + " " + starter.question).trim();
+        if (cb && cb.onStarter) {
+          chip.addEventListener("click", function () { cb.onStarter(starter); });
+        }
+        wrap.appendChild(chip);
+      });
+    return wrap;
+  }
+
+  /** Product cards row. cb: {onView(card), onAdd(card)}. */
+  function productCards(cards, currency, cb) {
+    var wrap = el("div", "cw-cards", { role: "list" });
+    cards.forEach(function (card) {
+      var item = el("div", "cw-card", { role: "listitem" });
+      if (card.imageUrl) {
+        item.appendChild(el("img", "cw-card-img", { src: card.imageUrl, alt: card.title, loading: "lazy" }));
+      } else {
+        item.appendChild(el("div", "cw-card-img"));
+      }
+      var body = el("div", "cw-card-body");
+      var t = el("div", "cw-card-t");
+      t.textContent = card.title;
+      var p = el("div", "cw-card-p");
+      p.textContent = formatPrice(card.price, currency);
+      body.appendChild(t);
+      body.appendChild(p);
+
+      var actions = el("div", "cw-card-actions");
+      var view = el("a", "cw-btn cw-btn--ghost", { href: "/products/" + card.handle });
+      view.textContent = "View";
+      if (cb && cb.onView) {
+        view.addEventListener("click", function () { cb.onView(card); });
+      }
+      var add = el("button", "cw-btn cw-btn--primary", { type: "button" });
+      add.textContent = "Add to cart";
+      if (cb && cb.onAdd) {
+        add.addEventListener("click", function () { cb.onAdd(card); });
+      }
+      actions.appendChild(view);
+      actions.appendChild(add);
+      body.appendChild(actions);
+      item.appendChild(body);
+      wrap.appendChild(item);
+    });
+    return wrap;
+  }
+
+  /** Message input bar. cb.onSend(text). */
+  function inputBar(cb) {
+    var bar = el("div", "cw-input");
+    var input = el("input", null, {
+      type: "text",
+      placeholder: "Type your message…",
+      "aria-label": "Type your message",
+      maxlength: "2000",
+    });
+    var send = el("button", "cw-send", { type: "button", "aria-label": "Send message" });
+    svg(send, ICONS.send);
+    function submit() {
+      var text = input.value.trim();
+      if (!text) return;
+      input.value = "";
+      if (cb && cb.onSend) cb.onSend(text);
+    }
+    send.addEventListener("click", submit);
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        submit();
+      }
+    });
+    bar.appendChild(input);
+    bar.appendChild(send);
+    return { el: bar, inputEl: input, sendEl: send };
+  }
+
+  // ── order tracking screen ────────────────────────────────────────────────
+  /** cb.onTrack({tab, value, contactMethod, contact}). */
+  function trackingScreen(config, state, cb) {
+    var screen = el("div", "cw-tracking");
+    screen.style.display = "flex";
+    screen.style.flexDirection = "column";
+    screen.style.gap = "14px";
+
+    var tabs = el("div", "cw-tabs", { role: "tablist" });
+    var tabOrder = el("button", null, { type: "button", role: "tab", "aria-selected": "true" });
+    tabOrder.textContent = "Order number";
+    var tabTracking = el("button", null, { type: "button", role: "tab", "aria-selected": "false" });
+    tabTracking.textContent = "Tracking number";
+    tabs.appendChild(tabOrder);
+    tabs.appendChild(tabTracking);
+    screen.appendChild(tabs);
+
+    var lbl = el("div", "cw-lbl");
+    lbl.textContent = "Order number";
+    var numInput = el("input", "cw-inp", { type: "text", placeholder: "e.g. 1001", "aria-label": "Order number" });
+    var numWrap = el("div");
+    numWrap.appendChild(lbl);
+    numWrap.appendChild(numInput);
+    screen.appendChild(numWrap);
+
+    var radios = el("div", "cw-radios", { role: "radiogroup", "aria-label": "Contact method" });
+    var current = { tab: "order", method: "email" };
+    function radio(value, label, checked) {
+      var wrap = el("label", "cw-radio");
+      var input = el("input", null, { type: "radio", name: "cw-ot-method", value: value });
+      input.checked = checked;
+      input.addEventListener("change", function () {
+        current.method = value;
+        contactInput.placeholder = value === "phone" ? "+1 555 000 0000" : "example@gmail.com";
+        contactInput.setAttribute("aria-label", value === "phone" ? "Phone number" : "Email address");
+      });
+      wrap.appendChild(input);
+      wrap.appendChild(el("span", "cw-dot"));
+      wrap.appendChild(document.createTextNode(label));
+      return wrap;
+    }
+    var contactInput = el("input", "cw-inp", {
+      type: "text",
+      placeholder: "example@gmail.com",
+      "aria-label": "Email address",
+    });
+    radios.appendChild(radio("email", "Email address", true));
+    radios.appendChild(radio("phone", "Phone number", false));
+    screen.appendChild(radios);
+    screen.appendChild(contactInput);
+
+    function selectTab(tab) {
+      current.tab = tab;
+      var isTracking = tab === "tracking";
+      tabOrder.setAttribute("aria-selected", String(!isTracking));
+      tabTracking.setAttribute("aria-selected", String(isTracking));
+      lbl.textContent = isTracking ? "Tracking number" : "Order number";
+      numInput.placeholder = isTracking ? "e.g. AA12345" : "e.g. 1001";
+      numInput.setAttribute("aria-label", lbl.textContent);
+      radios.style.display = isTracking ? "none" : "flex";
+      contactInput.style.display = isTracking ? "none" : "";
+    }
+    tabOrder.addEventListener("click", function () { selectTab("order"); });
+    tabTracking.addEventListener("click", function () { selectTab("tracking"); });
+
+    var track = el("button", "cw-track", { type: "button" });
+    track.textContent = "Track";
+    track.addEventListener("click", function () {
+      if (cb && cb.onTrack) {
+        cb.onTrack({
+          tab: current.tab,
+          value: numInput.value.trim(),
+          contactMethod: current.method,
+          contact: contactInput.value.trim(),
+        });
+      }
+    });
+    screen.appendChild(track);
+    return screen;
+  }
+
+  // ── pre-chat form ────────────────────────────────────────────────────────
+  /**
+   * modes guest/anonymous/both. state: {skippable} (both mode → skip allowed).
+   * cb: {onSubmit({email,name,phone,optIn}), onSkip}.
+   */
+  function prechatForm(config, state, cb) {
+    var prechat = config.widget.prechat;
+    var form = el("form", "cw-form", { novalidate: "novalidate" });
+
+    if (prechat.description) {
+      var desc = el("div", "cw-form-desc");
+      desc.textContent = prechat.description;
+      form.appendChild(desc);
+    }
+
+    var inputs = {};
+    var fieldDefs = { email: "Email address", name: "Name", phone: "Phone number" };
+    var fields = prechat.fields && prechat.fields.length ? prechat.fields : [{ key: "email", required: true }];
+    fields.forEach(function (f) {
+      var wrap = el("div", "cw-field");
+      var label = el("label");
+      label.textContent = fieldDefs[f.key] + (f.required ? "" : " (optional)");
+      var input = el("input", "cw-inp", {
+        type: f.key === "email" ? "email" : f.key === "phone" ? "tel" : "text",
+        name: f.key,
+        placeholder: fieldDefs[f.key],
+      });
+      if (f.required) input.setAttribute("required", "required");
+      wrap.appendChild(label);
+      wrap.appendChild(input);
+      form.appendChild(wrap);
+      inputs[f.key] = { input: input, required: !!f.required };
+    });
+
+    var optInInput = null;
+    if (prechat.marketingOptIn) {
+      var check = el("label", "cw-check");
+      optInInput = el("input", null, { type: "checkbox" });
+      check.appendChild(optInInput);
+      var ct = el("span");
+      ct.textContent = "Keep me updated with news and offers";
+      check.appendChild(ct);
+      form.appendChild(check);
+    }
+
+    if (prechat.disclaimer && prechat.disclaimer.enabled) {
+      var disc = el("div", "cw-disclaimer");
+      disc.innerHTML = prechat.disclaimer.html || ""; // merchant-authored
+      form.appendChild(disc);
+    }
+
+    var err = el("div", "cw-err");
+    err.style.display = "none";
+    form.appendChild(err);
+
+    var submit = el("button", "cw-chatnow", { type: "submit" });
+    submit.style.width = "100%";
+    submit.textContent = "Start chat";
+    form.appendChild(submit);
+
+    if (state && state.skippable) {
+      var skip = el("button", "cw-skip", { type: "button" });
+      skip.textContent = "Continue without sharing";
+      if (cb && cb.onSkip) skip.addEventListener("click", cb.onSkip);
+      form.appendChild(skip);
+    }
+
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var data = { optIn: !!(optInInput && optInInput.checked) };
+      var problem = null;
+      Object.keys(inputs).forEach(function (key) {
+        var value = inputs[key].input.value.trim();
+        if (inputs[key].required && !value) problem = fieldDefs[key] + " is required.";
+        data[key] = value || undefined;
+      });
+      if (!problem && inputs.email) {
+        var email = data.email || "";
+        if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          problem = "Please enter a valid email address.";
+        }
+      }
+      if (problem) {
+        err.textContent = problem;
+        err.style.display = "";
+        return;
+      }
+      err.style.display = "none";
+      if (cb && cb.onSubmit) cb.onSubmit(data);
+    });
+
+    return form;
+  }
+
+  // ── handover leave-a-message form (spec 10) ──────────────────────────────
+  /**
+   * formCfg: {fields:[{key,required}], replyTime, formMessage, postSubmitMessage}
+   * (the HandoverFrameData.form payload). cb.onSubmit(values, {fail(text)}).
+   * The formMessage itself arrives as a normal message frame — this renders
+   * only the fields + expected-reply-time note.
+   */
+  function handoverForm(formCfg, cb) {
+    var LABELS = {
+      email: "Email address",
+      issue: "How can we help?",
+      orderNumber: "Order number",
+      phone: "Phone number",
+    };
+    var TYPES = { email: "email", phone: "tel" };
+    var REPLY = {
+      "24h": "within 24 hours",
+      "12h": "within 12 hours",
+      "48h": "within 48 hours",
+      same_day: "the same day",
+    };
+    var form = el("form", "cw-form", { novalidate: "novalidate" });
+
+    if (formCfg.replyTime && REPLY[formCfg.replyTime]) {
+      var note = el("div", "cw-form-desc");
+      note.textContent = "We usually reply " + REPLY[formCfg.replyTime] + ".";
+      form.appendChild(note);
+    }
+
+    var inputs = {};
+    (formCfg.fields || []).forEach(function (f) {
+      var wrap = el("div", "cw-field");
+      var inputId = "cw-hf-" + f.key + "-" + Math.random().toString(36).slice(2, 7);
+      var label = el("label");
+      label.htmlFor = inputId;
+      label.textContent = (LABELS[f.key] || f.key) + (f.required ? "" : " (optional)");
+      var input;
+      if (f.key === "issue") {
+        input = el("textarea", "cw-inp", {
+          name: f.key,
+          id: inputId,
+          rows: "3",
+          maxlength: "2000",
+          placeholder: "Tell us what you need help with",
+        });
+      } else {
+        input = el("input", "cw-inp", {
+          type: TYPES[f.key] || "text",
+          name: f.key,
+          id: inputId,
+          placeholder: LABELS[f.key] || f.key,
+        });
+      }
+      wrap.appendChild(label);
+      wrap.appendChild(input);
+      form.appendChild(wrap);
+      inputs[f.key] = { input: input, required: !!f.required };
+    });
+
+    var err = el("div", "cw-err", { role: "alert", "aria-live": "polite" });
+    err.style.display = "none";
+    form.appendChild(err);
+
+    var submit = el("button", "cw-chatnow", { type: "submit" });
+    submit.style.width = "100%";
+    submit.textContent = "Send message";
+    form.appendChild(submit);
+
+    function fail(text) {
+      err.textContent = text;
+      err.style.display = "";
+      submit.disabled = false;
+    }
+
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var values = {};
+      var problem = null;
+      Object.keys(inputs).forEach(function (key) {
+        var value = inputs[key].input.value.trim();
+        if (inputs[key].required && !value) problem = (LABELS[key] || key) + " is required.";
+        if (value) values[key] = value;
+      });
+      if (!problem && inputs.email) {
+        var email = values.email || "";
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          problem = "Please enter a valid email address.";
+        }
+      }
+      if (problem) return fail(problem);
+      err.style.display = "none";
+      submit.disabled = true;
+      if (cb && cb.onSubmit) cb.onSubmit(values, { fail: fail });
+    });
+
+    return form;
+  }
+
+  // ── satisfaction survey ──────────────────────────────────────────────────
+  /** survey: settings.survey {format, intro, thanks}. cb.onRate(rating 1-5). */
+  function surveyPrompt(survey, cb) {
+    var blk = el("div", "cw-blk cw-survey");
+    var intro = el("div", "cw-blk-t");
+    intro.textContent = survey.intro || "How was your experience?";
+    blk.appendChild(intro);
+
+    var scale = survey.format === "emoji" ? ["😡", "😕", "😐", "🙂", "🤩"] : ["★", "★", "★", "★", "★"];
+    var row = el("div", "cw-stars", { role: "radiogroup", "aria-label": "Rate your experience" });
+    scale.forEach(function (glyph, i) {
+      var b = el("button", "cw-star", {
+        type: "button",
+        role: "radio",
+        "aria-checked": "false",
+        "aria-label": i + 1 + " out of 5",
+      });
+      b.textContent = glyph;
+      b.addEventListener("click", function () {
+        Array.prototype.forEach.call(row.children, function (child, j) {
+          child.setAttribute("aria-checked", String(j <= i));
+        });
+        if (cb && cb.onRate) cb.onRate(i + 1);
+        intro.textContent = survey.thanks || "Thank you for your feedback!";
+        row.style.pointerEvents = "none";
+      });
+      row.appendChild(b);
+    });
+    blk.appendChild(row);
+    return blk;
+  }
+
+  // ── proactive campaign bubble (spec 12) ──────────────────────────────────
+  /** Bubble/floater rendered above the launcher when a campaign fires.
+   *  campaign: lean widget shape {message, ctaLabel, products[], ...}.
+   *  cb: onDismiss(), onCta(api), onAdd(card, api). api.confirm(text) swaps
+   *  the message for a confirmation and drops the CTA. */
+  function campaignBubble(campaign, opts, cb) {
+    cb = cb || {};
+    var wrap = el("div", "cw-proactive", { role: "dialog", "aria-label": "Message from the store" });
+
+    var x = el("button", "cw-pa-x", { type: "button", "aria-label": "Dismiss message" });
+    svg(x, ICONS.close);
+    x.addEventListener("click", function () {
+      if (cb.onDismiss) cb.onDismiss();
+    });
+    wrap.appendChild(x);
+
+    var msg = el("div", "cw-pa-msg");
+    setText(msg, welcomeText(campaign.message, opts && opts.customerName));
+    wrap.appendChild(msg);
+
+    var ctaBtn = null;
+    var api = {
+      confirm: function (text) {
+        setText(msg, text);
+        if (ctaBtn && ctaBtn.parentNode) ctaBtn.parentNode.removeChild(ctaBtn);
+      },
+    };
+
+    if (campaign.products && campaign.products.length > 0) {
+      wrap.appendChild(
+        productCards(campaign.products, opts && opts.currency, {
+          onAdd: function (card) {
+            if (cb.onAdd) cb.onAdd(card, api);
+          },
+        }),
+      );
+    }
+
+    if (campaign.ctaLabel) {
+      ctaBtn = el("button", "cw-pa-cta", { type: "button" });
+      ctaBtn.textContent = campaign.ctaLabel;
+      ctaBtn.addEventListener("click", function () {
+        if (cb.onCta) cb.onCta(api);
+      });
+      wrap.appendChild(ctaBtn);
+    }
+
+    return { el: wrap, confirm: api.confirm };
+  }
+
+  // ── footer ───────────────────────────────────────────────────────────────
+  function footer(showBranding) {
+    var foot = el("div", "cw-foot");
+    foot.textContent = "Powered by ChatConvert";
+    if (!showBranding) foot.style.display = "none";
+    return foot;
+  }
+
+  window.ChatConvertRenderer = {
+    icons: ICONS,
+    el: el,
+    setText: setText,
+    themeVars: themeVars,
+    applyTheme: applyTheme,
+    formatPrice: formatPrice,
+    welcomeText: welcomeText,
+    contactHref: contactHref,
+    launcher: launcher,
+    header: header,
+    homeScreen: homeScreen,
+    faqAnswer: faqAnswer,
+    messageBubble: messageBubble,
+    htmlBubble: htmlBubble,
+    typingIndicator: typingIndicator,
+    starterChips: starterChips,
+    productCards: productCards,
+    inputBar: inputBar,
+    trackingScreen: trackingScreen,
+    prechatForm: prechatForm,
+    handoverForm: handoverForm,
+    surveyPrompt: surveyPrompt,
+    campaignBubble: campaignBubble,
+    footer: footer,
+  };
+})();

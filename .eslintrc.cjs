@@ -74,6 +74,14 @@ module.exports = {
         "plugin:import/recommended",
         "plugin:import/typescript",
       ],
+      rules: {
+        // Underscore-prefixed args are intentionally unused (e.g. ignored
+        // client-supplied values kept for call-signature compatibility).
+        "@typescript-eslint/no-unused-vars": [
+          "error",
+          { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
+        ],
+      },
     },
 
     // Node

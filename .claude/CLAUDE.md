@@ -2,7 +2,19 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-@AGENTS.md
+This app is scaffolded from a Shopify app template (see README for framework details). Use the [Shopify AI Toolkit](https://shopify.dev/docs/apps/build/ai-toolkit) for Shopify API and platform work — do not add such tooling to this repo.
+
+## Spec-driven development (READ FIRST for feature work)
+
+This repo builds **ChatConvert** — a multi-tenant AI product-recommendation + support chat app (public Shopify app). All feature work is spec-driven:
+
+- **`.claude/PROGRESS.md`** — current phase, feature statuses, decisions log. Update it on every status change.
+- **`.claude/specs/`** — one spec per feature; start with `00-overview.md` (architecture, tenancy rules, guidelines, spec index).
+- **`.claude/skills/spec-workflow/`** — the loop: pick from PROGRESS.md → read spec → implement → verify acceptance criteria → update PROGRESS.md. Other project skills: `shopify-app-dev`, `shopify-compliance`, `polaris-admin-ui`, `theme-extension-widget`, `db-tenancy`, `ai-pipeline`.
+- **`.claude/agents/`** — `feature-builder`, `shopify-reviewer`, `tenancy-auditor`, `qa-verifier`, `docs-researcher`.
+- **`.claude/resources/`** — original requirements: `demo/PRODUCTION-BUILD-SPEC.md` (authoritative product spec), `html_design/` (UI prototypes + NOTES.md), demo pipeline + prompts.
+
+Iron rules: every DB query shop-scoped (`shopId`); never `prisma db push`; webhook handlers enqueue-only; LLM keys server-only; prompts/thresholds only from their canonical locations; plan gates enforced server-side.
 
 ## Commands
 
@@ -10,7 +22,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `npm run build` — production build (`react-router build`)
 - `npm run lint` — ESLint
 - `npm run typecheck` — generates React Router route types (`react-router typegen`) then runs `tsc --noEmit`
-- `npm run setup` — `prisma generate && prisma migrate deploy` (run if you see "The table `main.Session` does not exist")
+- `npm run db:up` / `npm run db:down` — start/stop the dev Postgres (Docker, pgvector, port 5433). **Required before `dev`/`setup`.**
+- `npm run setup` — `prisma generate && prisma migrate deploy`
+- `npx prisma db seed` — seed the dev shop from `.claude/resources/demo/data-sources/` (works without OPENAI_API_KEY via pseudo-embeddings)
+- `npm run smoke` — foundation smoke test (pgvector, hybrid/keyword search, curated match, RAG)
 - `npm run deploy` — deploy app config and extensions to Shopify
 - `npm run graphql-codegen` — regenerate GraphQL types into `app/types/` (config in `.graphqlrc.ts`)
 
@@ -18,7 +33,7 @@ There is no test suite configured.
 
 ## Architecture
 
-Embedded Shopify Admin app built on **React Router v7** (framework mode, converted from the Remix template) with **Prisma + SQLite** for session storage and **Polaris web components** (`<s-*>` elements) for UI.
+Embedded Shopify Admin app built on **React Router v7** (framework mode, converted from the Remix template) with **Prisma + Postgres/pgvector** (sessions + all domain data; Docker for dev) and **Polaris web components** (`<s-*>` elements) for UI. Domain logic lives in `app/lib/` (tenancy, llm provider, embeddings, search, pipeline, ingestion, pg-boss jobs, SSE). **Never `prisma db push`** — migrations only (custom vector/GIN SQL lives in migration files).
 
 - `app/shopify.server.ts` — central Shopify app setup. Exports `authenticate`, `unauthenticated`, `login`, `apiVersion`, `sessionStorage`. All Shopify auth and Admin GraphQL access goes through this module. API version: July 2026.
 - `app/routes.ts` — uses `flatRoutes()`; routes are file-convention based under `app/routes/` (dot-delimited nesting, e.g. `app.additional.tsx` nests under `app.tsx`).

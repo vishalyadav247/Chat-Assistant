@@ -1,0 +1,23 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: chatconvert-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: chatconvert
+      POSTGRES_PASSWORD: chatconvert
+      POSTGRES_DB: chatconvert
+    ports:
+      # 5433 on the host to avoid colliding with any local Postgres install
+      - "5433:5432"
+    volumes:
+      # Named volume — never a Windows bind mount for pgdata (permissions/perf)
+      - chatconvert-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chatconvert -d chatconvert"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  chatconvert-pgdata:

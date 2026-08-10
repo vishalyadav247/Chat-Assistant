@@ -18,8 +18,16 @@ export default function App() {
   return (
     <AppProvider embedded apiKey={apiKey}>
       <s-app-nav>
-        <s-link href="/app">Home</s-link>
-        <s-link href="/app/additional">Additional page</s-link>
+        <s-link href="/app">Dashboard</s-link>
+        <s-link href="/app/inbox">Inbox</s-link>
+        <s-link href="/app/contacts">Contacts</s-link>
+        <s-link href="/app/chatbox">Chatbox</s-link>
+        <s-link href="/app/ai-agent">AI Agent</s-link>
+        <s-link href="/app/proactive-chat">Proactive Chat</s-link>
+        <s-link href="/app/curated-answers">Curated Answers</s-link>
+        <s-link href="/app/analytics">Analytics</s-link>
+        <s-link href="/app/plan-usage">Plan &amp; Usage</s-link>
+        <s-link href="/app/settings">Settings</s-link>
       </s-app-nav>
       <Outlet />
     </AppProvider>

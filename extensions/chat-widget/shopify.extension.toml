@@ -1,0 +1,7 @@
+api_version = "2026-07"
+
+[[extensions]]
+name = "ChatConvert Chat Widget"
+handle = "chat-widget"
+uid = "288ab506-3769-fe13-0858-10bbb247f01cb0ff7c2a"
+type = "theme"
