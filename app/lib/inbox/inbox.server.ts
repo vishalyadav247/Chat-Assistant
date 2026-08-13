@@ -458,19 +458,40 @@ export async function submitHandoverForm(
   // → create a fresh lead row instead; matching a lead → attach without
   // mutating identity.
   const existing = await db.contact.findFirst({ where: { shopId, email } });
+  // The session may already own an anonymous contact (created at conversation
+  // start, spec 11): upgrade it to a lead in place rather than adding a row.
+  const anon = await db.contact.findFirst({
+    where: { shopId, sessionId: args.sessionId, type: "anonymous" },
+    orderBy: { createdAt: "desc" },
+  });
   const contact =
     existing && existing.type !== "customer"
       ? existing
-      : await db.contact.create({
-          data: {
-            shopId,
-            sessionId: args.sessionId,
-            email,
-            phone: phone || null,
-            type: "lead",
-            channel: "store",
-          },
-        });
+      : anon
+        ? await db.contact.update({
+            where: { id: anon.id },
+            data: { email, phone: phone || null, type: "lead" },
+          })
+        : await db.contact.create({
+            data: {
+              shopId,
+              sessionId: args.sessionId,
+              email,
+              phone: phone || null,
+              type: "lead",
+              channel: "store",
+            },
+          });
+
+  // Matched an existing lead: fold this session's anonymous row into it so the
+  // person doesn't span two contact rows.
+  if (contact.id !== anon?.id && anon && existing && existing.type !== "customer") {
+    await db.conversation.updateMany({
+      where: { shopId, contactId: anon.id },
+      data: { contactId: contact.id },
+    });
+    await db.contact.delete({ where: { id: anon.id } });
+  }
 
   await db.conversation.updateMany({
     where: { id: convo.id, shopId },

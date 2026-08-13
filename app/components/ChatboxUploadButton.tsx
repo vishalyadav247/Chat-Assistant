@@ -18,6 +18,8 @@ interface UploadResult {
 export function ChatboxUploadButton(props: {
   intent: "upload-logo" | "upload-icon";
   label: string;
+  /** MIME allowlist for the file picker; the server re-validates per intent. */
+  accept?: string;
   onUploaded: (url: string) => void;
 }) {
   const shopify = useAppBridge();
@@ -56,7 +58,7 @@ export function ChatboxUploadButton(props: {
       <input
         ref={fileRef}
         type="file"
-        accept="image/png,image/jpeg,image/webp,image/svg+xml"
+        accept={props.accept ?? "image/png,image/jpeg,image/webp,image/svg+xml"}
         style={{ display: "none" }}
         aria-label={props.label}
         onChange={onFile}

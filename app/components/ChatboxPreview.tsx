@@ -177,9 +177,12 @@ export function ChatboxPreview(props: {
         if (settings.starters.enabled && settings.starters.items.length > 0) {
           wrap.appendChild(R.starterChips(settings.starters.items, {}));
         }
-        // Guest mode requires the pre-chat form before chat (chat-widget.js).
+        // Guest mode requires the pre-chat form before chat; "both" with
+        // showAfterMessages 0 shows it up front, skippable (chat-widget.js).
         if (settings.prechat.mode === "guest") {
           wrap.appendChild(R.prechatForm(config, { skippable: false }, {}));
+        } else if (settings.prechat.mode === "both" && settings.prechat.showAfterMessages === 0) {
+          wrap.appendChild(R.prechatForm(config, { skippable: true }, {}));
         }
         body.appendChild(wrap);
       } else if (screen === "tracking") {

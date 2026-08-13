@@ -25,9 +25,15 @@ export const JOBS = {
   curatedRevalidate: "curated-revalidate",
   autoResolve: "auto-resolve",
   shopCleanup: "shop-cleanup",
+  uninstallPurge: "uninstall-purge",
   knowledgeIngest: "knowledge-ingest",
   customerRedact: "customer-redact",
 } as const;
+
+/** Grace window after uninstall before domain data is erased (spec 17 delta).
+ *  Long enough to survive accidental uninstalls / scope-reapproval reinstalls;
+ *  well inside the 30-day shop/redact SLA. */
+const UNINSTALL_GRACE_DAYS = 7;
 
 interface ShopJob {
   shopDomain: string;
@@ -144,6 +150,29 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
     await cleanupShop(job.data.shopDomain);
   });
 
+  // Daily uninstall purge: erase shops whose grace window has lapsed and that
+  // haven't reinstalled (reinstall clears uninstalledAt via onShopAuthenticated).
+  // The shop-type redactLog row cleanupShop writes is the already-done marker.
+  await boss.work(JOBS.uninstallPurge, async () => {
+    const cutoff = new Date(Date.now() - UNINSTALL_GRACE_DAYS * 24 * 60 * 60 * 1000);
+    const shops = await db.shop.findMany({
+      where: { uninstalledAt: { lt: cutoff } },
+      select: { id: true, domain: true, uninstalledAt: true },
+    });
+    for (const shop of shops) {
+      const done = await db.redactLog.findFirst({
+        where: { shopId: shop.id, type: "shop", completedAt: { gte: shop.uninstalledAt! } },
+      });
+      if (done) continue;
+      await cleanupShop(shop.domain).catch((error: unknown) =>
+        console.error("uninstall_purge_error", shop.domain, error),
+      );
+    }
+  });
+  await boss.schedule(JOBS.uninstallPurge, "53 4 * * *", {}, {}).catch((error: unknown) => {
+    console.error("uninstall_purge_schedule_error", error);
+  });
+
   // Knowledge ingestion + weekly re-crawl (feature 04) — handlers live in
   // ingestion/knowledge-jobs.server.ts; registered + scheduled here.
   {
@@ -239,7 +268,12 @@ export async function cleanupShop(shopDomain: string): Promise<void> {
     db.dataRequest.deleteMany({ where: { shopId } }),
     // Session rows hold the offline token + owner PII — must go too (review M3).
     db.session.deleteMany({ where: { shop: shopDomain } }),
-    db.shop.update({ where: { id: shopId }, data: { uninstalledAt: new Date() } }),
+    // Preserve the original uninstall stamp (the purge sweep's done-marker
+    // compares redactLog.completedAt against it).
+    db.shop.update({
+      where: { id: shopId },
+      data: { uninstalledAt: shop.uninstalledAt ?? new Date() },
+    }),
   ]);
   await db.redactLog.create({ data: { shopId, type: "shop", completedAt: new Date() } });
 }

@@ -751,10 +751,12 @@
     intro.textContent = survey.intro || "How was your experience?";
     blk.appendChild(intro);
 
-    var scale = survey.format === "emoji" ? ["😡", "😕", "😐", "🙂", "🤩"] : ["★", "★", "★", "★", "★"];
+    var isEmoji = survey.format === "emoji";
+    var scale = isEmoji ? ["😡", "😕", "😐", "🙂", "🤩"] : ["★", "★", "★", "★", "★"];
     var row = el("div", "cw-stars", { role: "radiogroup", "aria-label": "Rate your experience" });
     scale.forEach(function (glyph, i) {
-      var b = el("button", "cw-star", {
+      // Star glyphs are CSS-colorable (yellow); emoji rely on grayscale.
+      var b = el("button", isEmoji ? "cw-star cw-star-emoji" : "cw-star", {
         type: "button",
         role: "radio",
         "aria-checked": "false",

@@ -27,6 +27,17 @@ Declared in `shopify.app.toml` `compliance_topics` → `/webhooks/compliance`. `
 1. Enqueue full purge: all rows for shop across every table (products, knowledge, sources, curated, persona, guardrails, conversations, messages, contacts, events, settings, campaigns, usage, sessions) — the backstop behind Phase-0's uninstall `shop-cleanup`.
 2. RedactLog entry; job verifies zero remaining rows (count assertion).
 
+> Revised 2026-08-13 (user decision): **7-day uninstall grace window** so an accidental
+> uninstall / scope-reapproval reinstall keeps merchant data. `app/uninstalled` now only
+> deletes Session rows (revoked token + owner PII) and stamps `uninstalledAt`; no data
+> purge. `SHOP_REDACT` no longer purges directly — it just ensures `uninstalledAt` is
+> stamped (skipped if the shop reinstalled, i.e. has live sessions). Actual erasure: daily
+> `uninstall-purge` sweep (handlers.server.ts, 04:53) runs `cleanupShop` for shops with
+> `uninstalledAt` older than `UNINSTALL_GRACE_DAYS = 7`, using the shop-type RedactLog row
+> as the already-done marker. Day-7 erasure is well inside the 30-day shop/redact SLA.
+> Reinstall within the window clears `uninstalledAt` (onShopAuthenticated) → data kept.
+> **Privacy policy must state the 7-day post-uninstall retention window.**
+
 ## Data retention (16 UI)
 
 - Setting: Forever/90/60/30/7 days. Daily pg-boss cron: delete conversations+messages older than window (per shop), independent of webhooks. Contacts kept (redact/uninstall governs them). Analytics rollups (14) survive (aggregates, no transcripts).

@@ -238,6 +238,7 @@
     if (lc.style === "label" || lc.style === "icon_label") {
       var span = document.createElement("span");
       span.textContent = lc.label || "Chat with us";
+      if (lc.labelColor) span.style.color = lc.labelColor; // parity with widget-renderer launcher()
       btn.appendChild(span);
     }
     btn.addEventListener("click", togglePanel);
@@ -255,12 +256,20 @@
       .catch(function () { /* modules failed to load — stay closed, no errors */ });
   }
 
-  function beacon(type, payload) {
+  function beacon(type, payload, cart) {
     try {
+      var body = { type: type, payload: payload || {} };
+      if (cart) {
+        // Cart snapshot + identity so the server can pin the live cart to
+        // this conversation for the inbox details card.
+        body.cart = cart;
+        body.sessionId = sessionId(false);
+        body.conversationId = state.conversationId || undefined;
+      }
       fetch(base + "/event", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: type, payload: payload || {} }),
+        body: JSON.stringify(body),
         keepalive: true,
       }).catch(function () { /* analytics never breaks UX */ });
     } catch (e) { /* ignore */ }
@@ -273,6 +282,7 @@
     ui.launcher.style.display = "none";
     ui.launcher.setAttribute("aria-expanded", "true");
     beacon("widget_opened", { pageType: pageType });
+    refreshCartSnapshot(); // first message's pageContext carries the cart
     state.open = true;
     store(sessionStorage, OPEN_KEY, "1");
     var focusChat = config.widget.chatFocusMode && config.widget.liveChat;
@@ -431,7 +441,14 @@
     }
     // Guest mode: form is required before chat (design: "Require information
     // before chat"). Lock input until submitted.
-    if (w.prechat.mode === "guest" && !prechatDone()) showPrechat(false);
+    if (w.prechat.mode === "guest" && !prechatDone()) {
+      showPrechat(false);
+    } else if (w.prechat.mode === "both" && !prechatDone() && w.prechat.showAfterMessages === 0) {
+      // "Show form after 0 messages" = up front, before the first message —
+      // the post-message check in the stream-done handler can only ever fire
+      // after message #1, so 0 would otherwise behave like 1.
+      showPrechat(true);
+    }
   }
 
   /** Rebuild the thread from the server (spec 05 delta: history survives
@@ -548,7 +565,11 @@
         sessionId: sessionId(true),
         conversationId: state.conversationId || undefined,
         message: text,
-        pageContext: { pageType: pageType, url: window.location.pathname },
+        pageContext: {
+          pageType: pageType,
+          url: window.location.pathname,
+          cart: cartSnapshot || undefined,
+        },
       },
       {
         onToken: function (t) { bot().appendChild(document.createTextNode(t)); scroll(); },
@@ -653,6 +674,61 @@
     if (firstInput) firstInput.focus();
   }
 
+  // ── cart state + theme cart UI ───────────────────────────────────────────
+  // The add.js `sections` param makes Shopify return freshly rendered section
+  // HTML with the add — that is what Dawn-family drawers/badges render from
+  // (opening the drawer without it shows the stale, often empty, markup).
+  var CART_SECTIONS = "cart-drawer,cart-icon-bubble";
+  var cartSnapshot = null; // { itemCount, totalValue, items[] } — inbox cart card source
+
+  function refreshCartSnapshot() {
+    return fetch("/cart.js", { headers: { Accept: "application/json" } })
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (cart) {
+        if (!cart) return null;
+        cartSnapshot = {
+          itemCount: cart.item_count || 0,
+          totalValue: (cart.total_price || 0) / 100,
+          items: (cart.items || []).slice(0, 20).map(function (i) {
+            return {
+              title: i.product_title || i.title || "Item",
+              variant: i.variant_title || "",
+              quantity: i.quantity || 1,
+              price: (i.price || 0) / 100,
+            };
+          }),
+        };
+        return cartSnapshot;
+      })
+      .catch(function () { return null; });
+  }
+
+  /** Update the theme's cart UI from an add.js response carrying `sections`.
+   *  openDrawer=true → Dawn-family renderContents (re-renders drawer + header
+   *  badge, then opens). Returns true when the drawer handled everything. */
+  function applyCartSections(data, openDrawer) {
+    var sections = data && data.sections;
+    var drawer = document.querySelector("cart-drawer");
+    if (openDrawer && drawer && sections && typeof drawer.renderContents === "function") {
+      drawer.renderContents(data);
+      // Some Dawn versions track emptiness on the <cart-drawer> root but only
+      // clear it from .drawer__inner — a leftover is-empty hides the items.
+      drawer.classList.remove("is-empty");
+      var innerEl = drawer.querySelector(".drawer__inner");
+      if (innerEl) innerEl.classList.remove("is-empty");
+      return true;
+    }
+    if (sections && sections["cart-icon-bubble"]) {
+      var holder = document.getElementById("cart-icon-bubble");
+      if (holder) {
+        var parsed = new DOMParser().parseFromString(sections["cart-icon-bubble"], "text/html");
+        var src = parsed.querySelector(".shopify-section") || parsed.body;
+        holder.innerHTML = src.innerHTML;
+      }
+    }
+    return false;
+  }
+
   // ── product cards ────────────────────────────────────────────────────────
   function onCardAdd(card) {
     // Cards carry a numeric variantId (first available variant) when the
@@ -665,28 +741,40 @@
     fetch("/cart/add.js", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ items: [{ id: Number(card.variantId), quantity: 1 }] }),
+      body: JSON.stringify({
+        items: [{ id: Number(card.variantId), quantity: 1 }],
+        sections: CART_SECTIONS,
+        sections_url: window.location.pathname,
+      }),
     })
       .then(function (res) {
         if (!res.ok) throw new Error("cart add failed");
-        beacon("added_to_cart", { product: card.title, variantId: card.variantId });
+        return res.json();
+      })
+      .then(function (data) {
+        // Fresh snapshot rides the beacon so the inbox cart card updates
+        // immediately, and future messages carry it in pageContext.
+        refreshCartSnapshot().then(function (snapshot) {
+          beacon("added_to_cart", { product: card.title, variantId: card.variantId }, snapshot);
+        });
         if (config.cartDrawer) {
           // Honor "open cart drawer after add to cart" (spec 16): minimize the
-          // chat and hand off to the theme. Dawn-family themes re-render the
-          // drawer on section reload; a full refresh of /cart state via the
-          // documented sections API is theme-specific, so progressive
-          // enhancement: dispatch the conventional event, else navigate.
+          // chat and hand off to the theme.
           closePanel();
-          var drawer = document.querySelector("cart-drawer");
-          document.documentElement.dispatchEvent(
-            new CustomEvent("cart:refresh", { bubbles: true }),
-          );
-          if (drawer && typeof drawer.open === "function") {
-            drawer.open();
-          } else if (!drawer) {
-            window.location.href = "/cart";
+          if (!applyCartSections(data, true)) {
+            // Non-Dawn fallback: conventional event, else the cart page.
+            var drawer = document.querySelector("cart-drawer");
+            document.documentElement.dispatchEvent(
+              new CustomEvent("cart:refresh", { bubbles: true }),
+            );
+            if (drawer && typeof drawer.open === "function") {
+              drawer.open();
+            } else if (!drawer) {
+              window.location.href = "/cart";
+            }
           }
         } else {
+          applyCartSections(data, false); // header badge only — chat stays open
           appendSys("Added " + card.title + " to your cart ✓");
         }
       })
@@ -824,10 +912,19 @@
     fetch("/cart/add.js", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ items: [{ id: Number(card.variantId), quantity: 1 }] }),
+      body: JSON.stringify({
+        items: [{ id: Number(card.variantId), quantity: 1 }],
+        sections: CART_SECTIONS,
+        sections_url: window.location.pathname,
+      }),
     })
       .then(function (res) {
         if (!res.ok) throw new Error("cart add failed");
+        return res.json();
+      })
+      .then(function (data) {
+        applyCartSections(data, false); // refresh the header badge in place
+        refreshCartSnapshot();
         fetch("/cart/update.js", {
           method: "POST",
           headers: { "Content-Type": "application/json", Accept: "application/json" },

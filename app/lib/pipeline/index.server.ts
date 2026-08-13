@@ -13,7 +13,9 @@ import {
 import { knowledgeSearch } from "../search/knowledge-search.server";
 import { curatedMatch } from "../search/curated-match.server";
 import { recommendationMatch } from "../search/recommendation-match.server";
+import { ensureSessionContact } from "../contacts/contacts.server";
 import { requireShopId } from "../tenancy.server";
+import { mergePageContext } from "../widget/page-context.server";
 import { keywordScan, meaningScan, moderationCheck } from "./guardrail.server";
 import { detectHandover, detectCannotAnswer, executeHandover } from "./handover.server";
 import { loadHistory } from "./history.server";
@@ -38,6 +40,8 @@ export interface PipelineInput {
   conversationId?: string;
   message: string;
   pageContext?: unknown;
+  /** Raw User-Agent from the proxy request — parsed into the device label. */
+  userAgent?: string;
   isTest?: boolean;
 }
 
@@ -633,6 +637,8 @@ async function finishBlocked(
 }
 
 async function ensureConversation(shopId: string, input: PipelineInput) {
+  // Every turn folds its context into the stored blob (browsed-page history,
+  // latest cart snapshot, device) — the inbox details card reads from it.
   if (input.conversationId) {
     const existing = await db.conversation.findFirst({
       // sessionId binds the by-id resume to the caller's own widget session
@@ -643,7 +649,11 @@ async function ensureConversation(shopId: string, input: PipelineInput) {
     if (existing) {
       await db.conversation.update({
         where: { id: existing.id },
-        data: { lastMessageAt: new Date(), unread: true },
+        data: {
+          lastMessageAt: new Date(),
+          unread: true,
+          pageContext: mergePageContext(existing.pageContext, input.pageContext, input.userAgent),
+        },
       });
       return existing;
     }
@@ -655,16 +665,25 @@ async function ensureConversation(shopId: string, input: PipelineInput) {
   if (bySession) {
     await db.conversation.update({
       where: { id: bySession.id },
-      data: { lastMessageAt: new Date(), unread: true },
+      data: {
+        lastMessageAt: new Date(),
+        unread: true,
+        pageContext: mergePageContext(bySession.pageContext, input.pageContext, input.userAgent),
+      },
     });
     return bySession;
   }
+  // New conversation: bind it to the session's contact (existing identified
+  // row, else a fresh anonymous one) so unidentified chatters appear in the
+  // Contacts Anonymous tab (spec 11). Test-widget chats stay contact-less.
+  const contactId = input.isTest ? null : await ensureSessionContact(shopId, input.sessionId);
   return db.conversation.create({
     data: {
       shopId,
       sessionId: input.sessionId,
       isTest: input.isTest ?? false,
-      pageContext: (input.pageContext ?? undefined) as Prisma.InputJsonValue | undefined,
+      contactId,
+      pageContext: mergePageContext(undefined, input.pageContext, input.userAgent),
     },
   });
 }

@@ -58,7 +58,10 @@
 .cw-pos-top_left { left: 20px; top: 20px; align-items: flex-start; flex-direction: column-reverse; }
 
 /* ── Launcher ──────────────────────────────────────────────────────────── */
-.cw-launcher {
+/* .cw-root prefix so background/color beat the `.cw-root button
+   { background: none; color: inherit }` reset — without it the brand
+   gradient never applied and the launcher rendered white. */
+.cw-root .cw-launcher {
   width: 56px;
   height: 56px;
   border-radius: 50%;
@@ -70,13 +73,12 @@
   gap: 9px;
   box-shadow: 0 8px 20px rgba(20, 20, 25, 0.35);
   font-size: 16px;
-  font-weight: 650;
   overflow: hidden;
   transition: transform 0.15s ease;
 }
-.cw-launcher:hover { transform: scale(1.05); }
-.cw-launcher--pill { width: auto; height: 52px; border-radius: 28px; padding: 0 22px; white-space: nowrap; }
-.cw-launcher img { width: 26px; height: 26px; object-fit: cover; border-radius: 6px; }
+.cw-root .cw-launcher:hover { transform: scale(1.05); }
+.cw-root .cw-launcher--pill { width: auto; height: 52px; border-radius: 28px; padding: 0 22px; white-space: nowrap; }
+.cw-root .cw-launcher img { width: 26px; height: 26px; object-fit: cover; border-radius: 6px; }
 
 /* ── Panel ─────────────────────────────────────────────────────────────── */
 .cw-panel {
@@ -441,9 +443,13 @@ textarea.cw-inp { resize: vertical; min-height: 64px; font-family: inherit; line
 .cw-skip:hover { color: var(--cw-ink); }
 
 .cw-survey { text-align: center; }
-.cw-stars { display: flex; justify-content: center; gap: 6px; margin-top: 8px; }
-.cw-star { font-size: 22px; line-height: 1; filter: grayscale(1); opacity: 0.55; transition: 0.12s; }
-.cw-star:hover, .cw-star[aria-checked="true"] { filter: none; opacity: 1; transform: scale(1.12); }
+.cw-stars { display: flex; justify-content: center; gap: 8px; margin: 5px 0; }
+/* Stars: large + yellow (user request 2026-08-13); unrated ones sit dimmed.
+   Emoji format keeps the grayscale treatment instead (emoji ignore color).
+   .cw-root prefix so these beat the `.cw-root button { font/color: inherit }` reset. */
+.cw-root .cw-star { font-size: 28px; line-height: 1; color: #fbbf24; opacity: 0.45; transition: 0.12s; }
+.cw-root .cw-star-emoji { font-size: 28px; color: inherit; filter: grayscale(1); opacity: 0.55; margin-top:5px;}
+.cw-root .cw-star:hover, .cw-root .cw-star[aria-checked="true"] { filter: none; opacity: 1; transform: scale(1.12); }
 
 /* ── Proactive campaign bubble (spec 12) ───────────────────────────────── */
 .cw-proactive {

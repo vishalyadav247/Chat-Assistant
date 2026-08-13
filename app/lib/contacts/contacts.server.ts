@@ -114,10 +114,114 @@ export async function contactStats(shopId: string): Promise<ContactStats> {
   return { total: customers + leads + anonymous, customers, leads, anonymous };
 }
 
+/** Ensure the widget session has a contact row: reuse whatever contact is
+ *  already bound to the sessionId (anonymous OR identified), else create an
+ *  anonymous one (spec 11: anonymous conversation start → anonymous contact). */
+export async function ensureSessionContact(shopId: string, sessionId: string): Promise<string> {
+  const existing = await db.contact.findFirst({
+    where: { shopId: requireShopId(shopId), sessionId },
+    orderBy: { createdAt: "desc" },
+    select: { id: true },
+  });
+  if (existing) return existing.id;
+  const created = await db.contact.create({
+    data: { shopId, sessionId, type: "anonymous", channel: "store" },
+    select: { id: true },
+  });
+  return created.id;
+}
+
+/** Backfill pass on page load: conversations started before anonymous-contact
+ *  creation existed have contactId null — bind each session to an (existing or
+ *  new anonymous) contact so they show up in the Anonymous tab. */
+export async function backfillAnonymousContacts(shopId: string): Promise<number> {
+  const orphaned = await db.conversation.groupBy({
+    by: ["sessionId"],
+    where: { shopId: requireShopId(shopId), contactId: null, isTest: false },
+  });
+  for (const row of orphaned) {
+    const contactId = await ensureSessionContact(shopId, row.sessionId);
+    await db.conversation.updateMany({
+      where: { shopId, sessionId: row.sessionId, contactId: null, isTest: false },
+      data: { contactId },
+    });
+  }
+  return orphaned.length;
+}
+
+/** Minimal shape of admin.graphql from authenticate.admin — kept structural so
+ *  this module doesn't import shopify.server. */
+type AdminGraphql = (
+  query: string,
+  options?: { variables?: Record<string, unknown> },
+) => Promise<Response>;
+
+/** Match unmatched contacts (email set, no shopifyCustomerId) against the
+ *  shop's Shopify customers by email and upgrade hits to "customer".
+ *  Needs the read_customers scope — failures (e.g. scope not yet granted)
+ *  are swallowed so the Contacts page still loads. */
+export async function matchContactsToShopifyCustomers(
+  shopId: string,
+  graphql: AdminGraphql,
+): Promise<number> {
+  const candidates = await db.contact.findMany({
+    where: {
+      shopId: requireShopId(shopId),
+      type: { not: "customer" },
+      shopifyCustomerId: null,
+      email: { not: null },
+    },
+    orderBy: { createdAt: "desc" },
+    take: 25,
+    select: { id: true, email: true },
+  });
+  if (candidates.length === 0) return 0;
+
+  let upgraded = 0;
+  try {
+    // One search query per chunk: email:"a" OR email:"b" …
+    for (let i = 0; i < candidates.length; i += 10) {
+      const chunk = candidates.slice(i, i + 10);
+      const search = chunk
+        .map((c) => `email:"${(c.email ?? "").replace(/["\\]/g, "")}"`)
+        .join(" OR ");
+      const response = await graphql(
+        `#graphql
+        query MatchContacts($search: String!) {
+          customers(first: 30, query: $search) {
+            nodes { id email }
+          }
+        }`,
+        { variables: { search } },
+      );
+      const body = (await response.json()) as {
+        data?: { customers?: { nodes?: { id: string; email: string | null }[] } };
+      };
+      const byEmail = new Map(
+        (body.data?.customers?.nodes ?? [])
+          .filter((n) => n.email)
+          .map((n) => [n.email!.toLowerCase(), n.id]),
+      );
+      for (const contact of chunk) {
+        const customerId = byEmail.get((contact.email ?? "").toLowerCase());
+        if (!customerId) continue;
+        await db.contact.update({
+          where: { id: contact.id },
+          data: { type: "customer", shopifyCustomerId: customerId },
+        });
+        upgraded += 1;
+      }
+    }
+  } catch {
+    // Missing scope / API error — leave contacts as-is, retry next load.
+  }
+  return upgraded;
+}
+
 /** Re-evaluate a contact's type. v1 rule: a contact bound to a storefront
  *  customer id (captured at creation from the logged-in session, spec 05) is a
- *  customer; leads/anonymous never downgrade. Email→customer matching via the
- *  Admin API is deferred (see spec 11 delta note). */
+ *  customer; leads/anonymous never downgrade. Email→customer matching runs in
+ *  matchContactsToShopifyCustomers (Contacts page load). */
 export async function classifyContact(shopId: string, contactId: string) {
   const contact = await db.contact.findFirst({
     where: { id: contactId, shopId: requireShopId(shopId) },

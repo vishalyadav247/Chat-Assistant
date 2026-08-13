@@ -222,55 +222,75 @@ export function ChatboxAppearance(props: {
           />
         </LauncherRow>
 
-        {launcher.style !== "icon" ? (
-          <LauncherRow label="Label">
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <div style={{ flex: 1, minWidth: 150 }}>
-                <s-text-field
-                  label="Launcher label"
-                  labelAccessibilityVisibility="exclusive"
-                  placeholder="Chat with us"
-                  value={launcher.label}
-                  maxLength={40}
-                  onInput={(e) => setLauncher({ label: e.currentTarget.value })}
-                />
-              </div>
-              <div style={{ width: 120 }}>
-                <s-color-field
-                  label="Label color"
-                  labelAccessibilityVisibility="exclusive"
-                  value={launcher.labelColor || "#ffffff"}
-                  onInput={(e) => setLauncher({ labelColor: normalizeHex(e.currentTarget.value) })}
-                  onChange={(e) => setLauncher({ labelColor: normalizeHex(e.currentTarget.value) })}
-                />
-              </div>
-            </div>
-          </LauncherRow>
-        ) : null}
+        {/* Rows stay visible for every style (user request 2026-08-13): the
+            style pills only change the storefront rendering, not the form. */}
+        <LauncherRow label="Label">
+          <div style={{ maxWidth: 280 }}>
+            <s-text-field
+              label="Launcher label"
+              labelAccessibilityVisibility="exclusive"
+              placeholder="Chat with us"
+              value={launcher.label}
+              maxLength={40}
+              onInput={(e) => setLauncher({ label: e.currentTarget.value })}
+            />
+          </div>
+        </LauncherRow>
+
+        <LauncherRow label="Color">
+          <div style={{ width: 120 }}>
+            <s-color-field
+              label="Label color"
+              labelAccessibilityVisibility="exclusive"
+              value={launcher.labelColor || "#ffffff"}
+              onInput={(e) => setLauncher({ labelColor: normalizeHex(e.currentTarget.value) })}
+              onChange={(e) => setLauncher({ labelColor: normalizeHex(e.currentTarget.value) })}
+            />
+          </div>
+        </LauncherRow>
 
         <LauncherRow label="Background">
-          {/* No checkbox (user request): a picked color overrides the brand
-              colors; Reset clears back to brand. */}
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {/* Toggle (user request 2026-08-13): brand color by default; turning
+              it off reveals the picker. Empty bgColor = brand. Keeping the
+              picker unmounted while the toggle is on also fixes the old
+              "Reset to brand" bug (the field's onChange re-applied the brand
+              hex as a custom color the moment bgColor was cleared). */}
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <s-switch
+              label="Use brand color"
+              checked={!launcher.bgColor}
+              onChange={(e) =>
+                setLauncher({
+                  bgColor: e.currentTarget.checked
+                    ? ""
+                    : appearance.colorMode === "solid"
+                      ? appearance.solid
+                      : appearance.gradient.start,
+                })
+              }
+            />
             <div style={{ width: 120 }}>
+              {/* Always visible; editable only with the brand toggle off. A
+                  disabled field fires no change events, so the brand hex it
+                  displays never writes back into bgColor. */}
               <s-color-field
                 label="Button background color"
                 labelAccessibilityVisibility="exclusive"
+                disabled={!launcher.bgColor}
                 value={
                   launcher.bgColor ||
                   (appearance.colorMode === "solid" ? appearance.solid : appearance.gradient.start)
                 }
-                onInput={(e) => setLauncher({ bgColor: normalizeHex(e.currentTarget.value) })}
-                onChange={(e) => setLauncher({ bgColor: normalizeHex(e.currentTarget.value) })}
+                onInput={(e) => {
+                  const bgColor = normalizeHex(e.currentTarget.value);
+                  if (bgColor) setLauncher({ bgColor });
+                }}
+                onChange={(e) => {
+                  const bgColor = normalizeHex(e.currentTarget.value);
+                  if (bgColor) setLauncher({ bgColor });
+                }}
               />
             </div>
-            {launcher.bgColor ? (
-              <s-button variant="tertiary" onClick={() => setLauncher({ bgColor: "" })}>
-                Reset to brand
-              </s-button>
-            ) : (
-              <s-text tone="neutral">Using brand colors</s-text>
-            )}
           </div>
         </LauncherRow>
 
@@ -310,10 +330,11 @@ export function ChatboxAppearance(props: {
             <ChatboxUploadButton
               intent="upload-icon"
               label="Upload icon"
+              accept="image/png,image/svg+xml"
               onUploaded={(url) => setLauncher({ icon: "custom", customIconUrl: url })}
             />
           </div>
-          <s-text tone="neutral">SVG, PNG or JPG · square, at least 64×64 px</s-text>
+          <s-text tone="neutral">SVG or PNG · square, at least 64×64 px</s-text>
           </s-stack>
         </LauncherRow>
 

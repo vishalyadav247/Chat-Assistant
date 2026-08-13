@@ -101,6 +101,11 @@ export async function applyChatboxIntent(args: {
       if (!(file instanceof File) || file.size === 0) {
         return { ok: false, intent, error: "Choose an image file to upload." };
       }
+      // Launcher icons are SVG/PNG only (user request 2026-08-13); the logo
+      // keeps the wider uploadImage allowlist.
+      if (intent === "upload-icon" && !["image/png", "image/svg+xml"].includes(file.type)) {
+        return { ok: false, intent, error: "Launcher icon must be an SVG or PNG file." };
+      }
       const bytes = Buffer.from(await file.arrayBuffer());
       const url = await uploadImage(shopDomain, {
         name: file.name || "widget-image.png",

@@ -48,8 +48,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       break;
     }
     case "SHOP_REDACT": {
-      // Arrives ~48h after uninstall — backstop purge behind app/uninstalled cleanup.
-      await enqueue(JOBS.shopCleanup, { shopDomain: shop });
+      // Arrives ~48h after uninstall. Erasure itself runs via the daily
+      // uninstall-purge sweep at day 7 post-uninstall (within the 30-day
+      // redaction SLA). Here we only make sure the shop is stamped as
+      // uninstalled in case the app/uninstalled webhook was missed — and never
+      // stamp a shop that has since reinstalled (it has live sessions).
+      const shopRow = await db.shop.findUnique({ where: { domain: shop } });
+      if (shopRow && !shopRow.uninstalledAt) {
+        const liveSessions = await db.session.count({ where: { shop } });
+        if (liveSessions === 0) {
+          await db.shop.update({
+            where: { id: shopRow.id },
+            data: { uninstalledAt: new Date() },
+          });
+        }
+      }
       break;
     }
     default:

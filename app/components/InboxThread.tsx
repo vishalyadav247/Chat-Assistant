@@ -6,6 +6,7 @@ import {
   displayName,
   fmtTime,
   initials,
+  StarIcon,
 } from "./InboxShared";
 import type { InboxDetail } from "./InboxShared";
 
@@ -86,7 +87,7 @@ export function InboxThread({
           aria-label={active.starred ? "Unstar conversation" : "Star conversation"}
           onClick={onStar}
         >
-          <s-icon type={active.starred ? "star-filled" : "star"} size="small" />
+          <StarIcon filled={active.starred} size={17} />
         </button>
         <button
           type="button"

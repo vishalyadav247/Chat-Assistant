@@ -71,18 +71,28 @@ export function DashboardLiveFeed(props: {
                 key={item.id}
                 type="button"
                 onClick={() => props.onOpen(item.id)}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.08)";
+                  e.currentTarget.style.borderColor = "var(--p-color-border-emphasis, #b5b5bd)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.boxShadow = "0 1px 2px rgba(0,0,0,0.04)";
+                  e.currentTarget.style.borderColor = "var(--p-color-border, #e9e9ec)";
+                }}
                 style={{
                   display: "flex",
                   gap: SPACE.md,
                   alignItems: "flex-start",
                   width: "100%",
-                  padding: "8px 4px",
-                  background: "none",
-                  border: "none",
-                  borderTop: index === 0 ? "none" : "1px solid var(--p-color-border, #e9e9ec)",
+                  padding: "12px",
+                  background: "var(--p-color-bg-surface, #fff)",
+                  border: "1px solid var(--p-color-border, #e9e9ec)",
+                  borderRadius: 12,
+                  boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
                   cursor: "pointer",
                   textAlign: "left",
                   font: "inherit",
+                  transition: "box-shadow 120ms ease, border-color 120ms ease",
                 }}
               >
                 <span

@@ -76,6 +76,7 @@ export async function onShopAuthenticated(shopDomain: string): Promise<void> {
     if (!syncState?.productSyncAt) {
       await enqueue(JOBS.catalogSync, { shopDomain });
       await enqueue(JOBS.collectionSync, { shopDomain });
+      await enqueue(JOBS.discountSync, { shopDomain });
     }
   } catch (error) {
     // afterAuth must never break the OAuth flow.

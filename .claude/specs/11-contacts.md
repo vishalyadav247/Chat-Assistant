@@ -16,6 +16,10 @@ Admin page `/app/contacts`: list + stats of contacts collected across channels, 
 - **lead** — shared contact info (pre-chat email, fallback capture, handover form) without known order.
 - **anonymous** — chatted, no identity (sessionId only; name "Visitor N").
 
+> Revised 2026-08-13 (user report: Shopify customer stuck as Lead, visitors missing from Anonymous):
+> - Email→customer match implemented: `matchContactsToShopifyCustomers` (contacts.server.ts) runs on Contacts page load, searches Admin API `customers(query: email:…)` in chunks for contacts with email + no shopifyCustomerId, upgrades hits. Needs `read_customers` scope (added to shopify.app.toml); fails soft until granted. **Rule relaxed: any email match classifies as customer (no ≥1-order requirement)** — tile subtitle changed to "in your Shopify customers".
+> - Anonymous contacts implemented: pipeline `ensureConversation` binds each new non-test conversation to the session's contact via `ensureSessionContact` (creates type "anonymous" when none). `backfillAnonymousContacts` on page load adopts legacy contact-less conversations. Pre-chat/handover upgrade the session's anonymous row in place to lead (or merge it into the email-matched row and delete it) — no duplicate rows per person.
+
 ### Channel enum (design)
 `store` (Online store) live now; `email`, `msgr`, `wa`, `ig` reserved (multi-channel roadmap) — enum includes them, UI renders labels.
 

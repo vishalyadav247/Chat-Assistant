@@ -159,38 +159,46 @@ export function ChatboxChatPage(props: {
             onChange({ ...value, starters: { ...starters, enabled: e.currentTarget.checked } })
           }
         />
-        {starters.items.map((item, index) => (
-          <div key={item.id || index} data-drag-row {...starterDrag.rowProps(index)}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 0" }}>
-              <DragHandle
-                label={`Reorder ${item.question || "question"}`}
-                drag={starterDrag.handleProps(index)}
-                onKeyMove={(d) => moveStarter(index, d === "up" ? -1 : 1)}
-              />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <s-stack gap="small-300">
-                  <s-text type="strong">{`${item.emoji} ${item.question}`.trim()}</s-text>
-                  <s-text tone="neutral">
-                    {htmlToText(item.answerHtml).slice(0, 120) || "No answer yet"}
-                  </s-text>
-                </s-stack>
+        {/* Question-only rows with light dividers (user request 2026-08-13);
+            the answer stays behind the edit modal. One wrapper div so the
+            section s-stack gap doesn't spread the rows apart. */}
+        <div>
+          {starters.items.map((item, index) => (
+            <div key={item.id || index} data-drag-row {...starterDrag.rowProps(index)}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "4px 0",
+                  borderTop: index > 0 ? "1px solid var(--p-color-border, #e9e9ec)" : "none",
+                }}
+              >
+                <DragHandle
+                  label={`Reorder ${item.question || "question"}`}
+                  drag={starterDrag.handleProps(index)}
+                  onKeyMove={(d) => moveStarter(index, d === "up" ? -1 : 1)}
+                />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <s-text type="strong">{item.question}</s-text>
+                </div>
+                <s-button
+                  icon="edit"
+                  variant="tertiary"
+                  accessibilityLabel="Edit question"
+                  onClick={() => openModal(index)}
+                />
+                <s-button
+                  icon="delete"
+                  variant="tertiary"
+                  tone="critical"
+                  accessibilityLabel="Delete question"
+                  onClick={() => setStarters(starters.items.filter((_, i) => i !== index))}
+                />
               </div>
-              <s-button
-                icon="edit"
-                variant="tertiary"
-                accessibilityLabel="Edit question"
-                onClick={() => openModal(index)}
-              />
-              <s-button
-                icon="delete"
-                variant="tertiary"
-                tone="critical"
-                accessibilityLabel="Delete question"
-                onClick={() => setStarters(starters.items.filter((_, i) => i !== index))}
-              />
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
         <s-stack direction="inline" gap="base">
           <s-button icon="plus" onClick={() => openModal(null)}>
             Add question

@@ -6,10 +6,12 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { resolveShopId } from "../lib/tenancy.server";
 import {
+  backfillAnonymousContacts,
   contactDetail,
   contactStats,
   exportContactsCsv,
   listContacts,
+  matchContactsToShopifyCustomers,
   reclassifyPendingContacts,
 } from "../lib/contacts/contacts.server";
 import { StatGrid, StatTile } from "../components/ui/StatTile";
@@ -42,14 +44,17 @@ function parseType(raw: string | null): ContactType | undefined {
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const shopId = await resolveShopId(session.shop);
   const type = parseType(new URL(request.url).searchParams.get("type"));
 
-  // Opportunistic re-classification: contacts whose storefront customer id
-  // arrived after row creation get upgraded to "customer" (spec 11 rule; the
-  // email→Shopify-customer Admin API match is deferred, see spec delta note).
+  // Opportunistic classification passes on every load (all no-ops once caught
+  // up): bind legacy contact-less conversations to anonymous contacts, upgrade
+  // contacts whose storefront customer id arrived late, and match contact
+  // emails against Shopify customers (needs read_customers; fails soft).
+  await backfillAnonymousContacts(shopId);
   await reclassifyPendingContacts(shopId);
+  await matchContactsToShopifyCustomers(shopId, admin.graphql);
 
   const [stats, contacts] = await Promise.all([
     contactStats(shopId),
@@ -192,7 +197,7 @@ export default function ContactsPage() {
               value={String(data.stats.customers)}
               icon="cart"
               tone="success"
-              sub="have placed an order"
+              sub="in your Shopify customers"
             />
             <StatTile
               label="Leads"

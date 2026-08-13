@@ -79,6 +79,21 @@ export function unreadOpenCount(rows: InboxRow[]): number {
   return rows.filter((c) => c.unread && c.status === "open" && !c.blocked).length;
 }
 
+/** Star glyph driven by CSS `color` (currentColor) — filled or outline. */
+export function StarIcon({ filled, size = 16 }: { filled: boolean; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M12 2.5l2.95 5.98 6.6.96-4.78 4.66 1.13 6.57L12 17.57l-5.9 3.1 1.13-6.57L2.45 9.44l6.6-.96L12 2.5z"
+        fill={filled ? "currentColor" : "none"}
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 // ── Display helpers ─────────────────────────────────────────────────────────
 
 export function displayName(name: string | null | undefined): string {

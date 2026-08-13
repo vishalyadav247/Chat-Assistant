@@ -1,4 +1,4 @@
-import { avatarGradient, displayName, initials, relTime } from "./InboxShared";
+import { avatarGradient, displayName, initials, relTime, StarIcon } from "./InboxShared";
 import type { InboxRow } from "./InboxShared";
 
 // List column (design inbox.html): title = filter label, unread-only toggle,
@@ -9,6 +9,7 @@ export function InboxList({
   title,
   rows,
   activeId,
+  unreadCount,
   unreadOnly,
   onToggleUnread,
   search,
@@ -18,6 +19,8 @@ export function InboxList({
   title: string;
   rows: InboxRow[];
   activeId: string | null;
+  /** Unread open conversations across the whole inbox (not just this filter). */
+  unreadCount: number;
   unreadOnly: boolean;
   onToggleUnread: () => void;
   search: string;
@@ -31,6 +34,7 @@ export function InboxList({
           <span className="cin-list-title">{title}</span>
           <button type="button" className="cin-unread-toggle" onClick={onToggleUnread}>
             Unread
+            {unreadCount > 0 ? <span className="cin-fil-c red">{unreadCount}</span> : null}
             <span className={`cin-switch${unreadOnly ? " on" : ""}`} aria-hidden="true" />
           </button>
         </div>
@@ -62,7 +66,7 @@ export function InboxList({
                     {displayName(row.name)}
                     {row.starred ? (
                       <span className="cin-tinystar">
-                        <s-icon type="star-filled" size="small" />
+                        <StarIcon filled size={13} />
                       </span>
                     ) : null}
                   </span>
