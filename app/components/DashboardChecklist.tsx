@@ -1,57 +1,11 @@
 import { useState } from "react";
 import type { SetupChecklist } from "../lib/dashboard/dashboard.server";
+import { ProgressRing } from "./ui/Progress";
 
 // Setup checklist (spec 13, design dashboard.html .cl-head/.cl-row): SVG
 // progress ring N/6, To do / Done pills, deep links per step. Collapses with
 // a celebration state at 6/6. The embed step's "unknown" state (no
 // read_themes scope) renders a "Verify in theme editor" external link.
-
-const RING_RADIUS = 24;
-const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS; // ≈ 150.8, as in the design
-
-export function ProgressRing(props: { completed: number; total: number }) {
-  const fraction = props.total === 0 ? 0 : props.completed / props.total;
-  const offset = RING_CIRCUMFERENCE * (1 - fraction);
-  return (
-    <div style={{ position: "relative", width: 56, height: 56, flex: "none" }}>
-      <svg width="56" height="56" viewBox="0 0 56 56" role="img" aria-label={`${props.completed} of ${props.total} steps complete`}>
-        <circle cx="28" cy="28" r={RING_RADIUS} fill="none" stroke="#e9e9ec" strokeWidth="6" />
-        <circle
-          cx="28"
-          cy="28"
-          r={RING_RADIUS}
-          fill="none"
-          stroke="url(#cc-ring-gradient)"
-          strokeWidth="6"
-          strokeLinecap="round"
-          strokeDasharray={RING_CIRCUMFERENCE}
-          strokeDashoffset={offset}
-          transform="rotate(-90 28 28)"
-          style={{ transition: "stroke-dashoffset .4s ease" }}
-        />
-        <defs>
-          <linearGradient id="cc-ring-gradient" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stopColor="#7c3aed" />
-            <stop offset="1" stopColor="#3b82f6" />
-          </linearGradient>
-        </defs>
-      </svg>
-      <span
-        style={{
-          position: "absolute",
-          inset: 0,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: 13,
-          fontWeight: 700,
-        }}
-      >
-        {props.completed}/{props.total}
-      </span>
-    </div>
-  );
-}
 
 export function DashboardChecklist(props: {
   checklist: SetupChecklist;

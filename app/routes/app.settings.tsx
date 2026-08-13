@@ -14,6 +14,7 @@ import {
 } from "../lib/compliance/data-request.server";
 import type { ShopSettingsData } from "../lib/settings/schemas";
 import { SaveBar } from "../components/SaveBar";
+import { TabPills } from "../components/ui/TabPills";
 import { SettingsGeneral } from "../components/SettingsGeneral";
 import { SettingsChatbox } from "../components/SettingsChatbox";
 import { SettingsAvailability } from "../components/SettingsAvailability";
@@ -256,17 +257,11 @@ export default function SettingsPage() {
           </s-banner>
         ) : null}
 
-        <s-stack direction="inline" gap="small">
-          {TABS.map((tab) => (
-            <s-button
-              key={tab.view}
-              variant={activeTab === tab.view ? "primary" : "tertiary"}
-              onClick={() => go(tab.view)}
-            >
-              {tab.label}
-            </s-button>
-          ))}
-        </s-stack>
+        <TabPills
+          tabs={TABS.map((tab) => ({ id: tab.view, label: tab.label }))}
+          active={activeTab}
+          onChange={(view) => go(view)}
+        />
 
         {view === "general" ? (
           <SettingsGeneral
@@ -279,6 +274,7 @@ export default function SettingsPage() {
             shopDomain={data.shopDomain}
             apiKey={data.apiKey}
             owner={data.owner}
+            members={data.settings.team.members}
             onNameChange={(name) =>
               setDraft((d) => ({ ...d, storeInfo: { ...d.storeInfo, name } }))
             }

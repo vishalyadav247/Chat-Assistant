@@ -20,7 +20,7 @@ Admin views under `/app/ai-agent/instructions` (tabs: General Instructions / Pro
 
 ## Tab: Product recommendations
 
-- **Rules card**: toggle "Never recommend out-of-stock" (default ON; OOS always excluded from search — this toggle adds *substitution suggestion* behavior), toggle "Push overstock" (uses live inventory; optional `overstock` product tag boost).
+- **Rules card**: toggle "Never recommend out-of-stock" (default ON; **revised 2026-08-10, user decision**: the toggle now controls OOS exclusion itself — OFF lets unavailable products appear in recommendation cards. Stored in `shopSettings.recommendationRules.excludeOutOfStock`; enforced in hybrid search, browse fallback, custom-rec pool, and all card assembly. "Purchasable" = `stock > 0` OR any variant availableForSale, covering untracked inventory and "continue selling when out of stock". The originally-specced *substitution suggestion* behavior is still unbuilt), toggle "Push overstock" (uses live inventory; optional `overstock` product tag boost).
 - **App recommendations** (pre-configured intents; model `Recommendation`: shopId, title, triggerQuestions[], productIds[], status, lastModified):
   - Table Title | Products | Last modified | Status switch | edit/delete. Seeds on install: **Best sellers** ("What are your best sellers?", "Show me your top products"), **New arrivals** ("Any new items?", "What's new?").
   - Detail view (#viewRec): title, trigger-question chips (add/remove), status, Add products → **Browse products modal** (search, filter chips Vendors/Tag/Collections, checkbox rows w/ stock strings "297 in stock for 3 variants"/"Inventory not tracked", live "N selected" footer), product rows w/ view+remove. Cancel/Save.

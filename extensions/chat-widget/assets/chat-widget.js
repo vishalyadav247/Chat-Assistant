@@ -69,6 +69,8 @@
   var PRECHAT_KEY = "cc:prechat";
   var CONFIG_KEY = "cc:config";
   var POLL_KEY = "cc:poll";
+  var OPEN_KEY = "cc:open"; // "1" = panel open — survives page navigation
+  var SCREEN_KEY = "cc:screen";
   var DEFAULT_PLACEHOLDER = "Type your message…";
   var HUMAN_PLACEHOLDER = "A team member will reply here…";
   var CONFIG_TTL = 5 * 60 * 1000;
@@ -179,8 +181,19 @@
   getConfig().then(function (data) {
     if (!data || data.active === false || !data.widget) return;
     config = data;
-    ensureCss().then(mountLauncher).then(initCampaigns);
+    ensureCss().then(mountLauncher).then(initCampaigns).then(maybeRestoreOpen);
   });
+
+  /** Reopen the panel after a page navigation when it was open on the last
+   *  page (open/closed state + screen live in sessionStorage per tab). */
+  function maybeRestoreOpen() {
+    if (state.open || read(sessionStorage, OPEN_KEY) !== "1") return;
+    var screen = read(sessionStorage, SCREEN_KEY);
+    if (screen === "chat" || screen === "tracking") state.screen = screen;
+    ensureModules()
+      .then(openPanel)
+      .catch(function () { /* modules failed — stay closed, no errors */ });
+  }
 
   function themeVars(appearance) {
     if (appearance && appearance.colorMode === "solid") return { c1: appearance.solid, c2: appearance.solid };
@@ -205,6 +218,7 @@
     var btn = document.createElement("button");
     btn.type = "button";
     btn.className = "cw-launcher" + (lc.style !== "icon" ? " cw-launcher--pill" : "");
+    if (lc.bgColor) btn.style.background = lc.bgColor; // custom launcher bg (else brand CSS vars)
     btn.setAttribute("aria-label", lc.label || "Open chat");
     btn.setAttribute("aria-haspopup", "dialog");
     btn.setAttribute("aria-expanded", "false");
@@ -260,6 +274,7 @@
     ui.launcher.setAttribute("aria-expanded", "true");
     beacon("widget_opened", { pageType: pageType });
     state.open = true;
+    store(sessionStorage, OPEN_KEY, "1");
     var focusChat = config.widget.chatFocusMode && config.widget.liveChat;
     showScreen(focusChat ? "chat" : state.screen === "chat" ? "chat" : "home");
     if (state.pollTimer === null && isHumanMode()) startPolling();
@@ -272,6 +287,7 @@
     ui.launcher.style.display = "";
     ui.launcher.setAttribute("aria-expanded", "false");
     state.open = false;
+    store(sessionStorage, OPEN_KEY, "0");
     stopPolling();
     ui.launcher.focus();
   }
@@ -293,6 +309,7 @@
     ui.chatWrap.style.display = "flex";
     ui.chatWrap.style.flexDirection = "column";
     ui.chatWrap.style.gap = "12px";
+    ui.chatWrap.style.flex = "1"; // fill the body so starter chips can pin to the bottom
     ui.msgs = R.el("div", "cw-msgs", { "aria-live": "polite" });
     ui.chatWrap.appendChild(ui.msgs);
 
@@ -341,6 +358,8 @@
   // ── screens ──────────────────────────────────────────────────────────────
   function showScreen(name, payload) {
     state.screen = name;
+    // FAQ answers carry a payload that can't persist — restore lands on home.
+    store(sessionStorage, SCREEN_KEY, name === "faq" ? "home" : name);
     var w = config.widget;
     var chatFocus = w.chatFocusMode && w.liveChat;
     ui.back.style.display = name === "home" || (name === "chat" && chatFocus) ? "none" : "";
@@ -353,6 +372,17 @@
           onOpenChat: function () { showScreen("chat"); },
           onOpenTracking: function () { showScreen("tracking"); },
           onOpenFaq: function (faq) { showScreen("faq", faq); },
+          // Server-side FAQ search across ALL published FAQs (spec 05 delta
+          // closed) — resolves null on any failure so the renderer falls back
+          // to filtering the featured set client-side.
+          onFaqSearch: function (q) {
+            return fetch(base + "/faq-search?q=" + encodeURIComponent(q), {
+              headers: { Accept: "application/json" },
+            })
+              .then(function (res) { return res.ok ? res.json() : null; })
+              .then(function (data) { return data && data.faqs ? data.faqs : null; })
+              .catch(function () { return null; });
+          },
         }),
       );
     } else if (name === "chat") {
@@ -375,25 +405,77 @@
   function prepareChat() {
     if (!state.startersShown) {
       state.startersShown = true;
-      // Welcome bubble (offline variant when configured + currently offline).
-      var w = config.widget;
-      var offline = config.availability && config.availability.status !== "online";
-      var template =
-        offline && w.offlineMessageEnabled && w.offlineMessage
-          ? w.offlineMessage
-          : config.welcomeMessage;
-      appendEl(R.messageBubble("bot", R.welcomeText(template, customerName)).el);
-
-      if (w.starters.enabled && w.starters.items.length > 0) {
-        ui.starters = R.starterChips(w.starters.items, { onStarter: onStarter });
-        ui.chatWrap.appendChild(ui.starters);
-      }
-      // Guest mode: form is required before chat (design: "Require information
-      // before chat"). Lock input until submitted.
-      if (w.prechat.mode === "guest" && !prechatDone()) showPrechat(false);
+      // A conversation from earlier in this session (page navigation) restores
+      // its history from the server instead of showing the intro again.
+      if (state.conversationId) restoreHistory();
+      else renderIntro();
     }
     if (isHumanMode()) ui.inputEl.placeholder = HUMAN_PLACEHOLDER;
     lockInput(isInputLocked());
+  }
+
+  /** Welcome bubble + starter chips + guest prechat (first-time chat view). */
+  function renderIntro() {
+    // Welcome bubble (offline variant when configured + currently offline).
+    var w = config.widget;
+    var offline = config.availability && config.availability.status !== "online";
+    var template =
+      offline && w.offlineMessageEnabled && w.offlineMessage
+        ? w.offlineMessage
+        : config.welcomeMessage;
+    appendEl(R.messageBubble("bot", R.welcomeText(template, customerName)).el);
+
+    if (w.starters.enabled && w.starters.items.length > 0) {
+      ui.starters = R.starterChips(w.starters.items, { onStarter: onStarter });
+      ui.chatWrap.appendChild(ui.starters);
+    }
+    // Guest mode: form is required before chat (design: "Require information
+    // before chat"). Lock input until submitted.
+    if (w.prechat.mode === "guest" && !prechatDone()) showPrechat(false);
+  }
+
+  /** Rebuild the thread from the server (spec 05 delta: history survives
+   *  storefront navigation). Falls back to the intro on any failure. */
+  function restoreHistory() {
+    var loading = R.messageBubble("sys", "Loading conversation…");
+    appendEl(loading.el);
+    var done = function () {
+      if (loading.el.parentNode) loading.el.parentNode.removeChild(loading.el);
+    };
+    T.getJson(
+      base +
+        "/history?conversationId=" +
+        encodeURIComponent(state.conversationId) +
+        "&sessionId=" +
+        encodeURIComponent(sessionId(false)),
+    )
+      .then(function (data) {
+        done();
+        var msgs = (data && data.messages) || [];
+        if (msgs.length === 0) return renderIntro();
+        msgs.forEach(function (m) {
+          if (m.role === "in") {
+            appendEl(R.messageBubble("user", m.content).el);
+            state.shopperMessages++;
+          } else {
+            appendEl(
+              R.messageBubble("bot", m.content, m.author === "agent" ? "Team" : null).el,
+            );
+            if (m.productCards && m.productCards.length) {
+              appendEl(R.productCards(m.productCards, config.currency, { onAdd: onCardAdd }));
+            }
+          }
+        });
+        // Human-mode threads resume polling exactly where the last page left
+        // off (pollSince already restored from sessionStorage at boot).
+        if (data.mode === "human" && data.status !== "resolved" && state.open) startPolling();
+        scroll();
+      })
+      .catch(function () {
+        // Conversation gone/unreachable — start fresh like a new visitor.
+        done();
+        renderIntro();
+      });
   }
 
   function isInputLocked() {
@@ -628,6 +710,7 @@
   // view, once per session (sessionStorage key per campaign id).
   var CAMP_SEEN_PREFIX = "cc:camp:";
   var campaignShown = false;
+  var campaignCartTotal = null; // set when /cart.js was fetched — {{cart_total}} source
 
   function campSeen(id) {
     return read(sessionStorage, CAMP_SEEN_PREFIX + id) === "1";
@@ -641,16 +724,21 @@
     }
     if (candidates.length === 0) return;
     var ctx = { pageType: ccPageType(pageType), path: window.location.pathname, cart: null };
-    // /cart.js is fetched ONLY when a candidate campaign has cart conditions.
+    // /cart.js is fetched ONLY when a candidate campaign has cart conditions
+    // or renders the {{cart_total}} merge tag.
     var needsCart = candidates.some(function (c) {
       var t = c.trigger || {};
-      return (t.cartMinItems || 0) > 0 || (t.cartMinValue || 0) > 0;
+      if ((t.cartMinItems || 0) > 0 || (t.cartMinValue || 0) > 0) return true;
+      return /\{\{\s*cart_total\s*\}\}/.test(String(c.message || ""));
     });
     var ready = needsCart
       ? fetch("/cart.js", { headers: { Accept: "application/json" } })
           .then(function (res) { return res.ok ? res.json() : null; })
           .then(function (cart) {
-            if (cart) ctx.cart = { itemCount: cart.item_count || 0, totalValue: (cart.total_price || 0) / 100 };
+            if (cart) {
+              ctx.cart = { itemCount: cart.item_count || 0, totalValue: (cart.total_price || 0) / 100 };
+              campaignCartTotal = ctx.cart.totalValue;
+            }
           })
           .catch(function () { /* cart unknown → cart campaigns stay silent */ })
       : Promise.resolve();
@@ -686,7 +774,7 @@
         if (state.open) return;
         var bubble = R.campaignBubble(
           c,
-          { currency: config.currency, customerName: customerName },
+          { currency: config.currency, customerName: customerName, cartTotal: campaignCartTotal },
           {
             onDismiss: removeCampaignBubble,
             onCta: function (api) { handleCampaignCta(c, api); },

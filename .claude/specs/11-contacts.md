@@ -26,6 +26,7 @@ Coarse geo from request (country/city via CDN headers if available) — best-eff
 
 - **Stat tiles** (server-computed): Total contacts ("across all channels"), Customers ("have placed an order"), Leads ("shared contact info"), Anonymous ("not yet identified").
 - Panel: search name OR email; sort (v1: created desc; sort button decorative→implement created/name toggle); tabs All / Customer / Lead / Anonymous.
+- Revised 2026-08-12 (table-consistency pass + user removals): table uses shared DataTable furniture — tabs in the toolbar, collapsible search icon right, functional items-per-page (10/25/50), row selection with bulk **Export selected** (`scope: "selected"` + ids in exportContactsCsv). **Removed per user request**: the sort control (rows are always created-desc) and the header Export button + ContactsExportModal (component deleted). Export lives in the table toolbar as an `s-menu` button — **All contacts / Current page** — plus **Export selected** in the selection bar (all three scopes in exportContactsCsv).
 - Table: Name (avatar initials) | Email (`—` if empty) | Type badge | Channel | Location | Conversations (right-aligned). Row click → contact detail (v1: side panel with info + conversation list linking to inbox).
 - Pagination: 10/page, Page x/y, prev/next disabled states, rows-per-page select.
 - Empty state: "No contacts match your search."

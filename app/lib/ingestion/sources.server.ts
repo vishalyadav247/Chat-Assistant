@@ -477,7 +477,7 @@ export function parseCsvContent(text: string): ParsedCsv {
 }
 
 /** Minimal quote-aware CSV splitter (handles quoted commas/newlines, "" escapes). */
-function splitCsv(text: string): string[][] {
+export function splitCsv(text: string): string[][] {
   const records: string[][] = [];
   let record: string[] = [];
   let cell = "";

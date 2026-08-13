@@ -1,11 +1,12 @@
 import type { CsatSummary, ResolutionBreakdown } from "../lib/analytics/shared";
+import { BRAND } from "./ui/tokens";
 
 // Resolution donut + CSAT cards (spec 14, design analytics.html .donut-wrap /
 // .csat-*). Donut is an SVG circle with stroke-dasharray segments and 2px
 // surface gaps; center shows "N% resolved". Colors: AI #6d3bf5 / human #22b8d6
 // (matches the line-chart series identity) / unresolved neutral gray.
 
-const AI_COLOR = "#6d3bf5";
+const AI_COLOR = BRAND.accent;
 const HUMAN_COLOR = "#22b8d6";
 const UNRESOLVED_COLOR = "#d4d4d8";
 

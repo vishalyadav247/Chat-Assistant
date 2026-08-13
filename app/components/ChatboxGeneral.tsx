@@ -65,6 +65,7 @@ export function ChatboxGeneral(props: {
       </s-section>
 
       <s-section heading="Chatbox header">
+        <s-stack gap="base">
         <s-stack direction="inline" gap="base" alignItems="center">
           <s-thumbnail
             size="large"
@@ -99,19 +100,23 @@ export function ChatboxGeneral(props: {
             onChange({ ...value, header: { ...value.header, description: e.currentTarget.value } })
           }
         />
+        </s-stack>
       </s-section>
 
       <s-section heading="Contact & Chat">
+        <s-stack gap="base">
         <s-paragraph>Manage how customers reach and chat with you</s-paragraph>
-        <s-switch
-          label="Chat status"
-          checked={value.chatStatus}
-          onChange={(e) => onChange({ ...value, chatStatus: e.currentTarget.checked })}
-        />
-        <s-paragraph>
-          Set up online/offline status in{" "}
-          <Link to="/app/settings#availability">working hours settings</Link>
-        </s-paragraph>
+        <s-stack gap="small-300">
+          <s-switch
+            label="Chat status"
+            checked={value.chatStatus}
+            onChange={(e) => onChange({ ...value, chatStatus: e.currentTarget.checked })}
+          />
+          <s-paragraph>
+            Set up online/offline status in{" "}
+            <Link to="/app/settings#availability">working hours settings</Link>
+          </s-paragraph>
+        </s-stack>
         <s-divider />
         <s-switch
           label="Live chat"
@@ -129,54 +134,57 @@ export function ChatboxGeneral(props: {
           }
         />
         {methods.items.map((method, index) => (
-          <div key={method.type} {...methodDrag.rowProps(index)}>
-          <s-stack
-            direction="inline"
-            gap="small"
-            alignItems="end"
-          >
-            <DragHandle
-              label={`Reorder ${CONTACT_LABELS[method.type]}`}
-              drag={methodDrag.handleProps(index)}
-              onKeyMove={(d) => moveMethod(index, d === "up" ? -1 : 1)}
-            />
-            {method.type !== "email" ? (
-              <s-box minInlineSize="90px" maxInlineSize="90px">
+          // One aligned row per method: handle | fixed-width name | inputs
+          // (visible field labels off — they floated mid-row and misaligned
+          // everything) | delete. The value input flexes to fill the card.
+          <div key={method.type} data-drag-row {...methodDrag.rowProps(index)}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 0" }}>
+              <DragHandle
+                label={`Reorder ${CONTACT_LABELS[method.type]}`}
+                drag={methodDrag.handleProps(index)}
+                onKeyMove={(d) => moveMethod(index, d === "up" ? -1 : 1)}
+              />
+              <span style={{ width: 84, flexShrink: 0, fontWeight: 600, fontSize: 13 }}>
+                {CONTACT_LABELS[method.type]}
+              </span>
+              {method.type !== "email" ? (
+                <s-box minInlineSize="90px" maxInlineSize="90px">
+                  <s-text-field
+                    label={`${CONTACT_LABELS[method.type]} country code`}
+                    labelAccessibilityVisibility="exclusive"
+                    placeholder="+1"
+                    maxLength={8}
+                    value={method.countryCode ?? ""}
+                    onInput={(e) => {
+                      const items = [...methods.items];
+                      items[index] = { ...method, countryCode: e.currentTarget.value };
+                      setMethods(items);
+                    }}
+                  />
+                </s-box>
+              ) : null}
+              <div style={{ flex: 1, minWidth: 160 }}>
                 <s-text-field
-                  label={`${CONTACT_LABELS[method.type]} country code`}
+                  label={CONTACT_LABELS[method.type]}
                   labelAccessibilityVisibility="exclusive"
-                  placeholder="+1"
-                  maxLength={8}
-                  value={method.countryCode ?? ""}
+                  placeholder={method.type === "email" ? "support@example.com" : "555 000 0000"}
+                  maxLength={200}
+                  value={method.value}
                   onInput={(e) => {
                     const items = [...methods.items];
-                    items[index] = { ...method, countryCode: e.currentTarget.value };
+                    items[index] = { ...method, value: e.currentTarget.value };
                     setMethods(items);
                   }}
                 />
-              </s-box>
-            ) : null}
-            <s-box minInlineSize="200px">
-              <s-text-field
-                label={CONTACT_LABELS[method.type]}
-                placeholder={method.type === "email" ? "support@example.com" : "555 000 0000"}
-                maxLength={200}
-                value={method.value}
-                onInput={(e) => {
-                  const items = [...methods.items];
-                  items[index] = { ...method, value: e.currentTarget.value };
-                  setMethods(items);
-                }}
+              </div>
+              <s-button
+                icon="delete"
+                variant="tertiary"
+                tone="critical"
+                accessibilityLabel={`Remove ${CONTACT_LABELS[method.type]}`}
+                onClick={() => setMethods(methods.items.filter((_, i) => i !== index))}
               />
-            </s-box>
-            <s-button
-              icon="delete"
-              variant="tertiary"
-              tone="critical"
-              accessibilityLabel={`Remove ${CONTACT_LABELS[method.type]}`}
-              onClick={() => setMethods(methods.items.filter((_, i) => i !== index))}
-            />
-          </s-stack>
+            </div>
           </div>
         ))}
         {availableTypes.length > 0 ? (
@@ -199,29 +207,38 @@ export function ChatboxGeneral(props: {
             </s-select>
           </s-box>
         ) : null}
+        </s-stack>
       </s-section>
 
       <s-section>
-        <s-switch
-          label="Order tracking"
-          checked={value.orderTracking}
-          onChange={(e) => onChange({ ...value, orderTracking: e.currentTarget.checked })}
-        />
-        <s-paragraph>
-          Show the Order Tracking block to let customers track their orders. Select a tracking
-          method in <Link to="/app/settings#chatbox">Integration settings</Link>.
-        </s-paragraph>
+        <s-stack gap="base">
+        <s-stack gap="small-300">
+          <s-switch
+            label="Order tracking"
+            checked={value.orderTracking}
+            onChange={(e) => onChange({ ...value, orderTracking: e.currentTarget.checked })}
+          />
+          <s-paragraph>
+            Show the Order Tracking block to let customers track their orders. Select a tracking
+            method in <Link to="/app/settings#chatbox">Integration settings</Link>.
+          </s-paragraph>
+        </s-stack>
+        </s-stack>
       </s-section>
 
       <s-section>
-        <s-switch
-          label="FAQs"
-          checked={value.faqs}
-          onChange={(e) => onChange({ ...value, faqs: e.currentTarget.checked })}
-        />
-        <s-paragraph>
-          Show featured questions set up in <Link to="/app/ai-agent">FAQs settings</Link>.
-        </s-paragraph>
+        <s-stack gap="base">
+        <s-stack gap="small-300">
+          <s-switch
+            label="FAQs"
+            checked={value.faqs}
+            onChange={(e) => onChange({ ...value, faqs: e.currentTarget.checked })}
+          />
+          <s-paragraph>
+            Show featured questions set up in <Link to="/app/ai-agent">FAQs settings</Link>.
+          </s-paragraph>
+        </s-stack>
+        </s-stack>
       </s-section>
     </s-stack>
   );

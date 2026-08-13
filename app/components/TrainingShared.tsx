@@ -1,7 +1,8 @@
-import { useEffect, useRef } from "react";
-import { useFetcher } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import { useFetcher, useRevalidator } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import type { TrainingActionResult } from "../routes/app.ai-agent.training";
+import { TabPills } from "./ui/TabPills";
 
 // Shared bits for the AI Agent training tabs (spec 07).
 
@@ -34,6 +35,51 @@ export function useTrainingFetcher(onResult?: (result: TrainingActionResult) => 
   const pendingIntent = busy ? String(fetcher.formData?.get("intent") ?? "") : "";
 
   return { fetcher, submit, busy, pendingIntent };
+}
+
+/**
+ * Tracks a background sync job to completion. The sync intents only ENQUEUE a
+ * job; the job stamps SyncState.<type>SyncAt when it finishes. This hook polls
+ * the route loader until that timestamp moves past the value captured at
+ * start() — the same revalidation that flips `syncing` off also refreshes the
+ * table rows, so content and the completion toast land together.
+ */
+export function useSyncWatcher(lastSyncedAt: string | null, doneMessage: string) {
+  const shopify = useAppBridge();
+  const revalidator = useRevalidator();
+  const [syncing, setSyncing] = useState(false);
+  const baseline = useRef<string | null>(null);
+  const startedAt = useRef(0);
+
+  const start = () => {
+    baseline.current = lastSyncedAt;
+    startedAt.current = Date.now();
+    setSyncing(true);
+  };
+
+  useEffect(() => {
+    if (!syncing) return;
+    const id = setInterval(() => {
+      if (revalidator.state === "idle") revalidator.revalidate();
+    }, 2500);
+    return () => clearInterval(id);
+  }, [syncing, revalidator]);
+
+  useEffect(() => {
+    if (!syncing) return;
+    if (lastSyncedAt && lastSyncedAt !== baseline.current) {
+      setSyncing(false);
+      shopify.toast.show(doneMessage);
+    } else if (Date.now() - startedAt.current > 180_000) {
+      // Backstop so a failed job doesn't spin forever (jobs retry on their own).
+      setSyncing(false);
+      shopify.toast.show("Sync is taking longer than expected — check back shortly", {
+        isError: true,
+      });
+    }
+  }, [syncing, lastSyncedAt, doneMessage, shopify]);
+
+  return { syncing, start };
 }
 
 /** Learn card: title + count chip + description + optional master switch. */
@@ -70,48 +116,14 @@ export function LearnCard(props: {
   );
 }
 
-/** Sub-tab pill row (All / Active / Inactive, source-type filters, …). */
+/** Sub-tab pill row — thin wrapper over the shared TabPills (small size). */
 export function SubTabs<T extends string>(props: {
   tabs: { id: T; label: string }[];
   active: T;
   onChange: (tab: T) => void;
 }) {
   return (
-    <div
-      role="tablist"
-      style={{
-        display: "inline-flex",
-        gap: 4,
-        background: "var(--s-color-bg-fill-secondary, #f1f1f1)",
-        borderRadius: 10,
-        padding: 3,
-        width: "fit-content",
-        flexWrap: "wrap",
-      }}
-    >
-      {props.tabs.map((t) => (
-        <button
-          key={t.id}
-          role="tab"
-          type="button"
-          aria-selected={props.active === t.id}
-          onClick={() => props.onChange(t.id)}
-          style={{
-            border: "none",
-            cursor: "pointer",
-            font: "inherit",
-            fontSize: 12,
-            fontWeight: 650,
-            padding: "5px 12px",
-            borderRadius: 8,
-            background: props.active === t.id ? "var(--s-color-bg, #fff)" : "transparent",
-            boxShadow: props.active === t.id ? "0 1px 2px rgba(20,20,25,.12)" : "none",
-          }}
-        >
-          {t.label}
-        </button>
-      ))}
-    </div>
+    <TabPills tabs={props.tabs} active={props.active} onChange={props.onChange} size="small" />
   );
 }
 

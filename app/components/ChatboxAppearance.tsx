@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import type { WidgetSettingsData } from "../lib/settings/schemas";
 import { ChatboxUploadButton } from "./ChatboxUploadButton";
+import { TabPills } from "./ui/TabPills";
 
 // Chatbox → Appearance tab (spec 06): brand colors (solid/gradient presets +
 // custom hex), launcher style/icon/position, remove-branding toggle.
@@ -22,42 +22,12 @@ const GRADIENT_PRESETS: Array<{ start: string; end: string }> = [
   { start: "#3f3f46", end: "#18181b" },
 ];
 
-const HEX_RE = /^#[0-9a-fA-F]{6}$/;
-
-/** Hex input with a live color chip; commits only valid #rrggbb values. */
-function HexField(props: { label: string; value: string; onCommit: (hex: string) => void }) {
-  const [text, setText] = useState(props.value);
-  useEffect(() => setText(props.value), [props.value]);
-  const invalid = !HEX_RE.test(text);
-
-  return (
-    <s-stack direction="inline" gap="small" alignItems="end">
-      <s-box minInlineSize="130px">
-        <s-text-field
-          label={props.label}
-          value={text}
-          error={invalid ? "Use #rrggbb format" : undefined}
-          onInput={(e) => {
-            const next = e.currentTarget.value;
-            setText(next);
-            if (HEX_RE.test(next)) props.onCommit(next);
-          }}
-        />
-      </s-box>
-      <div
-        aria-hidden="true"
-        style={{
-          width: 28,
-          height: 28,
-          borderRadius: 7,
-          background: invalid ? "#e9e9ec" : text,
-          boxShadow: "inset 0 0 0 1px rgba(20,20,25,.12)",
-          marginBottom: 4,
-        }}
-      />
-    </s-stack>
-  );
-}
+/** s-color-field values normalized to #rrggbb ("" when unparsable) so the
+ *  schema regex never silently resets a stored color. */
+const normalizeHex = (raw: string): string => {
+  const v = raw.trim().replace(/^#/, "");
+  return /^[0-9a-fA-F]{6}$/.test(v) ? `#${v.toLowerCase()}` : "";
+};
 
 function Swatch(props: { background: string; selected: boolean; label: string; onSelect: () => void }) {
   return (
@@ -81,60 +51,33 @@ function Swatch(props: { background: string; selected: boolean; label: string; o
   );
 }
 
+/** Compact setting row: muted label column + control (launcher section). */
+function LauncherRow(props: { label: string; children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "96px minmax(0, 1fr)",
+        alignItems: "center",
+        gap: 12,
+      }}
+    >
+      <s-text tone="neutral">{props.label}</s-text>
+      <div style={{ minWidth: 0 }}>{props.children}</div>
+    </div>
+  );
+}
+
 const launcherGradient = (a: Appearance) =>
   a.colorMode === "solid"
     ? `linear-gradient(135deg, ${a.solid}, ${a.solid})`
     : `linear-gradient(135deg, ${a.gradient.start}, ${a.gradient.end})`;
-
-function LauncherCard(props: {
-  selected: boolean;
-  label: string;
-  onSelect: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      aria-pressed={props.selected}
-      onClick={props.onSelect}
-      style={{
-        border: props.selected ? "1.5px solid #141417" : "1.5px solid #dcdce1",
-        borderRadius: 11,
-        height: 62,
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 4,
-        cursor: "pointer",
-        background: props.selected ? "#fff" : "#fbfbfc",
-        flex: 1,
-        fontFamily: "inherit",
-      }}
-    >
-      {props.children}
-      <span style={{ fontSize: 11, color: "#6b6b73" }}>{props.label}</span>
-    </button>
-  );
-}
 
 const CHAT_ICON = (
   <svg width="15" height="15" viewBox="0 0 20 20" fill="none" aria-hidden="true">
     <path d="M4 5h12v8H8l-3 3V5Z" stroke="#fff" strokeWidth="1.5" strokeLinejoin="round" />
   </svg>
 );
-const HELP_ICON = (
-  <svg width="15" height="15" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-    <circle cx="10" cy="10" r="7.5" stroke="#fff" strokeWidth="1.4" />
-    <path
-      d="M8 8a2 2 0 1 1 2.6 1.9c-.4.2-.6.5-.6 1V11.5M10 14h.01"
-      stroke="#fff"
-      strokeWidth="1.4"
-      strokeLinecap="round"
-    />
-  </svg>
-);
-
 export function ChatboxAppearance(props: {
   value: WidgetSettingsData;
   removeBrandingAllowed: boolean;
@@ -149,11 +92,12 @@ export function ChatboxAppearance(props: {
   const setLauncher = (next: Partial<Launcher>) =>
     setAppearance({ launcher: { ...launcher, ...next } });
 
-  const bg = launcherGradient(appearance);
+  // Launcher previews honor the custom button background when set.
+  const bg = launcher.bgColor || launcherGradient(appearance);
   const iconChipStyle = (selected: boolean): React.CSSProperties => ({
-    width: 44,
-    height: 44,
-    borderRadius: 11,
+    width: 36,
+    height: 36,
+    borderRadius: 10,
     border: selected ? "1.5px solid #141417" : "1.5px solid #dcdce1",
     display: "flex",
     alignItems: "center",
@@ -166,6 +110,7 @@ export function ChatboxAppearance(props: {
   return (
     <s-stack gap="base">
       <s-section heading="Brand colors">
+        <s-stack gap="base">
         <s-stack direction="inline" gap="small">
           <s-button
             variant={appearance.colorMode === "solid" ? "primary" : "tertiary"}
@@ -194,11 +139,20 @@ export function ChatboxAppearance(props: {
                 />
               ))}
             </s-stack>
-            <HexField
-              label="Custom color"
-              value={appearance.solid}
-              onCommit={(solid) => setAppearance({ solid })}
-            />
+            <div style={{ width: 130 }}>
+              <s-color-field
+                label="Custom color"
+                value={appearance.solid}
+                onInput={(e) => {
+                  const solid = normalizeHex(e.currentTarget.value);
+                  if (solid) setAppearance({ solid });
+                }}
+                onChange={(e) => {
+                  const solid = normalizeHex(e.currentTarget.value);
+                  if (solid) setAppearance({ solid });
+                }}
+              />
+            </div>
           </>
         ) : (
           <>
@@ -217,99 +171,112 @@ export function ChatboxAppearance(props: {
               ))}
             </s-stack>
             <s-stack direction="inline" gap="base">
-              <HexField
-                label="Start color"
-                value={appearance.gradient.start}
-                onCommit={(start) => setAppearance({ gradient: { ...appearance.gradient, start } })}
-              />
-              <HexField
-                label="End color"
-                value={appearance.gradient.end}
-                onCommit={(end) => setAppearance({ gradient: { ...appearance.gradient, end } })}
-              />
+              <div style={{ width: 130 }}>
+                <s-color-field
+                  label="Start color"
+                  value={appearance.gradient.start}
+                  onInput={(e) => {
+                    const start = normalizeHex(e.currentTarget.value);
+                    if (start) setAppearance({ gradient: { ...appearance.gradient, start } });
+                  }}
+                  onChange={(e) => {
+                    const start = normalizeHex(e.currentTarget.value);
+                    if (start) setAppearance({ gradient: { ...appearance.gradient, start } });
+                  }}
+                />
+              </div>
+              <div style={{ width: 130 }}>
+                <s-color-field
+                  label="End color"
+                  value={appearance.gradient.end}
+                  onInput={(e) => {
+                    const end = normalizeHex(e.currentTarget.value);
+                    if (end) setAppearance({ gradient: { ...appearance.gradient, end } });
+                  }}
+                  onChange={(e) => {
+                    const end = normalizeHex(e.currentTarget.value);
+                    if (end) setAppearance({ gradient: { ...appearance.gradient, end } });
+                  }}
+                />
+              </div>
             </s-stack>
           </>
         )}
+        </s-stack>
       </s-section>
 
-      <s-section heading="Chatbox button">
-        <s-stack gap="small">
-          <s-text type="strong">Launcher</s-text>
-          <s-stack direction="inline" gap="small">
-            <LauncherCard
-              selected={launcher.style === "icon"}
-              label="Icon only"
-              onSelect={() => setLauncher({ style: "icon" })}
-            >
-              <span
-                style={{
-                  width: 30,
-                  height: 30,
-                  borderRadius: "50%",
-                  background: bg,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                {CHAT_ICON}
-              </span>
-            </LauncherCard>
-            <LauncherCard
-              selected={launcher.style === "label"}
-              label="Label only"
-              onSelect={() => setLauncher({ style: "label" })}
-            >
-              <span
-                style={{
-                  background: bg,
-                  color: "#fff",
-                  borderRadius: 20,
-                  padding: "5px 10px",
-                  fontSize: 11,
-                  fontWeight: 600,
-                }}
-              >
-                {launcher.label || "Chat with us"}
-              </span>
-            </LauncherCard>
-            <LauncherCard
-              selected={launcher.style === "icon_label"}
-              label="Icon & label"
-              onSelect={() => setLauncher({ style: "icon_label" })}
-            >
-              <span
-                style={{
-                  background: bg,
-                  color: "#fff",
-                  borderRadius: 20,
-                  padding: "5px 10px",
-                  fontSize: 11,
-                  fontWeight: 600,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 5,
-                }}
-              >
-                {CHAT_ICON}
-                {launcher.label || "Chat with us"}
-              </span>
-            </LauncherCard>
-          </s-stack>
-        </s-stack>
+      <s-section heading="Launcher">
+        <s-stack gap="base">
+        {/* Compact labeled rows (user request 2026-08-12): segmented style
+            pills + inline controls — the live preview shows the result. */}
+        <LauncherRow label="Style">
+          <TabPills
+            size="small"
+            tabs={[
+              { id: "icon", label: "Icon only" },
+              { id: "label", label: "Label only" },
+              { id: "icon_label", label: "Icon & label" },
+            ]}
+            active={launcher.style}
+            onChange={(style) => setLauncher({ style })}
+          />
+        </LauncherRow>
 
         {launcher.style !== "icon" ? (
-          <s-text-field
-            label="Launcher label"
-            value={launcher.label}
-            maxLength={40}
-            onInput={(e) => setLauncher({ label: e.currentTarget.value })}
-          />
+          <LauncherRow label="Label">
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 150 }}>
+                <s-text-field
+                  label="Launcher label"
+                  labelAccessibilityVisibility="exclusive"
+                  placeholder="Chat with us"
+                  value={launcher.label}
+                  maxLength={40}
+                  onInput={(e) => setLauncher({ label: e.currentTarget.value })}
+                />
+              </div>
+              <div style={{ width: 120 }}>
+                <s-color-field
+                  label="Label color"
+                  labelAccessibilityVisibility="exclusive"
+                  value={launcher.labelColor || "#ffffff"}
+                  onInput={(e) => setLauncher({ labelColor: normalizeHex(e.currentTarget.value) })}
+                  onChange={(e) => setLauncher({ labelColor: normalizeHex(e.currentTarget.value) })}
+                />
+              </div>
+            </div>
+          </LauncherRow>
         ) : null}
 
-        <s-stack gap="small">
-          <s-text type="strong">Launcher icon</s-text>
-          <s-stack direction="inline" gap="small" alignItems="center">
+        <LauncherRow label="Background">
+          {/* No checkbox (user request): a picked color overrides the brand
+              colors; Reset clears back to brand. */}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <div style={{ width: 120 }}>
+              <s-color-field
+                label="Button background color"
+                labelAccessibilityVisibility="exclusive"
+                value={
+                  launcher.bgColor ||
+                  (appearance.colorMode === "solid" ? appearance.solid : appearance.gradient.start)
+                }
+                onInput={(e) => setLauncher({ bgColor: normalizeHex(e.currentTarget.value) })}
+                onChange={(e) => setLauncher({ bgColor: normalizeHex(e.currentTarget.value) })}
+              />
+            </div>
+            {launcher.bgColor ? (
+              <s-button variant="tertiary" onClick={() => setLauncher({ bgColor: "" })}>
+                Reset to brand
+              </s-button>
+            ) : (
+              <s-text tone="neutral">Using brand colors</s-text>
+            )}
+          </div>
+        </LauncherRow>
+
+        <LauncherRow label="Icon">
+          <s-stack gap="small-300">
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <button
               type="button"
               aria-label="Chat icon"
@@ -319,8 +286,8 @@ export function ChatboxAppearance(props: {
             >
               <span
                 style={{
-                  width: 30,
-                  height: 30,
+                  width: 26,
+                  height: 26,
                   borderRadius: "50%",
                   background: bg,
                   display: "flex",
@@ -331,33 +298,12 @@ export function ChatboxAppearance(props: {
                 {CHAT_ICON}
               </span>
             </button>
-            <button
-              type="button"
-              aria-label="Help icon"
-              aria-pressed={launcher.icon === "help"}
-              style={iconChipStyle(launcher.icon === "help")}
-              onClick={() => setLauncher({ icon: "help" })}
-            >
-              <span
-                style={{
-                  width: 30,
-                  height: 30,
-                  borderRadius: "50%",
-                  background: bg,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                {HELP_ICON}
-              </span>
-            </button>
             {launcher.icon === "custom" && launcher.customIconUrl ? (
               <span style={iconChipStyle(true)} aria-label="Custom icon selected">
                 <img
                   src={launcher.customIconUrl}
                   alt="Custom launcher icon"
-                  style={{ width: 30, height: 30, borderRadius: 6, objectFit: "cover" }}
+                  style={{ width: 26, height: 26, borderRadius: 6, objectFit: "cover" }}
                 />
               </span>
             ) : null}
@@ -366,26 +312,33 @@ export function ChatboxAppearance(props: {
               label="Upload icon"
               onUploaded={(url) => setLauncher({ icon: "custom", customIconUrl: url })}
             />
+          </div>
+          <s-text tone="neutral">SVG, PNG or JPG · square, at least 64×64 px</s-text>
           </s-stack>
-        </s-stack>
+        </LauncherRow>
 
-        <s-box maxInlineSize="220px">
-          <s-select
-            label="Launcher position"
-            value={launcher.position}
-            onChange={(e) =>
-              setLauncher({ position: e.currentTarget.value as Launcher["position"] })
-            }
-          >
-            <s-option value="bottom_right">Bottom right</s-option>
-            <s-option value="bottom_left">Bottom left</s-option>
-            <s-option value="top_right">Top right</s-option>
-            <s-option value="top_left">Top left</s-option>
-          </s-select>
-        </s-box>
+        <LauncherRow label="Position">
+          <div style={{ width: 160 }}>
+            <s-select
+              label="Launcher position"
+              labelAccessibilityVisibility="exclusive"
+              value={launcher.position}
+              onChange={(e) =>
+                setLauncher({ position: e.currentTarget.value as Launcher["position"] })
+              }
+            >
+              <s-option value="bottom_right">Bottom right</s-option>
+              <s-option value="bottom_left">Bottom left</s-option>
+              <s-option value="top_right">Top right</s-option>
+              <s-option value="top_left">Top left</s-option>
+            </s-select>
+          </div>
+        </LauncherRow>
+        </s-stack>
       </s-section>
 
       <s-section>
+        <s-stack gap="base">
         <s-switch
           label={'Remove "Powered by ChatConvert"'}
           details="Hide the small ChatConvert credit at the bottom of the chat panel."
@@ -401,6 +354,7 @@ export function ChatboxAppearance(props: {
             </s-text>
           </s-stack>
         ) : null}
+        </s-stack>
       </s-section>
     </s-stack>
   );

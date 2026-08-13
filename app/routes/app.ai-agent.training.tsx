@@ -5,7 +5,17 @@ import { z } from "zod";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { resolveShopId } from "../lib/tenancy.server";
-import { displayQuota, getQuota, hasFeature, PlanGateError } from "../lib/billing/plans.server";
+import type { Prisma } from "@prisma/client";
+import {
+  displayQuota,
+  getQuota,
+  hasFeature,
+  requirePlan,
+  PlanGateError,
+} from "../lib/billing/plans.server";
+import { loadShopSettings } from "../lib/settings/save.server";
+import { shopSettingsSchema } from "../lib/settings/schemas";
+import { invalidateShopConfig } from "../lib/config/shop-config.server";
 import { enqueue } from "../lib/jobs/queue.server";
 import { JOBS } from "../lib/jobs/handlers.server";
 import { KNOWLEDGE_INGEST_JOB } from "../lib/ingestion/knowledge-jobs.server";
@@ -23,6 +33,7 @@ import {
   CSV_ROW_CAP,
 } from "../lib/ingestion/sources.server";
 import {
+  deleteCategory,
   deleteFaq,
   exportFaqCsv,
   importFaqCsv,
@@ -38,6 +49,7 @@ import {
   type FaqCategoryData,
 } from "../lib/faq/faq.server";
 import { FaqManager } from "../components/FaqManager";
+import { PageHeader } from "../components/ui/PageHeader";
 import { TrainingProductsTab } from "../components/TrainingProductsTab";
 import { TrainingCollectionsTab } from "../components/TrainingCollectionsTab";
 import { TrainingDiscountsTab } from "../components/TrainingDiscountsTab";
@@ -73,6 +85,10 @@ export interface DiscountRow {
   title: string;
   summary: string;
   status: string;
+  method: string; // code | automatic
+  discountType: string; // amount_off_order | amount_off_products | free_shipping | bxgy
+  usedCount: number;
+  learnEnabled: boolean;
   startsAt: string | null;
   endsAt: string | null;
 }
@@ -140,7 +156,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = await resolveShopId(session.shop);
 
-  const [shop, products, collections, discounts, syncState, faqTree, sources, suggested] =
+  const [shop, products, collections, discounts, syncState, faqTree, sources, suggested, shopSettings] =
     await Promise.all([
       db.shop.findUnique({
         where: { id: shopId },
@@ -179,6 +195,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           title: true,
           summary: true,
           status: true,
+          method: true,
+          discountType: true,
+          usedCount: true,
+          learnEnabled: true,
           startsAt: true,
           endsAt: true,
         },
@@ -187,6 +207,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       listFaqTree(shopId),
       listSources(shopId),
       listSuggested(shopId),
+      loadShopSettings(shopId),
     ]);
 
   const plan = shop?.plan ?? "free";
@@ -300,7 +321,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     discountGate: {
       showBanner: !hasFeature(plan, "discount_realtime_sync"),
       realtime: hasFeature(plan, "discount_realtime_sync"),
+      realtimeEnabled: shopSettings.discountRealtime,
     },
+    // Master training permissions (spec 07) — the Learn card switches.
+    learnMaster: shopSettings.learn,
   };
 };
 
@@ -370,19 +394,88 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
       case "sync-discounts":
         await enqueue(JOBS.discountSync, { shopDomain });
         return { intent, ok: true, message: "Discount sync started" };
+      case "discount-realtime": {
+        const enabled = str("enabled") === "true";
+        requirePlan(
+          (await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } }))?.plan ??
+            "free",
+          "discount_realtime_sync",
+        );
+        const current = await loadShopSettings(shopId);
+        const validated = shopSettingsSchema.parse({ ...current, discountRealtime: enabled });
+        await db.shopSettings.upsert({
+          where: { shopId },
+          update: { settings: validated as unknown as Prisma.InputJsonObject },
+          create: { shopId, settings: validated as unknown as Prisma.InputJsonObject },
+        });
+        invalidateShopConfig(shopId);
+        return {
+          intent,
+          ok: true,
+          message: enabled ? "Real-time discount sync on" : "Real-time discount sync off",
+        };
+      }
+      case "learn-master": {
+        // Master training permission per data type (spec 07, user decision
+        // 2026-08-12): shop-level gate independent of per-row learnEnabled.
+        const type = str("type");
+        if (type !== "products" && type !== "collections" && type !== "discounts")
+          return { intent, ok: false, error: "Unknown learn type" };
+        const enabled = str("enabled") === "true";
+        const current = await loadShopSettings(shopId);
+        const validated = shopSettingsSchema.parse({
+          ...current,
+          learn: { ...current.learn, [type]: enabled },
+        });
+        await db.shopSettings.upsert({
+          where: { shopId },
+          update: { settings: validated as unknown as Prisma.InputJsonObject },
+          create: { shopId, settings: validated as unknown as Prisma.InputJsonObject },
+        });
+        invalidateShopConfig(shopId);
+        return {
+          intent,
+          ok: true,
+          message: enabled ? `AI learning for ${type} on` : `AI learning for ${type} off`,
+        };
+      }
+      case "discounts-learn": {
+        // Bulk/per-row AI flag (app-only per user decision 2026-08-12 — never
+        // mutates the discount in Shopify). Affects activeDiscountContext.
+        const ids = str("ids").split(",").filter(Boolean);
+        const enabled = str("enabled") === "true";
+        if (ids.length === 0) return { intent, ok: false, error: "No discounts selected" };
+        await db.discount.updateMany({
+          where: { id: { in: ids }, shopId },
+          data: { learnEnabled: enabled },
+        });
+        return {
+          intent,
+          ok: true,
+          message: enabled
+            ? `AI enabled for ${ids.length} discount${ids.length === 1 ? "" : "s"}`
+            : `AI disabled for ${ids.length} discount${ids.length === 1 ? "" : "s"}`,
+        };
+      }
       case "product-learn":
         await db.product.updateMany({
           where: { id: str("id"), shopId },
           data: { learnEnabled: str("enabled") === "true" },
         });
         return { intent, ok: true };
-      case "products-learn-all": {
+      case "products-learn": {
+        // Bulk learn toggle from table row selection (spec 07).
+        const ids = str("ids").split(",").filter(Boolean);
         const enabled = str("enabled") === "true";
-        await db.product.updateMany({ where: { shopId }, data: { learnEnabled: enabled } });
+        if (ids.length === 0) return { intent, ok: false, error: "No products selected" };
+        await db.product.updateMany({
+          where: { id: { in: ids }, shopId },
+          data: { learnEnabled: enabled },
+        });
         return {
           intent,
           ok: true,
-          message: enabled ? "AI will learn all products" : "Product learning turned off",
+          message: `Learning ${enabled ? "enabled" : "disabled"} for ${ids.length} product${ids.length === 1 ? "" : "s"}`,
         };
       }
       case "collection-learn":
@@ -391,13 +484,19 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
           data: { learnEnabled: str("enabled") === "true" },
         });
         return { intent, ok: true };
-      case "collections-learn-all": {
+      case "collections-learn": {
+        // Bulk learn toggle from table row selection (spec 07).
+        const ids = str("ids").split(",").filter(Boolean);
         const enabled = str("enabled") === "true";
-        await db.collection.updateMany({ where: { shopId }, data: { learnEnabled: enabled } });
+        if (ids.length === 0) return { intent, ok: false, error: "No collections selected" };
+        await db.collection.updateMany({
+          where: { id: { in: ids }, shopId },
+          data: { learnEnabled: enabled },
+        });
         return {
           intent,
           ok: true,
-          message: enabled ? "AI will learn all collections" : "Collection learning turned off",
+          message: `Learning ${enabled ? "enabled" : "disabled"} for ${ids.length} collection${ids.length === 1 ? "" : "s"}`,
         };
       }
 
@@ -473,6 +572,12 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
       case "category-save":
         await saveCategory(shopId, json("payload"));
         return { intent, ok: true, message: "Category saved" };
+      case "category-delete": {
+        const ok = await deleteCategory(shopId, str("id"));
+        return ok
+          ? { intent, ok: true, message: "Category deleted — its FAQs moved to Uncategorized" }
+          : { intent, ok: false, error: "This category can't be deleted" };
+      }
       case "category-feature":
         await setCategoryFeatured(shopId, str("id"), str("featured") === "true");
         return { intent, ok: true };
@@ -784,56 +889,18 @@ export default function TrainingDataPage() {
   return (
     <s-page heading="Training data">
       <s-stack gap="base">
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <s-button
-            icon="arrow-left"
-            variant="tertiary"
-            accessibilityLabel="Back to AI Agent"
-            onClick={() => navigate("/app/ai-agent")}
-          >
-            AI Agent
-          </s-button>
-          <div
-            role="tablist"
-            style={{
-              display: "flex",
-              gap: 4,
-              background: "var(--s-color-bg-fill-secondary, #f1f1f1)",
-              borderRadius: 12,
-              padding: 4,
-              flexWrap: "wrap",
-            }}
-          >
-            {TABS.map((t) => (
-              <button
-                key={t.id}
-                role="tab"
-                type="button"
-                aria-selected={tab === t.id}
-                onClick={() => setTab(t.id)}
-                style={{
-                  border: "none",
-                  cursor: "pointer",
-                  font: "inherit",
-                  fontWeight: 600,
-                  fontSize: 13,
-                  padding: "7px 14px",
-                  borderRadius: 8,
-                  background: tab === t.id ? "var(--s-color-bg, #fff)" : "transparent",
-                  boxShadow: tab === t.id ? "0 1px 3px rgba(20,20,25,.15)" : "none",
-                }}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-          <span style={{ marginLeft: "auto" }}>
+        <PageHeader
+          backTo="/app/ai-agent"
+          backLabel="AI Agent"
+          tabs={TABS}
+          activeTab={tab}
+          onTabChange={setTab}
+          toolbar={
             <s-button variant="tertiary" onClick={() => navigate("/app/ai-agent/test")}>
               Test AI
-              
             </s-button>
-          </span>
-        </div>
+          }
+        />
 
         {tab === "products" ? (
           <TrainingProductsTab
@@ -843,17 +910,25 @@ export default function TrainingDataPage() {
             lastSyncedAt={data.sync.productSyncAt}
             syncStatus={data.sync.status}
             currency={data.shop.currency}
+            masterEnabled={data.learnMaster.products}
           />
         ) : null}
         {tab === "collections" ? (
-          <TrainingCollectionsTab rows={data.collections} lastSyncedAt={data.sync.collectionSyncAt} />
+          <TrainingCollectionsTab
+            rows={data.collections}
+            lastSyncedAt={data.sync.collectionSyncAt}
+            masterEnabled={data.learnMaster.collections}
+          />
         ) : null}
         {tab === "discounts" ? (
           <TrainingDiscountsTab
             rows={data.discounts}
             lastSyncedAt={data.sync.discountSyncAt}
+            masterEnabled={data.learnMaster.discounts}
             showUpgradeBanner={data.discountGate.showBanner}
             realtime={data.discountGate.realtime}
+            realtimeEnabled={data.discountGate.realtimeEnabled}
+            shopDomain={data.shop.domain}
           />
         ) : null}
         {tab === "faqs" ? (

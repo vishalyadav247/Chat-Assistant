@@ -3,14 +3,15 @@
 // pulling server-only code into the client bundle (same split as
 // dashboard.server.ts types vs DashboardOverview).
 
-export type AnalyticsRange = "7d" | "30d" | "3m";
+export type AnalyticsRange = "7d" | "30d" | "3m" | "12m";
 
-export const ANALYTICS_RANGES: AnalyticsRange[] = ["7d", "30d", "3m"];
+export const ANALYTICS_RANGES: AnalyticsRange[] = ["7d", "30d", "3m", "12m"];
 
 export const ANALYTICS_RANGE_LABELS: Record<AnalyticsRange, string> = {
   "7d": "Last 7 days",
   "30d": "Last 30 days",
   "3m": "Last 3 months",
+  "12m": "Last 12 months",
 };
 
 export interface SeriesPoint {

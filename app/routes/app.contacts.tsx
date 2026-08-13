@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData, useRouteError, useSearchParams } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -12,7 +12,8 @@ import {
   listContacts,
   reclassifyPendingContacts,
 } from "../lib/contacts/contacts.server";
-import { StatGrid, StatTile } from "../components/StatTile";
+import { StatGrid, StatTile } from "../components/ui/StatTile";
+import { TabPills } from "../components/ui/TabPills";
 import { DataTable } from "../components/DataTable";
 import {
   CHANNEL_LABELS,
@@ -26,7 +27,6 @@ import {
   type ContactType,
 } from "../components/ContactsShared";
 import { ContactDetailPanel } from "../components/ContactDetailPanel";
-import { ContactsExportModal, type ExportScope } from "../components/ContactsExportModal";
 
 // Contacts CRM (spec 11, design contacts.html): stat tiles, tabbed + searchable
 // contact table with conversation counts, contact detail side panel, CSV export
@@ -65,12 +65,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = String(formData.get("intent") ?? "");
 
   if (intent === "export") {
-    const scope: ExportScope = formData.get("scope") === "all" ? "all" : "page";
+    const scopeRaw = String(formData.get("scope") ?? "page");
+    const scope = scopeRaw === "all" || scopeRaw === "selected" ? scopeRaw : ("page" as const);
+    const ids = String(formData.get("ids") ?? "").split(",").filter(Boolean);
     const page = Math.max(1, Number(formData.get("page") ?? 1) || 1);
+    const perPage = Number(formData.get("perPage") ?? 0);
+    const pageSize = [10, 25, 50].includes(perPage) ? perPage : undefined;
     const q = String(formData.get("q") ?? "");
     const sort: ContactSort = formData.get("sort") === "name" ? "name" : "created";
     const type = parseType(formData.get("type") as string | null);
-    const csv = await exportContactsCsv(shopId, { scope, page, q, sort, type });
+    const csv = await exportContactsCsv(shopId, { scope, ids, page, pageSize, q, sort, type });
     const stamp = new Date().toISOString().slice(0, 10);
     return { intent: "export" as const, filename: `contacts-${stamp}.csv`, csv };
   }
@@ -97,9 +101,8 @@ export default function ContactsPage() {
   const tab = parseType(searchParams.get("type")) ?? "all";
 
   const [query, setQuery] = useState("");
-  const [sort, setSort] = useState<ContactSort>("created");
   const [page, setPage] = useState(1);
-  const [exportOpen, setExportOpen] = useState(false);
+  const [perPage, setPerPage] = useState(CONTACTS_PAGE_SIZE);
   const [detailOpen, setDetailOpen] = useState(false);
 
   const exportFetcher = useFetcher<typeof action>();
@@ -118,28 +121,9 @@ export default function ContactsPage() {
     );
   };
 
-  // Client-side search + sort mirror the server rules (contains-insensitive on
-  // name OR email; created-desc vs name-asc nulls-last) so a "Current page"
-  // export re-computes the exact visible slice server-side.
-  const rows = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const filtered = q
-      ? data.contacts.filter(
-          (c) =>
-            (c.name ?? "").toLowerCase().includes(q) ||
-            (c.email ?? "").toLowerCase().includes(q),
-        )
-      : [...data.contacts];
-    if (sort === "name") {
-      filtered.sort((a, b) => {
-        if (!a.name && !b.name) return 0;
-        if (!a.name) return 1;
-        if (!b.name) return -1;
-        return a.name.localeCompare(b.name);
-      });
-    }
-    return filtered;
-  }, [data.contacts, query, sort]);
+  // Rows keep the server order (created-desc). Search lives in DataTable with
+  // the same contains-insensitive rule the export re-computes server-side.
+  const rows = data.contacts;
 
   // Export round-trip → client-side download. In the embedded admin only
   // App-Bridge-authenticated fetches carry the session token (a document POST
@@ -163,19 +147,20 @@ export default function ContactsPage() {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      setExportOpen(false);
       shopify.toast.show("Contacts exported");
     }
   }, [exportFetcher.state, exportFetcher.data, shopify]);
 
-  const runExport = (scope: ExportScope) => {
+  const runExport = (scope: "all" | "page" | "selected", ids: string[] = []) => {
     exportFetcher.submit(
       {
         intent: "export",
         scope,
+        ids: ids.join(","),
         page: String(page),
+        perPage: String(perPage),
         q: query,
-        sort,
+        sort: "created",
         type: tab === "all" ? "" : tab,
       },
       { method: "post" },
@@ -192,113 +177,93 @@ export default function ContactsPage() {
 
   return (
     <s-page heading="Contacts">
-      <s-button slot="primary-action" variant="primary" onClick={() => setExportOpen(true)}>
-        Export
-      </s-button>
-
       <s-stack gap="base">
-        <StatGrid>
-          <StatTile
-            label="Total contacts"
-            value={String(data.stats.total)}
-            sub="across all channels"
-          />
-          <StatTile
-            label="Customers"
-            value={String(data.stats.customers)}
-            sub="have placed an order"
-          />
-          <StatTile label="Leads" value={String(data.stats.leads)} sub="shared contact info" />
-          <StatTile
-            label="Anonymous"
-            value={String(data.stats.anonymous)}
-            sub="not yet identified"
-          />
-        </StatGrid>
+        <s-section heading="Overview">
+          <StatGrid>
+            <StatTile
+              label="Total contacts"
+              value={String(data.stats.total)}
+              icon="person-list"
+              tone="accent"
+              sub="across all channels"
+            />
+            <StatTile
+              label="Customers"
+              value={String(data.stats.customers)}
+              icon="cart"
+              tone="success"
+              sub="have placed an order"
+            />
+            <StatTile
+              label="Leads"
+              value={String(data.stats.leads)}
+              icon="email"
+              tone="info"
+              sub="shared contact info"
+            />
+            <StatTile
+              label="Anonymous"
+              value={String(data.stats.anonymous)}
+              icon="person"
+              tone="neutral"
+              sub="not yet identified"
+            />
+          </StatGrid>
+        </s-section>
 
         <s-section>
           <s-stack gap="base">
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <input
-                type="search"
-                value={query}
-                placeholder="Search by name or email"
-                onChange={(e) => {
-                  setQuery(e.currentTarget.value);
-                  setPage(1);
-                }}
-                style={{
-                  flex: 1,
-                  padding: "8px 12px",
-                  borderRadius: 10,
-                  border: "1px solid var(--s-color-border, #d4d4d4)",
-                  font: "inherit",
-                }}
-              />
-              <s-button
-                variant="tertiary"
-                accessibilityLabel={
-                  sort === "created" ? "Sort by name (A–Z)" : "Sort by newest first"
-                }
-                onClick={() => {
-                  setSort((s) => (s === "created" ? "name" : "created"));
-                  setPage(1);
-                }}
-              >
-                {sort === "created" ? "↕ Newest" : "↕ Name A–Z"}
-              </s-button>
-            </div>
-
-            <div role="tablist" style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-              {TABS.map((t) => (
-                <button
-                  key={t.id}
-                  role="tab"
-                  type="button"
-                  aria-selected={tab === t.id}
-                  onClick={() => setTab(t.id)}
-                  style={{
-                    border: "none",
-                    cursor: "pointer",
-                    font: "inherit",
-                    fontWeight: 600,
-                    fontSize: 13,
-                    padding: "7px 14px",
-                    borderRadius: 9,
-                    background:
-                      tab === t.id ? "var(--s-color-bg-fill-secondary, #f1f1f1)" : "transparent",
-                  }}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
-
             <DataTable
               rows={rows}
               emptyMessage="No contacts match your search."
-              perPage={CONTACTS_PAGE_SIZE}
+              searchPlaceholder="Search by name or email"
+              searchFn={(row, q) =>
+                (row.name ?? "").toLowerCase().includes(q) ||
+                (row.email ?? "").toLowerCase().includes(q)
+              }
+              search={query}
+              onSearchChange={(value) => {
+                setQuery(value);
+                setPage(1);
+              }}
+              perPage={perPage}
+              onPerPageChange={(next) => {
+                setPerPage(next);
+                setPage(1);
+              }}
               page={page}
               onPageChange={setPage}
               onRowClick={openDetail}
-              footerExtra={
-                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-                  <s-text tone="neutral">Rows per page</s-text>
-                  <select
-                    value={String(CONTACTS_PAGE_SIZE)}
-                    disabled
-                    aria-label="Rows per page"
-                    style={{
-                      font: "inherit",
-                      padding: "4px 8px",
-                      borderRadius: 8,
-                      border: "1px solid var(--s-color-border, #d4d4d4)",
-                    }}
+              toolbar={<TabPills tabs={TABS} active={tab} onChange={setTab} />}
+              toolbarEnd={
+                <>
+                  <s-button
+                    variant="primary"
+                    icon="export"
+                    disabled={exportFetcher.state !== "idle"}
+                    commandFor="contacts-export-menu"
                   >
-                    <option value="10">10</option>
-                  </select>
-                </label>
+                    Export
+                  </s-button>
+                  <s-menu id="contacts-export-menu" accessibilityLabel="Export contacts">
+                    <s-button onClick={() => runExport("all")}>All contacts</s-button>
+                    <s-button onClick={() => runExport("page")}>Current page</s-button>
+                  </s-menu>
+                </>
               }
+              searchFieldBelow
+              searchAlwaysOpen
+              bulkActions={(ids, clear) => (
+                <s-button
+                  disabled={exportFetcher.state !== "idle"}
+                  onClick={() => {
+                    runExport("selected", ids);
+                    clear();
+                  }}
+                >
+                  Export selected
+                </s-button>
+              )}
               columns={[
                 {
                   key: "name",
@@ -346,13 +311,6 @@ export default function ContactsPage() {
           </s-stack>
         </s-section>
       </s-stack>
-
-      <ContactsExportModal
-        open={exportOpen}
-        exporting={exportFetcher.state !== "idle"}
-        onClose={() => setExportOpen(false)}
-        onExport={runExport}
-      />
 
       <ContactDetailPanel
         open={detailOpen}

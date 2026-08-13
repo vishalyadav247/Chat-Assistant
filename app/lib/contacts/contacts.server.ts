@@ -150,8 +150,12 @@ export async function reclassifyPendingContacts(shopId: string): Promise<number>
 }
 
 export interface ExportOptions extends ContactListOptions {
-  scope: "page" | "all";
+  scope: "page" | "all" | "selected";
   page?: number;
+  /** Rows per page for scope "page" (the table's items-per-page selector). */
+  pageSize?: number;
+  /** Contact ids for scope "selected" (bulk-action export). */
+  ids?: string[];
 }
 
 function csvField(value: string): string {
@@ -159,16 +163,21 @@ function csvField(value: string): string {
 }
 
 /** Build the export CSV (UTF-8). scope "page" re-slices the same filtered +
- *  sorted list the table shows (10/page); "all" exports every matching row. */
+ *  sorted list the table shows (pageSize/page from the table state); "selected"
+ *  exports the bulk-selected ids; "all" exports every matching row. */
 export async function exportContactsCsv(shopId: string, opts: ExportOptions): Promise<string> {
   const all = await listContacts(shopId, opts);
+  const pageSize = opts.pageSize && opts.pageSize > 0 ? opts.pageSize : CONTACTS_PAGE_SIZE;
+  const idSet = new Set(opts.ids ?? []);
   const rows =
     opts.scope === "page"
       ? all.slice(
-          (Math.max(1, opts.page ?? 1) - 1) * CONTACTS_PAGE_SIZE,
-          Math.max(1, opts.page ?? 1) * CONTACTS_PAGE_SIZE,
+          (Math.max(1, opts.page ?? 1) - 1) * pageSize,
+          Math.max(1, opts.page ?? 1) * pageSize,
         )
-      : all;
+      : opts.scope === "selected"
+        ? all.filter((c) => idSet.has(c.id))
+        : all;
 
   const header = [
     "name",

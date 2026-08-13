@@ -2,10 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import { useFetcher } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
-import type { ShopSettingsData } from "../lib/settings/schemas";
+import type { ShopSettingsData, TeamMemberData } from "../lib/settings/schemas";
+import { BrowseModalShell } from "./BrowseProductsModal";
+import { ConfirmDeleteModal } from "./ui/ConfirmDeleteModal";
 
 // Settings → General tab (spec 16): store info + logo, theme + embed status,
-// inbox auto-resolution, team member table (v1 single-user).
+// inbox auto-resolution, team roster (invite/role/remove — powers inbox
+// assignment; login access itself is managed by Shopify staff accounts).
 
 type Inbox = ShopSettingsData["inbox"];
 type Theme = ShopSettingsData["theme"];
@@ -15,6 +18,8 @@ export interface TeamMemberRow {
   email: string;
   since: string;
 }
+
+const EMPTY_INVITE = { name: "", email: "", role: "agent" as "agent" | "admin" };
 
 export function SettingsGeneral(props: {
   name: string;
@@ -26,6 +31,7 @@ export function SettingsGeneral(props: {
   shopDomain: string;
   apiKey?: string;
   owner: TeamMemberRow;
+  members: TeamMemberData[];
   onNameChange: (name: string) => void;
   onThemeChange: (theme: Theme) => void;
   onInboxChange: (inbox: Inbox) => void;
@@ -34,6 +40,40 @@ export function SettingsGeneral(props: {
   const uploadFetcher = useFetcher<{ ok: boolean; error?: string; logoUrl?: string }>();
   const fileRef = useRef<HTMLInputElement>(null);
   const [teamQuery, setTeamQuery] = useState("");
+
+  // ── Team roster (self-contained fetcher, like the logo upload) ────────────
+  const teamFetcher = useFetcher<{ ok: boolean; intent?: string; error?: string }>();
+  const teamBusy = teamFetcher.state !== "idle";
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [invite, setInvite] = useState(EMPTY_INVITE);
+  const [removeTarget, setRemoveTarget] = useState<TeamMemberData | null>(null);
+  const processedTeam = useRef<unknown>(null);
+  useEffect(() => {
+    if (teamFetcher.state !== "idle" || !teamFetcher.data) return;
+    if (processedTeam.current === teamFetcher.data) return;
+    processedTeam.current = teamFetcher.data;
+    const result = teamFetcher.data;
+    if (!result.intent?.startsWith("team-")) return;
+    if (result.ok) {
+      shopify.toast.show(
+        result.intent === "team-invite"
+          ? "Member added"
+          : result.intent === "team-remove"
+            ? "Member removed"
+            : "Role updated",
+      );
+      setInviteOpen(false);
+      setInvite(EMPTY_INVITE);
+      setRemoveTarget(null);
+    } else if (result.error) {
+      shopify.toast.show(result.error, { isError: true });
+    }
+  }, [teamFetcher.state, teamFetcher.data, shopify]);
+
+  const submitTeam = (intent: string, payload: Record<string, unknown>) =>
+    teamFetcher.submit({ intent, payload: JSON.stringify(payload) }, { method: "post" });
+
+  const inviteValid = invite.name.trim().length > 0 && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(invite.email.trim());
 
   const uploading = uploadFetcher.state !== "idle";
 
@@ -68,9 +108,10 @@ export function SettingsGeneral(props: {
       .toUpperCase() || "S";
 
   const query = teamQuery.trim().toLowerCase();
-  const members = [props.owner].filter(
-    (m) => !query || m.name.toLowerCase().includes(query) || m.email.toLowerCase().includes(query),
-  );
+  const matches = (name: string, email: string) =>
+    !query || name.toLowerCase().includes(query) || email.toLowerCase().includes(query);
+  const ownerVisible = matches(props.owner.name, props.owner.email);
+  const visibleMembers = props.members.filter((m) => matches(m.name, m.email));
 
   const embedBadge =
     props.embedStatus === "on"
@@ -191,14 +232,17 @@ export function SettingsGeneral(props: {
         ) : null}
       </s-section>
 
-      <s-section heading="Team member">
+      <s-section heading="Team members">
         <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">
           <s-paragraph>Invite and manage your team members</s-paragraph>
-          <s-button disabled={true} icon="person-add">
+          <s-button icon="person-add" variant="primary" onClick={() => setInviteOpen(true)}>
             Invite member
-            <s-tooltip>Team invites are coming soon</s-tooltip>
           </s-button>
         </s-stack>
+        <s-banner tone="info">
+          Members appear here for inbox assignment and reporting. To let them open ChatConvert,
+          also give them staff access in your Shopify admin (Settings → Users and permissions).
+        </s-banner>
         <s-search-field
           label="Search team members"
           labelAccessibilityVisibility="exclusive"
@@ -213,28 +257,145 @@ export function SettingsGeneral(props: {
             <s-table-header>Member since</s-table-header>
             <s-table-header>Role</s-table-header>
             <s-table-header>Status</s-table-header>
+            <s-table-header> </s-table-header>
           </s-table-header-row>
           <s-table-body>
-            {members.map((member) => (
-              <s-table-row key={member.email}>
+            {ownerVisible ? (
+              <s-table-row>
                 <s-table-cell>
                   <s-stack direction="inline" gap="small" alignItems="center">
-                    <s-avatar size="small" initials={initials} alt={member.name} />
+                    <s-avatar size="small" initials={initials} alt={props.owner.name} />
+                    <s-text>{props.owner.name}</s-text>
+                  </s-stack>
+                </s-table-cell>
+                <s-table-cell>{props.owner.email}</s-table-cell>
+                <s-table-cell>{props.owner.since}</s-table-cell>
+                <s-table-cell>Owner</s-table-cell>
+                <s-table-cell>
+                  <s-badge tone="success">Active</s-badge>
+                </s-table-cell>
+                <s-table-cell> </s-table-cell>
+              </s-table-row>
+            ) : null}
+            {visibleMembers.map((member) => (
+              <s-table-row key={member.id}>
+                <s-table-cell>
+                  <s-stack direction="inline" gap="small" alignItems="center">
+                    <s-avatar
+                      size="small"
+                      initials={member.name
+                        .split(/\s+/)
+                        .map((w) => w[0])
+                        .filter(Boolean)
+                        .slice(0, 2)
+                        .join("")
+                        .toUpperCase()}
+                      alt={member.name}
+                    />
                     <s-text>{member.name}</s-text>
                   </s-stack>
                 </s-table-cell>
                 <s-table-cell>{member.email}</s-table-cell>
-                <s-table-cell>{member.since}</s-table-cell>
-                <s-table-cell>Admin</s-table-cell>
+                <s-table-cell>{member.since || "—"}</s-table-cell>
+                <s-table-cell>
+                  <s-select
+                    label={`Role for ${member.name}`}
+                    labelAccessibilityVisibility="exclusive"
+                    value={member.role}
+                    disabled={teamBusy}
+                    onChange={(e) =>
+                      submitTeam("team-role", { id: member.id, role: e.currentTarget.value })
+                    }
+                  >
+                    <s-option value="admin">Admin</s-option>
+                    <s-option value="agent">Agent</s-option>
+                  </s-select>
+                </s-table-cell>
                 <s-table-cell>
                   <s-badge tone="success">Active</s-badge>
+                </s-table-cell>
+                <s-table-cell>
+                  <s-button
+                    variant="tertiary"
+                    tone="critical"
+                    icon="delete"
+                    accessibilityLabel={`Remove ${member.name}`}
+                    disabled={teamBusy}
+                    onClick={() => setRemoveTarget(member)}
+                  />
                 </s-table-cell>
               </s-table-row>
             ))}
           </s-table-body>
         </s-table>
-        {members.length === 0 ? <s-text tone="neutral">No team members match your search.</s-text> : null}
+        {!ownerVisible && visibleMembers.length === 0 ? (
+          <s-text tone="neutral">No team members match your search.</s-text>
+        ) : null}
       </s-section>
+
+      {/* ── Invite member modal ──────────────────────────────────────────── */}
+      <BrowseModalShell
+        open={inviteOpen}
+        title="Invite member"
+        onClose={() => setInviteOpen(false)}
+        footer={
+          <span style={{ marginLeft: "auto", display: "inline-flex", gap: 8 }}>
+            <s-button onClick={() => setInviteOpen(false)}>Cancel</s-button>
+            <s-button
+              variant="primary"
+              disabled={!inviteValid || teamBusy}
+              loading={teamBusy}
+              onClick={() =>
+                submitTeam("team-invite", {
+                  name: invite.name.trim(),
+                  email: invite.email.trim(),
+                  role: invite.role,
+                })
+              }
+            >
+              Add member
+            </s-button>
+          </span>
+        }
+      >
+        <s-stack gap="base">
+          <s-text-field
+            label="Name"
+            value={invite.name}
+            maxLength={100}
+            onInput={(e) => setInvite({ ...invite, name: e.currentTarget.value })}
+          />
+          <s-email-field
+            label="Email"
+            value={invite.email}
+            onInput={(e) => setInvite({ ...invite, email: e.currentTarget.value })}
+          />
+          <s-select
+            label="Role"
+            value={invite.role}
+            onChange={(e) =>
+              setInvite({ ...invite, role: e.currentTarget.value === "admin" ? "admin" : "agent" })
+            }
+          >
+            <s-option value="agent">Agent — handles assigned conversations</s-option>
+            <s-option value="admin">Admin — full app access</s-option>
+          </s-select>
+          <s-banner tone="info">
+            To let this person open ChatConvert, also add them as staff in your Shopify admin:
+            Settings → Users and permissions → Add staff.
+          </s-banner>
+        </s-stack>
+      </BrowseModalShell>
+
+      <ConfirmDeleteModal
+        open={removeTarget !== null}
+        title={`Remove ${removeTarget?.name ?? "this member"}?`}
+        body="Their assigned conversations move back to Unassigned. This can't be undone."
+        confirmLabel="Remove"
+        loading={teamBusy}
+        onCancel={() => setRemoveTarget(null)}
+        onConfirm={() => removeTarget && submitTeam("team-remove", { id: removeTarget.id })}
+      />
     </s-stack>
   );
 }

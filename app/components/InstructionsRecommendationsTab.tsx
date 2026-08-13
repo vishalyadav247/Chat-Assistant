@@ -17,9 +17,10 @@ import { BrowseProductsModal, BrowseThumb, type BrowseItemMeta } from "./BrowseP
 // (?rec= / ?custom= search params on the route).
 //
 // Rules card deltas (spec 08 noted in the feature report):
-// - "Never recommend out-of-stock" renders ON + disabled — OOS exclusion is
-//   hard-enforced in search SQL (stock > 0) and card assembly; the optional
-//   substitution behaviour has no storage/runtime yet.
+// - "Never recommend out-of-stock" is functional (product decision 2026-08-10,
+//   diverges from spec 08's always-on exclusion): stored in
+//   shopSettings.recommendationRules, enforced across search + card assembly.
+//   OFF lets unavailable products appear in recommendation cards.
 // - "Push overstock" renders OFF + disabled — coming soon, no storage in v1.
 
 function formatDate(iso: string): string {
@@ -37,6 +38,7 @@ export function InstructionsRecommendationsTab(props: {
   customRecs: CustomRecommendationRowData[];
   pairs: CrossSellPairRowData[];
   productMeta: Record<string, ProductMeta>;
+  rules: { excludeOutOfStock: boolean };
   onOpenRec: (id: string) => void;
   onOpenCustom: (id: string) => void;
 }) {
@@ -55,6 +57,7 @@ export function InstructionsRecommendationsTab(props: {
     if (fetcher.state !== "idle" || !fetcher.data) return;
     if (fetcher.data.ok) {
       const messages: Record<string, string> = {
+        "save-rules": "Recommendation rules saved",
         "toggle-recommendation": "Recommendation updated",
         "delete-recommendation": "Recommendation deleted",
         "toggle-custom": "Custom recommendation updated",
@@ -241,18 +244,13 @@ export function InstructionsRecommendationsTab(props: {
     <s-stack gap="base">
       <s-section heading="Rules">
         <s-paragraph>How the AI recommends by default.</s-paragraph>
-        <div
-          style={{ display: "flex", alignItems: "center", gap: 10 }}
-          title="Always on — out-of-stock products are never recommended"
-        >
-          <s-switch
-            label="Never recommend out-of-stock items"
-            details="Out-of-stock products are always excluded from recommendations."
-            checked
-            disabled
-          />
-          <s-badge tone="success">Always on</s-badge>
-        </div>
+        <s-switch
+          label="Never recommend out-of-stock items"
+          details="When off, unavailable products can appear in recommendations."
+          checked={props.rules.excludeOutOfStock}
+          disabled={busy}
+          onChange={(e) => submit("save-rules", { excludeOutOfStock: e.currentTarget.checked })}
+        />
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <s-switch
             label="Push overstock"

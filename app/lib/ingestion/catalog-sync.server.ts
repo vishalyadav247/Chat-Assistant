@@ -165,6 +165,8 @@ export async function upsertProductFromWebhook(shopDomain: string, payload: unkn
     title?: string;
     price?: string;
     inventory_quantity?: number;
+    inventory_management?: string | null;
+    inventory_policy?: string;
   }>;
   const stock = webhookVariants.reduce((sum, v) => sum + (v.inventory_quantity ?? 0), 0);
   const price = Math.min(...(webhookVariants.length ? webhookVariants : [{ price: "0" }]).map((v) => Number(v.price ?? 0)));
@@ -177,7 +179,12 @@ export async function upsertProductFromWebhook(shopDomain: string, payload: unkn
           id: `gid://shopify/ProductVariant/${v.id}`,
           title: v.title ?? "",
           price: Number(v.price ?? 0),
-          available: (v.inventory_quantity ?? 0) > 0,
+          // Mirrors availableForSale: sellable when quantity remains, inventory
+          // is untracked, or the variant oversells (inventory_policy "continue").
+          available:
+            (v.inventory_quantity ?? 0) > 0 ||
+            v.inventory_management == null ||
+            v.inventory_policy === "continue",
         })),
       shopifyProductId,
       title: p.title ?? "",
@@ -315,25 +322,71 @@ export async function fullCollectionSync(shopDomain: string): Promise<void> {
 
 // ── Discounts ───────────────────────────────────────────────────────────────
 
+const DISCOUNT_FIELDS = `
+          __typename
+          ... on DiscountCodeBasic { title summary status startsAt endsAt discountClasses asyncUsageCount }
+          ... on DiscountCodeBxgy { title summary status startsAt endsAt discountClasses asyncUsageCount }
+          ... on DiscountCodeFreeShipping { title summary status startsAt endsAt discountClasses asyncUsageCount }
+          ... on DiscountAutomaticBasic { title summary status startsAt endsAt discountClasses asyncUsageCount }
+          ... on DiscountAutomaticBxgy { title summary status startsAt endsAt discountClasses asyncUsageCount }
+          ... on DiscountAutomaticFreeShipping { title summary status startsAt endsAt discountClasses asyncUsageCount }
+`;
+
 const DISCOUNTS_QUERY = `#graphql
   query CatalogSyncDiscounts($cursor: String) {
     discountNodes(first: 100, after: $cursor) {
       pageInfo { hasNextPage endCursor }
       nodes {
         id
-        discount {
-          __typename
-          ... on DiscountCodeBasic { title summary status startsAt endsAt }
-          ... on DiscountCodeBxgy { title summary status startsAt endsAt }
-          ... on DiscountCodeFreeShipping { title summary status startsAt endsAt }
-          ... on DiscountAutomaticBasic { title summary status startsAt endsAt }
-          ... on DiscountAutomaticBxgy { title summary status startsAt endsAt }
-          ... on DiscountAutomaticFreeShipping { title summary status startsAt endsAt }
-        }
+        discount { ${DISCOUNT_FIELDS} }
       }
     }
   }
 `;
+
+const DISCOUNT_NODE_QUERY = `#graphql
+  query CatalogSyncDiscountNode($id: ID!) {
+    discountNode(id: $id) {
+      id
+      discount { ${DISCOUNT_FIELDS} }
+    }
+  }
+`;
+
+interface DiscountPayload {
+  __typename?: string;
+  title?: string;
+  summary?: string | null;
+  status?: string;
+  startsAt?: string | null;
+  endsAt?: string | null;
+  discountClasses?: string[];
+  asyncUsageCount?: number;
+}
+
+/** Row fields shared by full sync and the real-time webhook path. Method and
+ *  display type come from the GraphQL typename + discountClasses (spec 07
+ *  Discounts table: Code/Automatic × Amount off order/products, Free shipping,
+ *  Buy X get Y). */
+function discountRowFields(d: DiscountPayload) {
+  const typename = d.__typename ?? "";
+  return {
+    title: d.title ?? "",
+    summary: d.summary ?? "",
+    status: (d.status ?? "active").toLowerCase(),
+    method: typename.startsWith("DiscountAutomatic") ? "automatic" : "code",
+    discountType: typename.includes("Bxgy")
+      ? "bxgy"
+      : typename.includes("FreeShipping")
+        ? "free_shipping"
+        : d.discountClasses?.includes("PRODUCT")
+          ? "amount_off_products"
+          : "amount_off_order",
+    usedCount: d.asyncUsageCount ?? 0,
+    startsAt: d.startsAt ? new Date(d.startsAt) : null,
+    endsAt: d.endsAt ? new Date(d.endsAt) : null,
+  };
+}
 
 export async function fullDiscountSync(shopDomain: string): Promise<void> {
   const shopId = requireShopId(await resolveShopId(shopDomain));
@@ -349,10 +402,7 @@ export async function fullDiscountSync(shopDomain: string): Promise<void> {
           pageInfo: { hasNextPage: boolean; endCursor: string | null };
           nodes: Array<{
             id: string;
-            discount: {
-              title?: string;
-              summary?: string | null;
-              status?: string;
+            discount: DiscountPayload & {
               startsAt?: string | null;
               endsAt?: string | null;
             } | null;
@@ -363,24 +413,11 @@ export async function fullDiscountSync(shopDomain: string): Promise<void> {
     const page = body.data.discountNodes;
     for (const node of page.nodes) {
       if (!node.discount?.title) continue;
+      const fields = discountRowFields(node.discount);
       await db.discount.upsert({
         where: { shopId_shopifyDiscountId: { shopId, shopifyDiscountId: node.id } },
-        update: {
-          title: node.discount.title,
-          summary: node.discount.summary ?? "",
-          status: (node.discount.status ?? "active").toLowerCase(),
-          startsAt: node.discount.startsAt ? new Date(node.discount.startsAt) : null,
-          endsAt: node.discount.endsAt ? new Date(node.discount.endsAt) : null,
-        },
-        create: {
-          shopId,
-          shopifyDiscountId: node.id,
-          title: node.discount.title,
-          summary: node.discount.summary ?? "",
-          status: (node.discount.status ?? "active").toLowerCase(),
-          startsAt: node.discount.startsAt ? new Date(node.discount.startsAt) : null,
-          endsAt: node.discount.endsAt ? new Date(node.discount.endsAt) : null,
-        },
+        update: fields,
+        create: { shopId, shopifyDiscountId: node.id, ...fields },
       });
       total++;
     }
@@ -397,20 +434,45 @@ export async function fullDiscountSync(shopDomain: string): Promise<void> {
 
 export async function upsertDiscountFromWebhook(shopDomain: string, payload: unknown): Promise<void> {
   const shopId = requireShopId(await resolveShopId(shopDomain));
-  // Real-time discount sync is a Pro+ feature (seam active even in open mode).
+  // Real-time discount sync is a Pro+ feature (seam active even in open mode)
+  // AND a merchant toggle (ShopSettings.discountRealtime, Discounts tab).
   const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
   const { hasFeature } = await import("../billing/plans.server");
   if (!hasFeature(shop?.plan ?? "free", "discount_realtime_sync")) return;
+  const { loadShopSettings } = await import("../settings/save.server");
+  if (!(await loadShopSettings(shopId)).discountRealtime) return;
   const p = payload as { admin_graphql_api_id?: string; title?: string; status?: string };
   if (!p.admin_graphql_api_id) return;
+
+  // The webhook payload lacks summary/classes/usage — refetch the node so the
+  // Discounts table columns (Method/Type/Used, dates) stay accurate. Falls back
+  // to the payload's title/status if the Admin API call fails.
+  let fields: ReturnType<typeof discountRowFields> | null = null;
+  try {
+    const { admin } = await unauthenticated.admin(shopDomain);
+    const response = await admin.graphql(DISCOUNT_NODE_QUERY, {
+      variables: { id: p.admin_graphql_api_id },
+    });
+    const body = (await response.json()) as {
+      data: { discountNode: { discount: DiscountPayload | null } | null };
+    };
+    const discount = body.data.discountNode?.discount;
+    if (discount?.title) fields = discountRowFields(discount);
+  } catch (error) {
+    console.error("discount webhook refetch failed, using payload fields", error);
+  }
+  const fallback = {
+    title: p.title ?? "",
+    status: (p.status ?? "active").toLowerCase(),
+  };
+
   await db.discount.upsert({
     where: { shopId_shopifyDiscountId: { shopId, shopifyDiscountId: p.admin_graphql_api_id } },
-    update: { title: p.title ?? "", status: (p.status ?? "active").toLowerCase() },
+    update: fields ?? fallback,
     create: {
       shopId,
       shopifyDiscountId: p.admin_graphql_api_id,
-      title: p.title ?? "",
-      status: (p.status ?? "active").toLowerCase(),
+      ...(fields ?? fallback),
     },
   });
 }

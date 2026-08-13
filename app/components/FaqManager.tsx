@@ -3,6 +3,7 @@ import type { FaqCategoryData, FaqRowData } from "../lib/faq/faq.server";
 import type { TrainingActionResult } from "../routes/app.ai-agent.training";
 import { BrowseModalShell } from "./BrowseProductsModal";
 import { downloadText, useTrainingFetcher } from "./TrainingShared";
+import { ConfirmDeleteModal } from "./ui/ConfirmDeleteModal";
 
 // FAQs tab (spec 07, design #viewTraining → FAQs): toolbar (import / export /
 // add FAQ / add category), search + Status/Featured filters, category tree
@@ -10,7 +11,32 @@ import { downloadText, useTrainingFetcher } from "./TrainingShared";
 // Answers are stored as sanitized HTML (rich-text editor deferred — textarea
 // v1, same delta as spec 06 starter answers).
 
-const ICON_PRESETS = ["🛒", "🔁", "💳", "🚚", "📄", "❓"];
+// Category icons are Polaris icon names only (user decision 2026-08-12 — no
+// free emoji input). Legacy rows may still hold an emoji; CategoryIcon falls
+// back to rendering it as text.
+const ICON_PRESETS = [
+  "page",
+  "cart",
+  "return",
+  "credit-card",
+  "delivery",
+  "question-circle",
+  "discount",
+  "gift-card",
+  "receipt",
+  "store",
+  "globe",
+  "person",
+] as const;
+type FaqIcon = (typeof ICON_PRESETS)[number];
+
+function CategoryIcon(props: { icon: string }) {
+  return (ICON_PRESETS as readonly string[]).includes(props.icon) ? (
+    <s-icon type={props.icon as FaqIcon} size="small" />
+  ) : (
+    <>{props.icon}</>
+  );
+}
 
 // Row hover elevation (design faq.png — Chatty-style): inline styles can't
 // express :hover, so the table ships a tiny scoped stylesheet instead.
@@ -23,6 +49,20 @@ const TABLE_CSS = `
   background: var(--s-color-bg-surface-hover, #fafafa);
   box-shadow: 0 2px 10px rgba(26, 26, 26, .14);
   z-index: 1;
+}
+.ccfaq-handle {
+  border: none;
+  background: none;
+  color: var(--s-color-text-secondary, #8a8a8f);
+  transition: background-color .15s ease, color .15s ease, transform .15s ease;
+}
+.ccfaq-handle:not(:disabled):hover {
+  background: var(--s-color-bg-fill-secondary, #f1f1f1);
+  color: var(--s-color-text, #303030);
+  transform: scale(1.1);
+}
+.ccfaq-handle:not(:disabled):active {
+  cursor: grabbing;
 }
 `;
 
@@ -67,15 +107,23 @@ export function FaqManager(props: {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [faqDraft, setFaqDraft] = useState<FaqDraft | null>(null);
   const [categoryDraft, setCategoryDraft] = useState<CategoryDraft | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<
+    { kind: "faq" | "category"; id: string; label: string } | null
+  >(null);
   const [importOpen, setImportOpen] = useState(false);
   const [importCsv, setImportCsv] = useState<{ name: string; text: string } | null>(null);
   const [importError, setImportError] = useState("");
   const [exportOpen, setExportOpen] = useState(false);
   const [exportScope, setExportScope] = useState<"all" | "published">("all");
 
-  const defaultCategoryId =
-    props.tree.find((c) => c.isDefault)?.id ?? props.tree[0]?.id ?? "";
+  // Optimistic reorder: a drop re-arranges this local copy INSTANTLY while the
+  // place intent + loader revalidation (which can take seconds — the training
+  // loader reloads every tab) catch up; fresh loader data clears it.
+  const [optimisticTree, setOptimisticTree] = useState<FaqCategoryData[] | null>(null);
+  useEffect(() => setOptimisticTree(null), [props.tree]);
+  const tree = optimisticTree ?? props.tree;
+
+  const defaultCategoryId = tree.find((c) => c.isDefault)?.id ?? tree[0]?.id ?? "";
 
   const { submit, busy, pendingIntent } = useTrainingFetcher((result: TrainingActionResult) => {
     if (!result.ok) return;
@@ -83,10 +131,14 @@ export function FaqManager(props: {
       case "faq-save":
       case "faq-delete":
         setFaqDraft(null);
-        setConfirmDelete(false);
+        setDeleteTarget(null);
         break;
       case "category-save":
         setCategoryDraft(null);
+        break;
+      case "category-delete":
+        setCategoryDraft(null);
+        setDeleteTarget(null);
         break;
       case "faq-import":
         setImportOpen(false);
@@ -127,7 +179,7 @@ export function FaqManager(props: {
     return true;
   };
 
-  const visibleTree = props.tree
+  const visibleTree = tree
     .map((category) => ({ category, faqs: category.faqs.filter(faqPasses) }))
     .filter(
       ({ category, faqs }) =>
@@ -148,6 +200,11 @@ export function FaqManager(props: {
     return e.clientY < rect.top + rect.height / 2 ? "before" : "after";
   };
 
+  // dragover fires continuously — only touch state when the hint actually
+  // changes, otherwise every mouse move re-renders the whole tree (lag).
+  const hintIfChanged = (key: string, edge: DropEdge) =>
+    setDropHint((h) => (h && h.key === key && h.edge === edge ? h : { key, edge }));
+
   const clearDrag = () => {
     setDragging(null);
     setDropHint(null);
@@ -155,36 +212,48 @@ export function FaqManager(props: {
 
   const dropCategoryOnCategory = (targetId: string, edge: "before" | "after") => {
     if (!dragging || dragging.kind !== "category" || dragging.id === targetId) return;
-    const without = props.tree.filter((c) => c.id !== dragging.id);
+    const moved = tree.find((c) => c.id === dragging.id);
+    const without = tree.filter((c) => c.id !== dragging.id);
     const index = without.findIndex((c) => c.id === targetId);
-    if (index < 0) return;
+    if (index < 0 || !moved) return;
     const insert = edge === "before" ? index : index + 1;
+    setOptimisticTree([...without.slice(0, insert), moved, ...without.slice(insert)]);
     submit("category-place", { id: dragging.id, position: String(insert + 1) });
+  };
+
+  /** Optimistic FAQ move: strip the dragged FAQ everywhere, re-insert it in
+   *  the target category at `insert` (index within the stripped list). */
+  const moveFaqLocally = (faqId: string, categoryId: string, insert: number) => {
+    const moved = tree.flatMap((c) => c.faqs).find((f) => f.id === faqId);
+    if (!moved) return;
+    setOptimisticTree(
+      tree.map((c) => {
+        const faqs = c.faqs.filter((f) => f.id !== faqId);
+        if (c.id === categoryId) faqs.splice(insert, 0, moved);
+        return { ...c, faqs };
+      }),
+    );
   };
 
   const dropFaqOnFaq = (categoryId: string, targetFaqId: string, edge: "before" | "after") => {
     if (!dragging || dragging.kind !== "faq" || dragging.id === targetFaqId) return;
-    const category = props.tree.find((c) => c.id === categoryId);
+    const category = tree.find((c) => c.id === categoryId);
     if (!category) return;
     const without = category.faqs.filter((f) => f.id !== dragging.id);
     const index = without.findIndex((f) => f.id === targetFaqId);
     if (index < 0) return;
-    submit("faq-place", {
-      id: dragging.id,
-      categoryId,
-      position: String(edge === "before" ? index : index + 1),
-    });
+    const insert = edge === "before" ? index : index + 1;
+    moveFaqLocally(dragging.id, categoryId, insert);
+    submit("faq-place", { id: dragging.id, categoryId, position: String(insert) });
   };
 
   const dropFaqOnCategory = (categoryId: string) => {
     if (!dragging || dragging.kind !== "faq") return;
-    const category = props.tree.find((c) => c.id === categoryId);
+    const category = tree.find((c) => c.id === categoryId);
     if (!category) return;
-    submit("faq-place", {
-      id: dragging.id,
-      categoryId,
-      position: String(category.faqs.filter((f) => f.id !== dragging.id).length),
-    });
+    const insert = category.faqs.filter((f) => f.id !== dragging.id).length;
+    moveFaqLocally(dragging.id, categoryId, insert);
+    submit("faq-place", { id: dragging.id, categoryId, position: String(insert) });
   };
 
   const openAddFaq = (categoryId?: string) =>
@@ -198,7 +267,7 @@ export function FaqManager(props: {
     });
 
   const openEditFaq = (faq: FaqRowData, categoryId: string) => {
-    setConfirmDelete(false);
+    setDeleteTarget(null);
     setFaqDraft({
       id: faq.id,
       question: faq.question,
@@ -213,8 +282,8 @@ export function FaqManager(props: {
     setCategoryDraft({
       id: null,
       name: "",
-      icon: "📄",
-      position: props.tree.length + 1,
+      icon: "page",
+      position: tree.length + 1,
       status: "published",
       featured: false,
       isDefault: false,
@@ -225,7 +294,7 @@ export function FaqManager(props: {
       id: category.id,
       name: category.name,
       icon: category.icon,
-      position: props.tree.findIndex((c) => c.id === category.id) + 1,
+      position: tree.findIndex((c) => c.id === category.id) + 1,
       status: category.status === "draft" ? "draft" : "published",
       featured: category.featured,
       isDefault: category.isDefault,
@@ -286,6 +355,8 @@ export function FaqManager(props: {
           </div>
         </div>
 
+        {/* Full-width search, then the two filter dropdowns inline (natural
+            width) on the next row (user request 2026-08-12). */}
         <s-search-field
           label="Search FAQs"
           labelAccessibilityVisibility="exclusive"
@@ -293,63 +364,39 @@ export function FaqManager(props: {
           value={search}
           onInput={(e) => setSearch(e.currentTarget.value)}
         />
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <s-clickable-chip
-            commandFor="faq-status-filter"
-            accessibilityLabel="Filter by status"
-            color={statusFilter ? "strong" : "base"}
-            removable={Boolean(statusFilter)}
-            onRemove={() => setStatusFilter("")}
-          >
-            {statusFilter ? `Status: ${statusFilter === "published" ? "Published" : "Draft"}` : "Status"}
-          </s-clickable-chip>
-          <s-popover id="faq-status-filter">
-            <s-box padding="base" minInlineSize="180px">
-              <s-choice-list
-                label="Status"
-                labelAccessibilityVisibility="exclusive"
-                name="faq-status-filter-choice"
-                values={[statusFilter || "all"]}
-                onChange={(e) => {
-                  const v = e.currentTarget.values[0];
-                  setStatusFilter(v === "published" || v === "draft" ? v : "");
-                }}
-              >
-                <s-choice value="all">All</s-choice>
-                <s-choice value="published">Published</s-choice>
-                <s-choice value="draft">Draft</s-choice>
-              </s-choice-list>
-            </s-box>
-          </s-popover>
-          <s-clickable-chip
-            commandFor="faq-featured-filter"
-            accessibilityLabel="Filter by featured"
-            color={featuredFilter ? "strong" : "base"}
-            removable={Boolean(featuredFilter)}
-            onRemove={() => setFeaturedFilter("")}
-          >
-            {featuredFilter
-              ? `Featured: ${featuredFilter === "yes" ? "Yes" : "No"}`
-              : "Featured"}
-          </s-clickable-chip>
-          <s-popover id="faq-featured-filter">
-            <s-box padding="base" minInlineSize="180px">
-              <s-choice-list
-                label="Featured"
-                labelAccessibilityVisibility="exclusive"
-                name="faq-featured-filter-choice"
-                values={[featuredFilter || "all"]}
-                onChange={(e) => {
-                  const v = e.currentTarget.values[0];
-                  setFeaturedFilter(v === "yes" || v === "no" ? v : "");
-                }}
-              >
-                <s-choice value="all">All</s-choice>
-                <s-choice value="yes">Featured</s-choice>
-                <s-choice value="no">Not featured</s-choice>
-              </s-choice-list>
-            </s-box>
-          </s-popover>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {/* s-select fills its container — cap each in a fixed-width box so
+              the dropdowns stay compact. */}
+          <div style={{ width: 180 }}>
+            <s-select
+              label="Status"
+              labelAccessibilityVisibility="exclusive"
+              value={statusFilter || "all"}
+              onChange={(e) => {
+                const v = e.currentTarget.value;
+                setStatusFilter(v === "published" || v === "draft" ? v : "");
+              }}
+            >
+              <s-option value="all">Status: All</s-option>
+              <s-option value="published">Published</s-option>
+              <s-option value="draft">Draft</s-option>
+            </s-select>
+          </div>
+          <div style={{ width: 180 }}>
+            <s-select
+              label="Featured"
+              labelAccessibilityVisibility="exclusive"
+              value={featuredFilter || "all"}
+              onChange={(e) => {
+                const v = e.currentTarget.value;
+                setFeaturedFilter(v === "yes" || v === "no" ? v : "");
+              }}
+            >
+              <s-option value="all">Featured: All</s-option>
+              <s-option value="yes">Featured</s-option>
+              <s-option value="no">Not featured</s-option>
+            </s-select>
+          </div>
         </div>
 
         <style>{TABLE_CSS}</style>
@@ -409,7 +456,11 @@ export function FaqManager(props: {
                       onClick={() => openEditCategory(category)}
                       style={{ ...linkButtonStyle, fontWeight: 700 }}
                     >
-                      {category.icon} {category.name}
+                      <span
+                        style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+                      >
+                        <CategoryIcon icon={category.icon} /> {category.name}
+                      </span>
                     </button>
                     <s-text tone="neutral">({faqs.length} FAQs)</s-text>
                     {category.isDefault ? <s-badge tone="neutral">Default</s-badge> : null}
@@ -417,6 +468,7 @@ export function FaqManager(props: {
                 }
                 status={category.status}
                 featured={category.featured}
+                onOpen={() => openEditCategory(category)}
                 onFeature={(next) =>
                   submit("category-feature", { id: category.id, featured: String(next) })
                 }
@@ -437,10 +489,10 @@ export function FaqManager(props: {
                     if (!dragging) return;
                     if (dragging.kind === "category" && dragging.id === category.id) return;
                     e.preventDefault();
-                    setDropHint({
-                      key: `cat:${category.id}`,
-                      edge: dragging.kind === "category" ? edgeFor(e) : "into",
-                    });
+                    hintIfChanged(
+                      `cat:${category.id}`,
+                      dragging.kind === "category" ? edgeFor(e) : "into",
+                    );
                   },
                   onDragLeave: () =>
                     setDropHint((h) => (h?.key === `cat:${category.id}` ? null : h)),
@@ -473,6 +525,7 @@ export function FaqManager(props: {
                       }
                       status={faq.status}
                       featured={faq.featured}
+                      onOpen={() => openEditFaq(faq, category.id)}
                       onFeature={(next) =>
                         submit("faq-feature", { id: faq.id, featured: String(next) })
                       }
@@ -490,7 +543,7 @@ export function FaqManager(props: {
                         onDragOver: (e) => {
                           if (dragging?.kind !== "faq" || dragging.id === faq.id) return;
                           e.preventDefault();
-                          setDropHint({ key: `faq:${faq.id}`, edge: edgeFor(e) });
+                          hintIfChanged(`faq:${faq.id}`, edgeFor(e));
                         },
                         onDragLeave: () =>
                           setDropHint((h) => (h?.key === `faq:${faq.id}` ? null : h)),
@@ -529,8 +582,14 @@ export function FaqManager(props: {
         footer={
           faqDraft ? (
             <>
-              {faqDraft.id && !confirmDelete ? (
-                <s-button tone="critical" variant="tertiary" onClick={() => setConfirmDelete(true)}>
+              {faqDraft.id ? (
+                <s-button
+                  tone="critical"
+                  variant="tertiary"
+                  onClick={() =>
+                    setDeleteTarget({ kind: "faq", id: faqDraft.id!, label: faqDraft.question })
+                  }
+                >
                   Delete FAQ
                 </s-button>
               ) : null}
@@ -555,23 +614,6 @@ export function FaqManager(props: {
       >
         {faqDraft ? (
           <s-stack gap="base">
-            {confirmDelete && faqDraft.id ? (
-              <s-banner tone="critical" heading="Delete this FAQ?">
-                <s-paragraph>This can&apos;t be undone.</s-paragraph>
-                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                  <s-button
-                    variant="primary"
-                    tone="critical"
-                    disabled={busy}
-                    loading={pendingIntent === "faq-delete"}
-                    onClick={() => submit("faq-delete", { id: faqDraft.id! })}
-                  >
-                    Delete
-                  </s-button>
-                  <s-button onClick={() => setConfirmDelete(false)}>Keep it</s-button>
-                </div>
-              </s-banner>
-            ) : null}
             <s-text-field
               label="Question"
               value={faqDraft.question}
@@ -604,7 +646,7 @@ export function FaqManager(props: {
                 value={faqDraft.categoryId}
                 onChange={(e) => setFaqDraft({ ...faqDraft, categoryId: e.currentTarget.value })}
               >
-                {props.tree.map((category) => (
+                {tree.map((category) => (
                   <s-option key={category.id} value={category.id}>
                     {category.name}
                   </s-option>
@@ -628,6 +670,22 @@ export function FaqManager(props: {
         onClose={() => setCategoryDraft(null)}
         footer={
           categoryDraft ? (
+            <>
+              {categoryDraft.id && !categoryDraft.isDefault ? (
+                <s-button
+                  tone="critical"
+                  variant="tertiary"
+                  onClick={() =>
+                    setDeleteTarget({
+                      kind: "category",
+                      id: categoryDraft.id!,
+                      label: categoryDraft.name,
+                    })
+                  }
+                >
+                  Delete category
+                </s-button>
+              ) : null}
             <span style={{ marginLeft: "auto", display: "inline-flex", gap: 8 }}>
               <s-button onClick={() => setCategoryDraft(null)}>Cancel</s-button>
               <s-button
@@ -646,6 +704,7 @@ export function FaqManager(props: {
                 Save
               </s-button>
             </span>
+            </>
           ) : null
         }
       >
@@ -669,13 +728,16 @@ export function FaqManager(props: {
                     key={icon}
                     type="button"
                     aria-label={`Icon ${icon}`}
+                    aria-pressed={categoryDraft.icon === icon}
                     onClick={() => setCategoryDraft({ ...categoryDraft, icon })}
                     style={{
                       width: 44,
                       height: 44,
                       borderRadius: 10,
-                      fontSize: 20,
                       cursor: "pointer",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
                       background: "var(--s-color-bg, #fff)",
                       border:
                         categoryDraft.icon === icon
@@ -683,27 +745,9 @@ export function FaqManager(props: {
                           : "1px solid var(--s-color-border, #d4d4d4)",
                     }}
                   >
-                    {icon}
+                    <s-icon type={icon} />
                   </button>
                 ))}
-                <input
-                  type="text"
-                  aria-label="Custom emoji icon"
-                  value={categoryDraft.icon}
-                  maxLength={4}
-                  onChange={(e) =>
-                    setCategoryDraft({ ...categoryDraft, icon: e.currentTarget.value })
-                  }
-                  style={{
-                    width: 64,
-                    padding: "10px 8px",
-                    borderRadius: 10,
-                    border: "1px solid var(--s-color-border, #d4d4d4)",
-                    font: "inherit",
-                    fontSize: 18,
-                    textAlign: "center",
-                  }}
-                />
               </div>
             </s-stack>
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
@@ -718,7 +762,7 @@ export function FaqManager(props: {
                 }
               >
                 {Array.from(
-                  { length: categoryDraft.id ? props.tree.length : props.tree.length + 1 },
+                  { length: categoryDraft.id ? tree.length : tree.length + 1 },
                   (_, i) => (
                     <s-option key={i + 1} value={String(i + 1)}>
                       {String(i + 1)}
@@ -838,6 +882,29 @@ export function FaqManager(props: {
           <s-choice value="published">Only published FAQs</s-choice>
         </s-choice-list>
       </BrowseModalShell>
+
+      {/* ── Delete confirmation (Shopify-style modal) ────────────────────── */}
+      <ConfirmDeleteModal
+        open={deleteTarget !== null}
+        title={
+          deleteTarget?.kind === "category"
+            ? `Delete ${deleteTarget.label || "this category"}?`
+            : `Delete this FAQ?`
+        }
+        body={
+          deleteTarget?.kind === "category"
+            ? "Its FAQs will move to the Uncategorized category. This can't be undone."
+            : "This can't be undone."
+        }
+        loading={pendingIntent === "faq-delete" || pendingIntent === "category-delete"}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          submit(deleteTarget.kind === "category" ? "category-delete" : "faq-delete", {
+            id: deleteTarget.id,
+          });
+        }}
+      />
     </s-section>
   );
 }
@@ -886,6 +953,8 @@ function TreeRow(props: {
   featured: boolean;
   indent?: boolean;
   busy: boolean;
+  /** Open the edit modal — fires on a click anywhere on the row. */
+  onOpen: () => void;
   onFeature: (next: boolean) => void;
   /** Keyboard fallback for drag reorder (ArrowUp/ArrowDown on the handle). */
   onKeyMove: (direction: "up" | "down") => void;
@@ -901,12 +970,22 @@ function TreeRow(props: {
           ? `inset 0 0 0 2px ${hintColor}`
           : undefined;
   return (
+    // Keyboard access to "open" is the row's name/question button — this
+    // row-level handler only widens the pointer click target (Chatty-style).
+    // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
     <div
       className="ccfaq-row"
+      onClick={(e) => {
+        // Anywhere on the row opens the edit modal — except clicks on the
+        // row's own interactive controls (chevron, star, drag handle, links).
+        if ((e.target as HTMLElement).closest("button, s-button, a, input")) return;
+        props.onOpen();
+      }}
       onDragOver={props.drag.onDragOver}
       onDragLeave={props.drag.onDragLeave}
       onDrop={props.drag.onDrop}
       style={{
+        cursor: "pointer",
         display: "grid",
         gridTemplateColumns: "minmax(0,1fr) 140px 110px",
         gap: 12,
@@ -917,15 +996,25 @@ function TreeRow(props: {
           : "none",
         opacity: props.drag.isSource ? 0.4 : 1,
         boxShadow: dropShadow,
+        // The hover transition would delay the drop indicator — show it instantly.
+        transition: dropShadow ? "none" : undefined,
       }}
     >
       <span style={{ minWidth: 0, overflow: "hidden", display: "inline-flex", alignItems: "center", gap: 6 }}>
         <button
           type="button"
+          className="ccfaq-handle"
           aria-label="Reorder (drag, or press arrow up/down)"
           disabled={!props.drag.enabled}
           draggable={props.drag.enabled}
-          onDragStart={props.drag.onDragStart}
+          onDragStart={(e) => {
+            // Ghost the WHOLE row while dragging, not just the tiny handle.
+            const row = (e.currentTarget as HTMLElement).closest(".ccfaq-row");
+            if (row instanceof HTMLElement) {
+              e.dataTransfer.setDragImage(row, 24, row.offsetHeight / 2);
+            }
+            props.drag.onDragStart(e);
+          }}
           onDragEnd={props.drag.onDragEnd}
           onKeyDown={(e) => {
             if (e.key === "ArrowUp" || e.key === "ArrowDown") {
@@ -934,18 +1023,17 @@ function TreeRow(props: {
             }
           }}
           style={{
-            border: "none",
-            background: "none",
-            padding: "0 2px",
+            padding: 6,
+            margin: -2,
             display: "inline-flex",
             alignItems: "center",
+            borderRadius: 6,
             cursor: props.drag.enabled ? "grab" : "default",
-            color: "var(--s-color-text-secondary, #8a8a8f)",
             opacity: props.drag.enabled ? 1 : 0.4,
             touchAction: "none",
           }}
         >
-          <s-icon type="drag-handle" size="small" />
+          <s-icon type="drag-handle" size="base" />
         </button>
         <span style={{ minWidth: 0, overflow: "hidden", display: "inline-flex", alignItems: "center", gap: 8 }}>
           {props.main}
@@ -970,12 +1058,22 @@ function TreeRow(props: {
             display: "inline-flex",
             alignItems: "center",
             padding: 4,
-            color: props.featured
-              ? "var(--s-color-text, #303030)"
-              : "var(--s-color-text-secondary, #c4c4ca)",
+            // Featured = filled yellow star (user request 2026-08-12).
+            color: props.featured ? "#f5b400" : "var(--s-color-text-secondary, #c4c4ca)",
           }}
         >
-          <s-icon type={props.featured ? "star-filled" : "star"} size="small" />
+          {/* Inline SVG star: s-icon paints its own palette and ignores the
+              button's color (tone="auto" included), so the yellow featured
+              state needs a glyph we control. Shape mirrors Polaris star. */}
+          <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true">
+            <path
+              d="M10 2 L12 7.25 L17.61 7.53 L13.23 11.05 L14.7 16.47 L10 13.4 L5.3 16.47 L6.77 11.05 L2.39 7.53 L8 7.25 Z"
+              fill={props.featured ? "#f5b400" : "none"}
+              stroke={props.featured ? "#f5b400" : "currentColor"}
+              strokeWidth="1.5"
+              strokeLinejoin="round"
+            />
+          </svg>
         </button>
       </span>
     </div>

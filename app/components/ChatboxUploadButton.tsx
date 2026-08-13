@@ -5,8 +5,8 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 
 // Shared image-upload button for the chatbox page (header logo + custom
 // launcher icon). Submits multipart to the chatbox action; the server
-// (uploadImage) enforces ≤2MB and PNG/JPG/WebP and returns a CDN URL that the
-// caller places into the draft settings (never data URLs — spec 06).
+// (uploadImage) enforces ≤2MB and SVG/PNG/JPG/WebP and returns a CDN URL that
+// the caller places into the draft settings (never data URLs — spec 06).
 
 interface UploadResult {
   ok: boolean;
@@ -56,7 +56,7 @@ export function ChatboxUploadButton(props: {
       <input
         ref={fileRef}
         type="file"
-        accept="image/png,image/jpeg,image/webp"
+        accept="image/png,image/jpeg,image/webp,image/svg+xml"
         style={{ display: "none" }}
         aria-label={props.label}
         onChange={onFile}

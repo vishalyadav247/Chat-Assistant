@@ -87,15 +87,27 @@ export const widgetSettingsSchema = z.object({
           icon: z.enum(["chat", "help", "custom"]).catch("chat"),
           customIconUrl: z.string().max(500).nullable().catch(null),
           position: z.enum(["bottom_right", "bottom_left", "top_right", "top_left"]).catch("bottom_right"),
+          /** Launcher button background — "" inherits the brand colors. */
+          bgColor: z
+            .string()
+            .regex(/^#[0-9a-fA-F]{6}$/)
+            .or(z.literal(""))
+            .catch(""),
+          /** Launcher label text color — "" uses the default white. */
+          labelColor: z
+            .string()
+            .regex(/^#[0-9a-fA-F]{6}$/)
+            .or(z.literal(""))
+            .catch(""),
         })
-        .catch({ style: "icon", label: "Chat with us", icon: "chat", customIconUrl: null, position: "bottom_right" }),
+        .catch({ style: "icon", label: "Chat with us", icon: "chat", customIconUrl: null, position: "bottom_right", bgColor: "", labelColor: "" }),
       removeBranding: z.boolean().catch(false),
     })
     .catch({
       colorMode: "gradient",
       solid: "#6d3bf5",
       gradient: { start: "#6d3bf5", end: "#3b82f6" },
-      launcher: { style: "icon", label: "Chat with us", icon: "chat", customIconUrl: null, position: "bottom_right" },
+      launcher: { style: "icon", label: "Chat with us", icon: "chat", customIconUrl: null, position: "bottom_right", bgColor: "", labelColor: "" },
       removeBranding: false,
     }),
 });
@@ -138,6 +150,16 @@ export const surveySchema = z.object({
   triggerKeywords: z.object({ enabled: z.boolean().catch(true), keywords: z.array(z.string().max(50)).catch(["Thank you", "Thanks", "Got it", "That helps", "Perfect"]) }).catch({ enabled: true, keywords: ["Thank you", "Thanks", "Got it", "That helps", "Perfect"] }),
 });
 
+export const teamMemberSchema = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().trim().min(1).max(100),
+  email: z.string().trim().email().max(200),
+  role: z.enum(["admin", "agent"]).catch("agent"),
+  /** ISO date the member was added. */
+  since: z.string().max(30).catch(""),
+});
+export type TeamMemberData = z.infer<typeof teamMemberSchema>;
+
 export const shopSettingsSchema = z.object({
   storeInfo: z.object({ name: z.string().max(100).catch(""), logoUrl: z.string().max(500).nullable().catch(null) }).catch({ name: "", logoUrl: null }),
   theme: z.enum(["auto", "dawn", "refresh", "craft", "custom"]).catch("auto"),
@@ -151,6 +173,30 @@ export const shopSettingsSchema = z.object({
     .catch({ mode: "default", customUrl: "" }),
   cartDrawer: z.boolean().catch(true),
   retentionDays: z.union([z.literal(0), z.literal(7), z.literal(30), z.literal(60), z.literal(90)]).catch(0), // 0 = forever
+  /** Real-time discount webhook sync (spec 02, Pro+ plan gate applies on top). */
+  discountRealtime: z.boolean().catch(true),
+  /** AI recommendation rules (spec 08 Rules card). excludeOutOfStock OFF lets
+   *  unavailable products appear in recommendation cards. */
+  recommendationRules: z
+    .object({ excludeOutOfStock: z.boolean().catch(true) })
+    .catch({ excludeOutOfStock: true }),
+  /** Master training permissions (spec 07 Learn cards, user decision
+   *  2026-08-12): independent of per-row learnEnabled. Master OFF ⇒ the AI
+   *  must not use that data type at all; per-row flags apply only when the
+   *  master is ON. */
+  learn: z
+    .object({
+      products: z.boolean().catch(true),
+      collections: z.boolean().catch(true),
+      discounts: z.boolean().catch(true),
+    })
+    .catch({ products: true, collections: true, discounts: true }),
+  /** Team roster (spec 16 team v1): powers inbox assignment + member table.
+   *  Login access itself is managed by Shopify staff accounts — the roster is
+   *  ChatConvert's assignment/display layer. */
+  team: z
+    .object({ members: z.array(teamMemberSchema).max(50).catch([]) })
+    .catch({ members: [] }),
 });
 
 export type ShopSettingsData = z.infer<typeof shopSettingsSchema>;

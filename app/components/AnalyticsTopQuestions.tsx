@@ -1,4 +1,5 @@
 import type { TopQuestion } from "../lib/analytics/shared";
+import { BRAND } from "./ui/tokens";
 
 // Top questions card + "Unanswered questions" mini-card (spec 14, design
 // analytics.html .tq-list + unanswered card). The unanswered surface is the
@@ -40,7 +41,7 @@ export function AnalyticsTopQuestions(props: { questions: TopQuestion[] }) {
                       height: "100%",
                       width: `${q.pct}%`,
                       borderRadius: 5,
-                      background: "linear-gradient(90deg,#6d3bf5,#3b82f6)",
+                      background: BRAND.progressGradient,
                     }}
                   />
                 </div>

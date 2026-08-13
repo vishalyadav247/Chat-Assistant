@@ -13,10 +13,13 @@ export function ProactiveTemplatePicker(props: {
   return (
     <s-section>
       <s-stack gap="base">
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <s-button accessibilityLabel="Back to dashboard" onClick={props.onBack}>
-            ←
-          </s-button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <s-button
+            icon="arrow-left"
+            variant="tertiary"
+            accessibilityLabel="Back to campaigns"
+            onClick={props.onBack}
+          />
           <s-heading>Select template</s-heading>
         </div>
 

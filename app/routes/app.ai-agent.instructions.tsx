@@ -5,7 +5,11 @@ import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { resolveShopId } from "../lib/tenancy.server";
 import { hasFeature, PlanGateError } from "../lib/billing/plans.server";
-import { handoverConfigSchema, type HandoverConfigData } from "../lib/settings/schemas";
+import {
+  handoverConfigSchema,
+  shopSettingsSchema,
+  type HandoverConfigData,
+} from "../lib/settings/schemas";
 import {
   deleteCrossSellPair,
   deleteCustomRecommendation,
@@ -15,6 +19,7 @@ import {
   saveGeneralInstructions,
   saveHandoverConfig,
   saveRecommendation,
+  saveRecommendationRules,
   setCustomRecommendationStatus,
   setRecommendationStatus,
 } from "../lib/instructions/save.server";
@@ -23,6 +28,7 @@ import { InstructionsRecommendationsTab } from "../components/InstructionsRecomm
 import { InstructionsHandoverTab } from "../components/InstructionsHandoverTab";
 import { RecommendationDetail } from "../components/RecommendationDetail";
 import { RecommendationDetailCustom } from "../components/RecommendationDetailCustom";
+import { PageHeader } from "../components/ui/PageHeader";
 
 // Instructions (spec 08, design ai-agent.html #viewInstructions): three tabs
 // via ?tab= — General Instructions / Product recommendations / Human handover.
@@ -89,12 +95,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = await resolveShopId(session.shop);
 
-  const [shop, persona, guardrails, handoverRow, recommendations, customRecs, pairs] =
+  const [shop, persona, guardrails, handoverRow, settingsRow, recommendations, customRecs, pairs] =
     await Promise.all([
       db.shop.findUnique({ where: { id: shopId }, select: { plan: true } }),
       db.persona.findUnique({ where: { shopId } }),
       db.guardrails.findUnique({ where: { shopId } }),
       db.handoverConfig.findUnique({ where: { shopId }, select: { config: true } }),
+      db.shopSettings.findUnique({ where: { shopId }, select: { settings: true } }),
       db.recommendation.findMany({
         where: { shopId },
         orderBy: { updatedAt: "desc" },
@@ -169,6 +176,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     productMeta,
     collectionMeta,
     handover: handoverConfigSchema.parse(handoverRow?.config ?? {}) as HandoverConfigData,
+    rules: shopSettingsSchema.parse(settingsRow?.settings ?? {}).recommendationRules,
   };
 };
 
@@ -194,6 +202,10 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<Instructi
       }
       case "save-handover": {
         await saveHandoverConfig(shopId, payload);
+        return { ok: true, intent };
+      }
+      case "save-rules": {
+        await saveRecommendationRules(shopId, payload);
         return { ok: true, intent };
       }
       case "save-recommendation": {
@@ -321,55 +333,18 @@ export default function InstructionsPage() {
   return (
     <s-page heading="Instructions">
       <s-stack gap="base">
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <s-button
-            icon="arrow-left"
-            variant="tertiary"
-            accessibilityLabel="Back to AI Agent"
-            onClick={() => navigate("/app/ai-agent")}
-          >
-            AI Agent
-          </s-button>
-          <div
-            role="tablist"
-            style={{
-              display: "flex",
-              gap: 4,
-              background: "var(--s-color-bg-fill-secondary, #f1f1f1)",
-              borderRadius: 12,
-              padding: 4,
-              flexWrap: "wrap",
-            }}
-          >
-            {TABS.map((t) => (
-              <button
-                key={t.id}
-                role="tab"
-                type="button"
-                aria-selected={tab === t.id}
-                onClick={() => setTab(t.id)}
-                style={{
-                  border: "none",
-                  cursor: "pointer",
-                  font: "inherit",
-                  fontWeight: 600,
-                  fontSize: 13,
-                  padding: "7px 14px",
-                  borderRadius: 8,
-                  background: tab === t.id ? "var(--s-color-bg, #fff)" : "transparent",
-                  boxShadow: tab === t.id ? "0 1px 3px rgba(20,20,25,.15)" : "none",
-                }}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-          <span style={{ marginLeft: "auto" }}>
+        <PageHeader
+          backTo="/app/ai-agent"
+          backLabel="AI Agent"
+          tabs={TABS}
+          activeTab={tab}
+          onTabChange={setTab}
+          toolbar={
             <s-button variant="tertiary" onClick={() => navigate("/app/ai-agent/test")}>
               Test AI
             </s-button>
-          </span>
-        </div>
+          }
+        />
 
         {tab === "general" ? (
           <InstructionsGeneralTab initial={data.general} autoDetectLocked={data.autoDetectLocked} />
@@ -380,6 +355,7 @@ export default function InstructionsPage() {
             customRecs={data.customRecs}
             pairs={data.pairs}
             productMeta={data.productMeta}
+            rules={data.rules}
             onOpenRec={(id) =>
               setSearchParams((prev) => {
                 const params = new URLSearchParams(prev);

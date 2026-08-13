@@ -1,7 +1,13 @@
 import { useMemo, useState } from "react";
 import type { CollectionRow } from "../routes/app.ai-agent.training";
 import { DataTable } from "./DataTable";
-import { LearnCard, SubTabs, formatDateTime, useTrainingFetcher } from "./TrainingShared";
+import {
+  LearnCard,
+  SubTabs,
+  formatDateTime,
+  useSyncWatcher,
+  useTrainingFetcher,
+} from "./TrainingShared";
 
 // Collections tab (spec 07, design #viewTraining → Collections): learn card
 // with master switch (Collection.learnEnabled defaults to false per design),
@@ -12,12 +18,15 @@ type SubTab = "all" | "active" | "inactive";
 export function TrainingCollectionsTab(props: {
   rows: CollectionRow[];
   lastSyncedAt: string | null;
+  /** Master "Learn collections" permission (ShopSettings.learn.collections) —
+   *  independent of per-row learnEnabled, which applies only when this is on. */
+  masterEnabled: boolean;
 }) {
-  const { submit, busy } = useTrainingFetcher();
+  const { submit, pendingIntent } = useTrainingFetcher();
+  const syncWatch = useSyncWatcher(props.lastSyncedAt, "Collections synced");
   const [subTab, setSubTab] = useState<SubTab>("all");
 
   const learned = props.rows.filter((row) => row.learnEnabled).length;
-  const allLearned = props.rows.length > 0 && learned === props.rows.length;
 
   const rows = useMemo(() => {
     if (subTab === "all") return props.rows;
@@ -28,13 +37,12 @@ export function TrainingCollectionsTab(props: {
     <s-stack gap="base">
       <LearnCard
         title="Collections"
-        chip={`${learned} of ${props.rows.length} collections learned`}
+        chip={`${props.masterEnabled ? learned : 0} of ${props.rows.length} collections learned`}
         description="Help customers discover collections, understand product groupings and curated selections in your store."
-        switchChecked={allLearned}
-        switchLabel="Learn all collections"
-        switchDisabled={busy || props.rows.length === 0}
+        switchChecked={props.masterEnabled}
+        switchLabel="Learn collections"
         onSwitch={(checked) =>
-          submit("collections-learn-all", { enabled: checked ? "true" : "false" })
+          submit("learn-master", { type: "collections", enabled: checked ? "true" : "false" })
         }
       />
 
@@ -46,20 +54,17 @@ export function TrainingCollectionsTab(props: {
                 Auto sync: Daily · Last updated: {formatDateTime(props.lastSyncedAt)}
               </s-text>
             </div>
-            <s-button variant="primary" disabled={busy} onClick={() => submit("sync-collections")}>
+            <s-button
+              variant="primary"
+              loading={syncWatch.syncing || pendingIntent === "sync-collections"}
+              onClick={() => {
+                submit("sync-collections");
+                syncWatch.start();
+              }}
+            >
               Sync collections
             </s-button>
           </div>
-
-          <SubTabs
-            tabs={[
-              { id: "all", label: "All" },
-              { id: "active", label: "Active" },
-              { id: "inactive", label: "Inactive" },
-            ]}
-            active={subTab}
-            onChange={setSubTab}
-          />
 
           <DataTable
             rows={rows}
@@ -67,6 +72,39 @@ export function TrainingCollectionsTab(props: {
             searchFn={(row, q) => row.title.toLowerCase().includes(q)}
             emptyMessage="No collections found. Run a sync to import them."
             perPage={10}
+            toolbar={
+              <SubTabs
+                tabs={[
+                  { id: "all", label: "All" },
+                  { id: "active", label: "Learning on" },
+                  { id: "inactive", label: "Learning off" },
+                ]}
+                active={subTab}
+                onChange={setSubTab}
+              />
+            }
+            bulkActions={(ids, clear) => (
+              <>
+                <s-button
+                  disabled={pendingIntent === "collections-learn"}
+                  onClick={() => {
+                    submit("collections-learn", { ids: ids.join(","), enabled: "true" });
+                    clear();
+                  }}
+                >
+                  Enable learning
+                </s-button>
+                <s-button
+                  disabled={pendingIntent === "collections-learn"}
+                  onClick={() => {
+                    submit("collections-learn", { ids: ids.join(","), enabled: "false" });
+                    clear();
+                  }}
+                >
+                  Disable learning
+                </s-button>
+              </>
+            )}
             columns={[
               {
                 key: "title",
@@ -97,17 +135,8 @@ export function TrainingCollectionsTab(props: {
                 render: (row) => <s-text tone="neutral">{String(row.productCount)}</s-text>,
               },
               {
-                key: "status",
-                title: "Status",
-                render: (row) => (
-                  <s-badge tone={row.learnEnabled ? "success" : "neutral"}>
-                    {row.learnEnabled ? "Active" : "Inactive"}
-                  </s-badge>
-                ),
-              },
-              {
                 key: "learn",
-                title: "Learn",
+                title: "AI Learn",
                 align: "end",
                 render: (row) => (
                   <s-switch

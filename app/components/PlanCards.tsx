@@ -3,6 +3,8 @@
 // hard-coded here. CTA labels derive from tier order (Current / Upgrade to X /
 // Downgrade to X) — the design's all-"Downgrade" buttons are a known design bug.
 
+import { BRAND } from "./ui/tokens";
+
 export interface PlanCardData {
   id: string;
   name: string;
@@ -71,7 +73,8 @@ export function PlanCards(props: {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))",
+          // 2-up grid (user decision 2026-08-10): four plans render as 2×2.
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
           gap: 12,
           alignItems: "stretch",
         }}
@@ -87,7 +90,7 @@ export function PlanCards(props: {
               style={{
                 border:
                   cta.kind === "current"
-                    ? "2px solid #6d3bf5"
+                    ? `2px solid ${BRAND.accent}`
                     : plan.popular
                       ? "2px solid #3b82f6"
                       : "1px solid var(--s-color-border, #e3e3e3)",

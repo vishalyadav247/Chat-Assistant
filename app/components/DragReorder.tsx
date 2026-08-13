@@ -44,7 +44,9 @@ export function useDragReorder(onMove: (from: number, to: number) => void, enabl
     onDragOver: (e: React.DragEvent<HTMLElement>) => {
       if (from === null || from === index) return;
       e.preventDefault();
-      setHint({ index, edge: edgeFor(e) });
+      // dragover fires continuously — only touch state on actual change.
+      const edge = edgeFor(e);
+      setHint((h) => (h && h.index === index && h.edge === edge ? h : { index, edge }));
     },
     onDragLeave: () => setHint((h) => (h?.index === index ? null : h)),
     onDrop: (e: React.DragEvent<HTMLElement>) => {
@@ -58,7 +60,8 @@ export function useDragReorder(onMove: (from: number, to: number) => void, enabl
     },
     style: {
       opacity: from === index ? 0.4 : 1,
-      transition: "box-shadow .15s ease, opacity .15s ease",
+      // No transition while the indicator shows — it must track the cursor instantly.
+      transition: hint?.index === index ? "none" : "box-shadow .15s ease, opacity .15s ease",
       boxShadow:
         hint?.index === index
           ? `inset 0 ${hint.edge === "before" ? "2px" : "-2px"} 0 0 var(--s-color-border-focus, #005bd3)`
@@ -88,7 +91,14 @@ export function DragHandle(props: {
       aria-label={`${props.label} — drag, or press arrow up/down`}
       disabled={!enabled}
       draggable={props.drag.draggable}
-      onDragStart={props.drag.onDragStart}
+      onDragStart={(e) => {
+        // Ghost the whole row (nearest [data-drag-row]) instead of the handle.
+        const row = (e.currentTarget as HTMLElement).closest("[data-drag-row]");
+        if (row instanceof HTMLElement) {
+          e.dataTransfer.setDragImage(row, 24, row.offsetHeight / 2);
+        }
+        props.drag.onDragStart(e);
+      }}
       onDragEnd={props.drag.onDragEnd}
       onKeyDown={(e) => {
         if (e.key === "ArrowUp" || e.key === "ArrowDown") {
@@ -99,16 +109,18 @@ export function DragHandle(props: {
       style={{
         border: "none",
         background: "none",
-        padding: "0 2px",
+        padding: 6,
+        margin: -2,
         display: "inline-flex",
         alignItems: "center",
+        borderRadius: 6,
         cursor: enabled ? "grab" : "default",
         color: "var(--s-color-text-secondary, #8a8a8f)",
         opacity: enabled ? 1 : 0.4,
         touchAction: "none",
       }}
     >
-      <s-icon type="drag-handle" size="small" />
+      <s-icon type="drag-handle" size="base" />
     </button>
   );
 }

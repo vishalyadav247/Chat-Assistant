@@ -25,7 +25,7 @@ import type {
 
 export * from "./shared";
 
-const RANGE_DAYS: Record<AnalyticsRange, number> = { "7d": 7, "30d": 30, "3m": 90 };
+const RANGE_DAYS: Record<AnalyticsRange, number> = { "7d": 7, "30d": 30, "3m": 90, "12m": 365 };
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function isoDate(day: Date): string {

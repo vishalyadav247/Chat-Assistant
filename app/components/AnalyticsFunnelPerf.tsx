@@ -3,7 +3,8 @@ import type {
   ResponsePerformance,
 } from "../lib/analytics/shared";
 import { humanizeMs } from "../lib/analytics/shared";
-import { StatGrid, StatTile } from "./StatTile";
+import { StatGrid, StatTile } from "./ui/StatTile";
+import { BRAND } from "./ui/tokens";
 
 // Recommendation funnel + response performance cards (spec 14, design
 // analytics.html .funnel / .stat-grid).
@@ -70,7 +71,7 @@ export function AnalyticsFunnel(props: { funnel: RecommendationFunnel }) {
               name="Recommendations shown"
               value={f.shown.toLocaleString("en-US")}
               pct={100}
-              color="linear-gradient(90deg,#6d3bf5,#7c5cff)"
+              color={`linear-gradient(90deg,${BRAND.accent},#7c5cff)`}
             />
             <FunnelRow
               name="Added to cart"
@@ -111,17 +112,23 @@ export function AnalyticsResponsePerformance(props: { perf: ResponsePerformance 
           <StatTile
             label="Avg. first response"
             value={humanizeMs(p.avgFirstResponseMs)}
+            icon="clock"
+            tone="accent"
             delta={timeDelta(d.firstResponsePct)}
             sub={p.avgFirstResponseMs === null ? "No replies in this period yet" : undefined}
           />
           <StatTile
             label="Avg. resolution time"
             value={humanizeMs(p.avgResolutionMs)}
+            icon="check-circle"
+            tone="success"
             delta={timeDelta(d.resolutionPct)}
             sub={p.avgResolutionMs === null ? "No resolved conversations yet" : undefined}
           />
           <StatTile
             label="Answered on first try"
+            icon="target"
+            tone="info"
             value={p.answeredFirstTryPct === null ? "—" : `${p.answeredFirstTryPct}%`}
             delta={
               d.answeredFirstTryPts === null || d.answeredFirstTryPts === 0
@@ -134,6 +141,8 @@ export function AnalyticsResponsePerformance(props: { perf: ResponsePerformance 
           />
           <StatTile
             label="Handed to human"
+            icon="person"
+            tone="warning"
             value={p.handedToHuman.toLocaleString("en-US")}
             delta={
               d.handedToHuman === null || d.handedToHuman === 0

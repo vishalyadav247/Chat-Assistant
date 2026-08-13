@@ -111,6 +111,15 @@ model Discount {
   title             String
   summary           String    @default("")
   status            String    @default("active")
+  // Display fields for the Discounts training table (spec 07):
+  // method: code | automatic; discountType: amount_off_order |
+  // amount_off_products | free_shipping | bxgy; usedCount: asyncUsageCount.
+  method            String    @default("code")
+  discountType      String    @default("amount_off_order")
+  usedCount         Int       @default(0)
+  // Per-discount AI learning flag (user decision 2026-08-12: bulk actions are
+  // app-only — they gate AI usage, never mutate the discount in Shopify).
+  learnEnabled      Boolean   @default(true)
   startsAt          DateTime?
   endsAt            DateTime?
   updatedAt         DateTime  @updatedAt

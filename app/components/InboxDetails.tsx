@@ -29,12 +29,16 @@ export function InboxDetails({
   active,
   cartViewEnabled,
   currency,
+  assignees,
+  onAssign,
   onBlock,
   onDelete,
 }: {
   active: InboxDetail | null;
   cartViewEnabled: boolean;
   currency: string;
+  assignees: { id: string; name: string }[];
+  onAssign: (assigneeId: string) => void;
   onBlock: () => void;
   onDelete: () => void;
 }) {
@@ -70,10 +74,19 @@ export function InboxDetails({
         <div className="cin-dcard">
           <span className="cin-dlabel">Assignee</span>
           <div className="cin-assignee">
-            <span className="cin-an">Unassigned</span>
-            <button type="button" className="cin-assign" disabled title="Team coming soon">
-              Assign
-            </button>
+            <select
+              className="cin-assign-select"
+              aria-label="Assign conversation"
+              value={active.assigneeId ?? ""}
+              onChange={(e) => onAssign(e.currentTarget.value)}
+            >
+              <option value="">Unassigned</option>
+              {assignees.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 

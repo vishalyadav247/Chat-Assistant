@@ -179,7 +179,9 @@ export async function* runPipeline(input: PipelineInput): AsyncIterable<Pipeline
       use = answer.trim().toLowerCase().startsWith("y");
     }
     if (use) {
-      const cards = await cardsForShopifyIds(shopId, curated.productIds);
+      const cards = await cardsForShopifyIds(
+        shopId, curated.productIds, config.settings.recommendationRules.excludeOutOfStock,
+      );
       await db.curatedAnswer.updateMany({
         where: { id: curated.id, shopId },
         data: { servedCount: { increment: 1 } },
@@ -206,7 +208,9 @@ export async function* runPipeline(input: PipelineInput): AsyncIterable<Pipeline
     return null;
   });
   if (recommendation && recommendation.score >= curatedThreshold) {
-    const cards = await cardsForShopifyIds(shopId, recommendation.productIds);
+    const cards = await cardsForShopifyIds(
+      shopId, recommendation.productIds, config.settings.recommendationRules.excludeOutOfStock,
+    );
     if (cards.length > 0) {
       const text = `${recommendation.title} — here are our picks:`;
       await saveMessage(shopId, convo.id, {
@@ -330,23 +334,32 @@ async function* buyLane(args: {
   routed: unknown;
 }): AsyncIterable<PipelineFrame> {
   const minMeaningScore = args.config.guardrails?.minMeaningScore ?? 0.3;
+  const excludeOutOfStock = args.config.settings.recommendationRules.excludeOutOfStock;
+  // Master "Learn products" permission (spec 07): OFF ⇒ the catalog is
+  // off-limits — no search, no browse fallback; the lane falls through to the
+  // clarify path below. Per-product learnEnabled applies only when this is on.
+  const learnProducts = args.config.settings.learn.products;
 
   // Custom recommendations (spec 08): a matched search term constrains the
   // candidate pool to the merchant's hand-picked products for that occasion.
-  const constrained = await customRecommendationPool(args.shopId, args.message, args.priceMax);
-  let candidates =
-    constrained ??
-    (await hybridProductSearch({
-      shopId: args.shopId,
-      queryEmbedding: args.queryEmbedding,
-      keywords: args.keywords,
-      priceMax: args.priceMax,
-      minMeaningScore,
-    }));
+  const constrained = learnProducts
+    ? await customRecommendationPool(args.shopId, args.message, args.priceMax, excludeOutOfStock)
+    : null;
+  let candidates = !learnProducts
+    ? []
+    : (constrained ??
+      (await hybridProductSearch({
+        shopId: args.shopId,
+        queryEmbedding: args.queryEmbedding,
+        keywords: args.keywords,
+        priceMax: args.priceMax,
+        minMeaningScore,
+        excludeOutOfStock,
+      })));
   let browse = false;
 
-  if (candidates.length === 0 && args.priceMax !== null) {
-    candidates = await browseCheapestInBudget(args.shopId, args.priceMax);
+  if (learnProducts && candidates.length === 0 && args.priceMax !== null) {
+    candidates = await browseCheapestInBudget(args.shopId, args.priceMax, 4, excludeOutOfStock);
     browse = true;
   }
 
@@ -372,7 +385,7 @@ async function* buyLane(args: {
   const allowList = candidates.map((c) => ({ title: c.title, price: c.price }));
   let cards = candidates.slice(0, 4).map(toCard);
   // Cross-sell (spec 08): append companions of any anchored card (cap 6 total).
-  cards = await appendCrossSell(args.shopId, cards);
+  cards = await appendCrossSell(args.shopId, cards, excludeOutOfStock);
 
   const stream = getLlmProvider().chatStream(
     [
@@ -418,10 +431,21 @@ async function* questionLane(args: {
 }): AsyncIterable<PipelineFrame> {
   const guardrails = args.config.guardrails;
   const minMeaningScore = guardrails?.minMeaningScore ?? 0.3;
-  const hits = await knowledgeSearch(args.shopId, args.queryEmbedding, 3);
+  const [hits, discountContext] = await Promise.all([
+    knowledgeSearch(args.shopId, args.queryEmbedding, 3),
+    // Master "Learn discounts" permission (spec 07): OFF ⇒ no discount facts,
+    // regardless of per-row learnEnabled.
+    args.config.settings.learn.discounts
+      ? activeDiscountContext(args.shopId, args.message)
+      : Promise.resolve(""),
+  ]);
   const strongEnough = hits.length > 0 && hits[0].score >= minMeaningScore;
 
-  if ((guardrails?.answerOnlyFromKnowledge ?? true) && !strongEnough) {
+  // Discount questions are grounded mechanically from the synced Discount
+  // mirror (spec 02 backlog: "synced discounts become RAG-available later").
+  // When we hold real discount facts, the no-knowledge fallback is skipped —
+  // the context IS the store info for this turn.
+  if ((guardrails?.answerOnlyFromKnowledge ?? true) && !strongEnough && !discountContext) {
     await saveMessage(args.shopId, args.convoId, {
       role: "out", author: "ai", content: args.fallback, sourceLayer: "rag_fallback", intent: args.routed,
     });
@@ -439,7 +463,8 @@ async function* questionLane(args: {
     return;
   }
 
-  const context = hits.map((h) => `[${h.topic}] ${h.body}`).join("\n\n");
+  const context =
+    hits.map((h) => `[${h.topic}] ${h.body}`).join("\n\n") + discountContext;
   const stream = getLlmProvider().chatStream(
     [
       { role: "system", content: `${args.personaPrompt}\n${QUESTION_ANSWER}` },
@@ -456,6 +481,41 @@ async function* questionLane(args: {
     intent: args.routed,
     meterPromise: args.meterPromise,
   });
+}
+
+// ── Discount grounding (spec 02 delta closed 2026-08-10) ────────────────────
+// Mechanical context injection: when the shopper's message reads like a
+// discount question, the currently-active synced discounts (title + Shopify's
+// human-readable summary) are appended to the question-lane store info. The
+// model still can't invent discounts (prompt rule) — it can only voice these
+// rows. Zero extra LLM calls; one indexed query, only on matching messages.
+
+const DISCOUNT_INTENT_RE =
+  /\b(discount|coupon|promo|promotion|voucher|sale|offer|deal|discount code|promo code)\b/i;
+
+async function activeDiscountContext(shopId: string, message: string): Promise<string> {
+  if (!DISCOUNT_INTENT_RE.test(message)) return "";
+  const now = new Date();
+  const discounts = await db.discount.findMany({
+    where: {
+      shopId,
+      status: "active",
+      learnEnabled: true,
+      AND: [
+        { OR: [{ startsAt: null }, { startsAt: { lte: now } }] },
+        { OR: [{ endsAt: null }, { endsAt: { gte: now } }] },
+      ],
+    },
+    orderBy: { updatedAt: "desc" },
+    take: 6,
+    select: { title: true, summary: true, endsAt: true },
+  });
+  if (discounts.length === 0) return "";
+  const lines = discounts.map((d) => {
+    const ends = d.endsAt ? ` (ends ${d.endsAt.toISOString().slice(0, 10)})` : "";
+    return `- ${d.title}${d.summary ? `: ${d.summary}` : ""}${ends}`;
+  });
+  return `\n\n[Current discounts — the only discounts that exist]\n${lines.join("\n")}`;
 }
 
 // ── Shared helpers ──────────────────────────────────────────────────────────
@@ -645,6 +705,7 @@ async function customRecommendationPool(
   shopId: string,
   message: string,
   priceMax: number | null,
+  excludeOutOfStock: boolean,
 ): Promise<ProductCandidate[] | null> {
   try {
     const rows = await db.customRecommendation.findMany({
@@ -662,7 +723,7 @@ async function customRecommendationPool(
       where: {
         shopId,
         shopifyProductId: { in: matched.productIds },
-        stock: { gt: 0 },
+        ...purchasableWhere(excludeOutOfStock),
         ...(priceMax !== null ? { price: { lte: priceMax } } : {}),
       },
       select: {
@@ -690,7 +751,11 @@ async function customRecommendationPool(
 }
 
 /** Cross-sell (spec 08): companions of anchored cards appended, 6-card cap. */
-async function appendCrossSell(shopId: string, cards: ProductCard[]): Promise<ProductCard[]> {
+async function appendCrossSell(
+  shopId: string,
+  cards: ProductCard[],
+  excludeOutOfStock: boolean,
+): Promise<ProductCard[]> {
   try {
     if (cards.length === 0) return cards;
     const anchors = await db.crossSellPair.findMany({
@@ -708,7 +773,7 @@ async function appendCrossSell(shopId: string, cards: ProductCard[]): Promise<Pr
       .filter((id) => !have.has(id))
       .slice(0, 6 - cards.length);
     if (companionIds.length === 0) return cards;
-    const companions = await cardsForShopifyIds(shopId, companionIds);
+    const companions = await cardsForShopifyIds(shopId, companionIds, excludeOutOfStock);
     return [...cards, ...companions].slice(0, 6);
   } catch (error) {
     console.error("cross_sell_error", error);
@@ -716,10 +781,27 @@ async function appendCrossSell(shopId: string, cards: ProductCard[]): Promise<Pr
   }
 }
 
-async function cardsForShopifyIds(shopId: string, shopifyProductIds: string[]): Promise<ProductCard[]> {
+/** Prisma equivalent of product-search's purchasable SQL: tracked stock OR any
+ *  variant availableForSale (array_contains → jsonb `@>` containment). */
+function purchasableWhere(excludeOutOfStock: boolean): Prisma.ProductWhereInput {
+  if (!excludeOutOfStock) return {};
+  return {
+    OR: [{ stock: { gt: 0 } }, { variants: { array_contains: [{ available: true }] } }],
+  };
+}
+
+async function cardsForShopifyIds(
+  shopId: string,
+  shopifyProductIds: string[],
+  excludeOutOfStock: boolean,
+): Promise<ProductCard[]> {
   if (shopifyProductIds.length === 0) return [];
   const rows = await db.product.findMany({
-    where: { shopId, shopifyProductId: { in: shopifyProductIds }, stock: { gt: 0 } },
+    where: {
+      shopId,
+      shopifyProductId: { in: shopifyProductIds },
+      ...purchasableWhere(excludeOutOfStock),
+    },
     select: {
       shopifyProductId: true, title: true, price: true, imageUrl: true, handle: true, variants: true,
     },

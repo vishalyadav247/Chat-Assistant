@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
 import { getEmbedStatus, type EmbedStatus } from "../embed-status.server";
@@ -31,6 +32,67 @@ export interface DashboardMetrics {
   resolutionRate: { resolved: number; total: number; pct: number };
   period: { from: string; to: string };
   compare: { from: string; to: string };
+  /** Bucketed counts over the period (day buckets; month for 12m) — sparklines. */
+  series: { conversations: number[]; atc: number[] };
+}
+
+// ── Sparkline series (bucketed counts) ──────────────────────────────────────
+
+type BucketUnit = "day" | "month";
+
+function bucketKey(date: Date, unit: BucketUnit): string {
+  return unit === "day"
+    ? `${date.getUTCFullYear()}-${date.getUTCMonth()}-${date.getUTCDate()}`
+    : `${date.getUTCFullYear()}-${date.getUTCMonth()}`;
+}
+
+function fillBuckets(
+  rows: { bucket: Date; n: bigint }[],
+  from: Date,
+  unit: BucketUnit,
+  count: number,
+): number[] {
+  const byKey = new Map(rows.map((r) => [bucketKey(new Date(r.bucket), unit), Number(r.n)]));
+  const out: number[] = [];
+  const cursor = new Date(from);
+  cursor.setUTCHours(0, 0, 0, 0);
+  if (unit === "month") cursor.setUTCDate(1);
+  for (let i = 0; i < count; i++) {
+    out.push(byKey.get(bucketKey(cursor, unit)) ?? 0);
+    if (unit === "day") cursor.setUTCDate(cursor.getUTCDate() + 1);
+    else cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+  return out;
+}
+
+async function conversationSeries(
+  shopId: string,
+  from: Date,
+  unit: BucketUnit,
+  count: number,
+): Promise<number[]> {
+  const rows = await db.$queryRaw<{ bucket: Date; n: bigint }[]>(Prisma.sql`
+    SELECT date_trunc(${unit}, "startedAt") AS bucket, count(*)::bigint AS n
+    FROM "conversations"
+    WHERE "shopId" = ${shopId} AND "isTest" = false AND "startedAt" >= ${from}
+    GROUP BY 1 ORDER BY 1
+  `);
+  return fillBuckets(rows, from, unit, count);
+}
+
+async function atcSeries(
+  shopId: string,
+  from: Date,
+  unit: BucketUnit,
+  count: number,
+): Promise<number[]> {
+  const rows = await db.$queryRaw<{ bucket: Date; n: bigint }[]>(Prisma.sql`
+    SELECT date_trunc(${unit}, "occurredAt") AS bucket, count(*)::bigint AS n
+    FROM "analytics_events"
+    WHERE "shopId" = ${shopId} AND "type" = 'added_to_cart' AND "occurredAt" >= ${from}
+    GROUP BY 1 ORDER BY 1
+  `);
+  return fillBuckets(rows, from, unit, count);
 }
 
 function pctDelta(current: number, previous: number): number | null {
@@ -49,24 +111,30 @@ export async function dashboardMetrics(
   const prevFrom = new Date(from.getTime() - days * DAY_MS);
   const liveSince = new Date(now.getTime() - LIVE_WINDOW_MS);
 
-  const [current, previous, live, resolved, atcCurrent, atcPrevious] = await Promise.all([
-    db.conversation.count({ where: { shopId, isTest: false, startedAt: { gte: from } } }),
-    db.conversation.count({
-      where: { shopId, isTest: false, startedAt: { gte: prevFrom, lt: from } },
-    }),
-    db.conversation.count({
-      where: { shopId, isTest: false, status: "open", lastMessageAt: { gte: liveSince } },
-    }),
-    db.conversation.count({
-      where: { shopId, isTest: false, status: "resolved", startedAt: { gte: from } },
-    }),
-    db.analyticsEvent.count({
-      where: { shopId, type: "added_to_cart", occurredAt: { gte: from } },
-    }),
-    db.analyticsEvent.count({
-      where: { shopId, type: "added_to_cart", occurredAt: { gte: prevFrom, lt: from } },
-    }),
-  ]);
+  const unit: BucketUnit = range === "12m" ? "month" : "day";
+  const bucketCount = unit === "day" ? days : 13;
+
+  const [current, previous, live, resolved, atcCurrent, atcPrevious, convSeries, cartSeries] =
+    await Promise.all([
+      db.conversation.count({ where: { shopId, isTest: false, startedAt: { gte: from } } }),
+      db.conversation.count({
+        where: { shopId, isTest: false, startedAt: { gte: prevFrom, lt: from } },
+      }),
+      db.conversation.count({
+        where: { shopId, isTest: false, status: "open", lastMessageAt: { gte: liveSince } },
+      }),
+      db.conversation.count({
+        where: { shopId, isTest: false, status: "resolved", startedAt: { gte: from } },
+      }),
+      db.analyticsEvent.count({
+        where: { shopId, type: "added_to_cart", occurredAt: { gte: from } },
+      }),
+      db.analyticsEvent.count({
+        where: { shopId, type: "added_to_cart", occurredAt: { gte: prevFrom, lt: from } },
+      }),
+      conversationSeries(shopId, from, unit, bucketCount),
+      atcSeries(shopId, from, unit, bucketCount),
+    ]);
 
   return {
     range,
@@ -82,6 +150,7 @@ export async function dashboardMetrics(
     },
     period: { from: from.toISOString(), to: now.toISOString() },
     compare: { from: prevFrom.toISOString(), to: from.toISOString() },
+    series: { conversations: convSeries, atc: cartSeries },
   };
 }
 

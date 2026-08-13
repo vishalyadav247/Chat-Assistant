@@ -7,6 +7,9 @@ import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { resolveShopId } from "../lib/tenancy.server";
 import { invalidateShopConfig } from "../lib/config/shop-config.server";
+import { loadShopSettings } from "../lib/settings/save.server";
+import { BRAND } from "../components/ui/tokens";
+import { StripBanner } from "../components/ui/StripBanner";
 
 // AI Agent home (spec 07, design ai-agent.html #viewAgent): master AI switch,
 // unresolved-questions card, 3-step setup grid, done-for-you promo. This route
@@ -36,7 +39,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
   const shopId = await resolveShopId(session.shop);
 
-  const [shop, pendingUnresolved, learnedProducts, sources, publishedFaqs, persona] =
+  const [shop, pendingUnresolved, learnedProducts, sources, publishedFaqs, persona, settings] =
     await Promise.all([
       db.shop.findUnique({ where: { id: shopId }, select: { aiEnabled: true } }),
       db.unresolvedQuestion.count({ where: { shopId, status: "pending" } }),
@@ -50,6 +53,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         where: { shopId },
         select: { role: true, behaviours: true, communicationStyle: true },
       }),
+      loadShopSettings(shopId),
     ]);
 
   const knowledgeChunks = sources.reduce((sum, s) => sum + s.chunkCount, 0);
@@ -65,7 +69,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     home: {
       aiEnabled: shop?.aiEnabled ?? true,
       pendingUnresolved,
-      itemsLearned: learnedProducts + knowledgeChunks + publishedFaqs,
+      // Master learn permission gates the effective count (spec 07): products
+      // don't count as learned while ShopSettings.learn.products is off.
+      itemsLearned:
+        (settings.learn.products ? learnedProducts : 0) + knowledgeChunks + publishedFaqs,
       instructionsPct,
     } as HomeData,
   };
@@ -133,7 +140,7 @@ export default function AiAgentPage() {
   return (
     <s-page heading="AI Agent">
       <s-stack gap="base">
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <s-badge tone={home.aiEnabled ? "success" : "neutral"}>
             {home.aiEnabled ? "On" : "Off"}
           </s-badge>
@@ -141,10 +148,7 @@ export default function AiAgentPage() {
             Enhance support and increase sales with an AI agent.
           </s-text>
           <span style={{ marginLeft: "auto", display: "inline-flex", gap: 8 }}>
-            <s-button onClick={() => navigate("/app/ai-agent/test")}>
-              Test AI
-              
-            </s-button>
+            <s-button onClick={() => navigate("/app/ai-agent/test")}>Test AI</s-button>
             <s-button
               variant="primary"
               disabled={busy}
@@ -162,20 +166,21 @@ export default function AiAgentPage() {
         </div>
 
         {home.aiEnabled && !bannerDismissed ? (
-          <s-banner tone="info" heading="Your AI agent is on" dismissible onDismiss={dismissBanner}>
-            <s-paragraph>
-              AI is now responding to customers. Review and add training data to ensure accurate
-              answers.
-            </s-paragraph>
-          </s-banner>
+          <StripBanner
+            tone="info"
+            icon="info"
+            title="Your AI agent is on"
+            onDismiss={dismissBanner}
+          >
+            AI is now responding to customers. Review and add training data to ensure accurate
+            answers.
+          </StripBanner>
         ) : null}
         {!home.aiEnabled ? (
-          <s-banner tone="warning" heading="Your AI agent is off">
-            <s-paragraph>
-              The chat widget falls back to contact and leave-a-message options until you activate
-              the AI agent again.
-            </s-paragraph>
-          </s-banner>
+          <StripBanner tone="warning" icon="alert-triangle" title="Your AI agent is off">
+            The chat widget falls back to contact and leave-a-message options until you activate
+            the AI agent again.
+          </StripBanner>
         ) : null}
 
         <s-section>
@@ -313,7 +318,7 @@ function SetupCard(props: {
             style={{
               width: `${Math.min(100, Math.max(0, props.pct))}%`,
               height: "100%",
-              background: "#6d3bf5",
+              background: BRAND.progressGradient,
               borderRadius: 3,
               transition: "width 300ms ease",
             }}

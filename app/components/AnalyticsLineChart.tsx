@@ -1,13 +1,14 @@
 import { useMemo, useState } from "react";
 import type { AnalyticsRange, SeriesPoint } from "../lib/analytics/shared";
 import { ANALYTICS_RANGE_LABELS, ANALYTICS_RANGES } from "../lib/analytics/shared";
+import { BRAND } from "./ui/tokens";
 
 // "Total conversations over time" card (spec 14, design analytics.html
 // #lineChart): hand-rolled SVG smoothed line chart, Human vs AI series, own
 // range dropdown (7d / 30d / 3m), legend, crosshair hover tooltip. Series
 // colors from the design (#6d3bf5 AI / #22b8d6 human — CVD-validated pair).
 
-const AI_COLOR = "#6d3bf5";
+const AI_COLOR = BRAND.accent;
 const HUMAN_COLOR = "#22b8d6";
 
 const W = 1100;

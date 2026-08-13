@@ -14,7 +14,7 @@ import {
   saveCuratedAnswer,
 } from "../lib/curated/save.server";
 import { revalidateCuratedStock } from "../lib/curated/revalidate.server";
-import { StatGrid, StatTile } from "../components/StatTile";
+import { StatGrid, StatTile } from "../components/ui/StatTile";
 import { QuotaMeter } from "../components/QuotaMeter";
 import { DataTable } from "../components/DataTable";
 import { ChipInput } from "../components/ChipInput";
@@ -96,7 +96,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     pendingEmbedding: pendingIds,
     kpis: {
       published: answers.filter((a) => a.status === "published").length,
-      servedTotal: answers.reduce((sum, a) => sum + a.servedCount, 0),
+      // Month-accurate: curated_served events since the period start (the
+      // per-answer servedCount sum was all-time — PROGRESS follow-up closed).
+      servedTotal: curatedServed,
       needsAttention: answers.filter((a) => a.stockIssue).length,
       matchRate:
         matchDenominator > 0 ? Math.round((curatedServed / matchDenominator) * 100) : 0,
@@ -322,21 +324,29 @@ export default function CuratedAnswersPage() {
             <StatTile
               label="Published"
               value={String(data.kpis.published)}
+              icon="check-circle"
+              tone="success"
               sub={`of ${data.quota} total`}
             />
             <StatTile
               label="Served this month"
               value={String(data.kpis.servedTotal)}
+              icon="chat"
+              tone="accent"
               sub="curated answers used"
             />
             <StatTile
               label="Needs attention"
               value={String(data.kpis.needsAttention)}
+              icon="alert-triangle"
+              tone="warning"
               sub="dead-stock picks"
             />
             <StatTile
               label="Answer match rate"
               value={`${data.kpis.matchRate}%`}
+              icon="target"
+              tone="info"
               sub="of shopper questions matched"
             />
           </StatGrid>

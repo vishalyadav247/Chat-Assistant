@@ -65,7 +65,7 @@ const SCRIPT_ID = "chatconvert-preview-renderer-js";
 const PREVIEW_CSS = `
 .ccpv .cw-root{position:static;inset:auto;z-index:auto;width:100%;}
 .ccpv .cw-panel{width:100%;max-width:none;}
-.ccpv .cw-body{max-height:420px;}
+.ccpv .cw-body{max-height:560px;}
 .ccpv .cw-launcher{margin-top:14px;}
 `;
 
@@ -93,6 +93,7 @@ export function ChatboxPreview(props: {
   featuredFaqs: PreviewFaq[];
   rendererJs: string;
   widgetCss: string;
+  currency: string;
 }) {
   const { settings, tab, availability, featuredFaqs } = props;
   const containerRef = useRef<HTMLDivElement>(null);
@@ -134,7 +135,7 @@ export function ChatboxPreview(props: {
       availability,
       featuredFaqs,
       welcomeMessage: settings.welcomeMessage,
-      currency: "USD",
+      currency: props.currency,
       showBranding,
     };
 
@@ -169,6 +170,8 @@ export function ChatboxPreview(props: {
         wrap.style.display = "flex";
         wrap.style.flexDirection = "column";
         wrap.style.gap = "12px";
+        wrap.style.flex = "1"; // fill the body so starter chips pin to the bottom
+
         // No customer name in preview → {{customer_name}} renders "there".
         wrap.appendChild(R.messageBubble("bot", R.welcomeText(template, "")).el);
         if (settings.starters.enabled && settings.starters.items.length > 0) {
@@ -201,7 +204,7 @@ export function ChatboxPreview(props: {
     });
     root.appendChild(launcher);
     container.appendChild(root);
-  }, [ready, settings, screen, faq, minimized, availability, featuredFaqs]);
+  }, [ready, settings, screen, faq, minimized, availability, featuredFaqs, props.currency]);
 
   return <div className="ccpv" ref={containerRef} />;
 }

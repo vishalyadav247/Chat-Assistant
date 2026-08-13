@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useFetcher } from "react-router";
 import type { ReviewSourceData, TestActionResult } from "../routes/app.ai-agent.test";
+import { BRAND } from "./ui/tokens";
 
 // Test AI console (spec 08, design ai-agent.html #viewTest). Streams the real
 // pipeline via POST /api/test-chat and parses the SSE frames from the fetch
@@ -262,7 +263,7 @@ export function TestAiConsole(props: {
                       whiteSpace: "pre-wrap",
                       background:
                         entry.role === "user"
-                          ? "#6d3bf5"
+                          ? BRAND.gradient
                           : "var(--s-color-bg-fill-secondary, #f1f1f1)",
                       color: entry.role === "user" ? "#fff" : "inherit",
                     }}
@@ -335,10 +336,17 @@ export function TestAiConsole(props: {
                           font: "inherit",
                           fontSize: 12,
                           fontWeight: 600,
-                          color: "#6d3bf5",
+                          color: BRAND.accent,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 2,
                         }}
                       >
-                        Review source {entry.sourceOpen ? "▴" : "▾"}
+                        Review source{" "}
+                        <s-icon
+                          type={entry.sourceOpen ? "chevron-up" : "chevron-down"}
+                          size="small"
+                        />
                       </button>
                       <span style={{ display: "inline-flex", gap: 4 }}>
                         {[

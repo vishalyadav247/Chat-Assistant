@@ -33,6 +33,19 @@ export interface ProductSearchArgs {
   priceMax?: number | null;
   minMeaningScore: number; // guardrails.minMeaningScore
   limit?: number;
+  /** Rules card (spec 08): when false, unavailable products may be recommended. */
+  excludeOutOfStock?: boolean;
+}
+
+// Purchasable = tracked stock on hand OR any variant availableForSale (covers
+// untracked inventory and "continue selling when out of stock").
+const PURCHASABLE = Prisma.sql`("stock" > 0 OR EXISTS (
+  SELECT 1 FROM jsonb_array_elements(COALESCE("variants", '[]'::jsonb)) AS v
+  WHERE (v->>'available')::boolean
+))`;
+
+function stockCondition(excludeOutOfStock: boolean): Prisma.Sql {
+  return excludeOutOfStock ? PURCHASABLE : Prisma.sql`TRUE`;
 }
 
 export async function hybridProductSearch(args: ProductSearchArgs): Promise<ProductCandidate[]> {
@@ -40,9 +53,11 @@ export async function hybridProductSearch(args: ProductSearchArgs): Promise<Prod
   const limit = args.limit ?? 8;
   const priceMax = args.priceMax ?? null;
 
+  const excludeOutOfStock = args.excludeOutOfStock ?? true;
+
   const [keywordRows, vectorRows] = await Promise.all([
-    keywordSearch(shopId, args.keywords, priceMax, limit),
-    vectorSearch(shopId, args.queryEmbedding, priceMax, limit),
+    keywordSearch(shopId, args.keywords, priceMax, limit, excludeOutOfStock),
+    vectorSearch(shopId, args.queryEmbedding, priceMax, limit, excludeOutOfStock),
   ]);
 
   const merged = new Map<string, ProductCandidate>();
@@ -66,6 +81,7 @@ export async function browseCheapestInBudget(
   shopId: string,
   priceMax: number,
   limit = 4,
+  excludeOutOfStock = true,
 ): Promise<ProductCandidate[]> {
   requireShopId(shopId);
   const rows = await db.$queryRaw<RawRow[]>(Prisma.sql`
@@ -74,7 +90,7 @@ export async function browseCheapestInBudget(
     FROM "products"
     WHERE "shopId" = ${shopId}
       AND "learnEnabled" = true AND "status" = 'active'
-      AND "stock" > 0 AND "price" <= ${priceMax}
+      AND ${stockCondition(excludeOutOfStock)} AND "price" <= ${priceMax}
     ORDER BY "price" ASC
     LIMIT ${limit}
   `);
@@ -98,6 +114,7 @@ async function keywordSearch(
   keywords: string[],
   priceMax: number | null,
   limit: number,
+  excludeOutOfStock: boolean,
 ): Promise<ProductCandidate[]> {
   const terms = keywords.filter((k) => k.trim().length > 0);
   if (terms.length === 0) return [];
@@ -108,9 +125,10 @@ async function keywordSearch(
     FROM "products"
     WHERE "shopId" = ${shopId}
       AND "learnEnabled" = true AND "status" = 'active'
-      AND "stock" > 0
+      AND ${stockCondition(excludeOutOfStock)}
       AND (${priceMax}::float8 IS NULL OR "price" <= ${priceMax}::float8)
       AND "searchText" @@ plainto_tsquery('english', ${query})
+    ORDER BY ts_rank("searchText", plainto_tsquery('english', ${query})) DESC
     LIMIT ${limit}
   `);
   return rows.map(toCandidate);
@@ -121,6 +139,7 @@ async function vectorSearch(
   queryEmbedding: number[],
   priceMax: number | null,
   limit: number,
+  excludeOutOfStock: boolean,
 ): Promise<ProductCandidate[]> {
   const vec = toSqlVector(queryEmbedding);
   const rows = await db.$queryRaw<RawRow[]>(Prisma.sql`
@@ -130,7 +149,7 @@ async function vectorSearch(
     FROM "products"
     WHERE "shopId" = ${shopId}
       AND "learnEnabled" = true AND "status" = 'active'
-      AND "stock" > 0
+      AND ${stockCondition(excludeOutOfStock)}
       AND (${priceMax}::float8 IS NULL OR "price" <= ${priceMax}::float8)
       AND "embedding" IS NOT NULL
     ORDER BY "embedding" <=> ${vec}::vector

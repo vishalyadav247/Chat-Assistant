@@ -4,7 +4,7 @@ import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
 import { invalidateShopConfig } from "../config/shop-config.server";
 import { requirePlan } from "../billing/plans.server";
-import { handoverConfigSchema, type HandoverConfigData } from "../settings/schemas";
+import { handoverConfigSchema, shopSettingsSchema, type HandoverConfigData } from "../settings/schemas";
 
 // Instructions save workflow (spec 08): General tab → Persona + Guardrails,
 // Product recommendations tab → Recommendation / CustomRecommendation /
@@ -213,6 +213,23 @@ export async function deleteCrossSellPair(shopId: string, id: string): Promise<v
 }
 
 // ── Human handover tab ──────────────────────────────────────────────────────
+
+/** Rules card (spec 08): merge recommendationRules into the shop settings blob. */
+export async function saveRecommendationRules(shopId: string, raw: unknown): Promise<void> {
+  requireShopId(shopId);
+  const rules = shopSettingsSchema.shape.recommendationRules.parse(raw);
+  const current = await db.shopSettings.findUnique({ where: { shopId } });
+  const settings = shopSettingsSchema.parse({
+    ...((current?.settings as Record<string, unknown>) ?? {}),
+    recommendationRules: rules,
+  });
+  await db.shopSettings.upsert({
+    where: { shopId },
+    update: { settings: settings as unknown as Prisma.InputJsonObject },
+    create: { shopId, settings: settings as unknown as Prisma.InputJsonObject },
+  });
+  invalidateShopConfig(shopId);
+}
 
 export async function saveHandoverConfig(shopId: string, raw: unknown): Promise<HandoverConfigData> {
   requireShopId(shopId);

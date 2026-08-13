@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
 import {
   useFetcher,
@@ -26,6 +26,10 @@ import { DashboardHero } from "../components/DashboardHero";
 import { DashboardOverview } from "../components/DashboardOverview";
 import { DashboardChecklist } from "../components/DashboardChecklist";
 import { DashboardLiveFeed } from "../components/DashboardLiveFeed";
+import { StripBanner } from "../components/ui/StripBanner";
+import { SPACE } from "../components/ui/tokens";
+import { currentUsage } from "../lib/billing/usage.server";
+import { getQuota } from "../lib/billing/plans.server";
 
 // Dashboard (spec 13, design dashboard.html): greeting hero, overview KPIs
 // with range/compare, 6-step setup checklist with progress ring, live
@@ -76,6 +80,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     timezone: true,
     currency: true,
     aiEnabled: true,
+    plan: true,
   } as const;
   let shop = await db.shop.findUnique({ where: { id: shopId }, select: shopSelect });
 
@@ -105,7 +110,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const [metrics, checklist, feed, pendingQuestions, atcThisMonth] = await Promise.all([
+  const [metrics, checklist, feed, pendingQuestions, atcThisMonth, usage] = await Promise.all([
     dashboardMetrics(shopId, range),
     setupChecklist(shopId, session.shop),
     liveFeed(shopId),
@@ -113,7 +118,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     db.analyticsEvent.count({
       where: { shopId, type: "added_to_cart", occurredAt: { gte: monthAgo } },
     }),
+    currentUsage(shopId),
   ]);
+
+  // Conversation quota for the near-cap banner. In "open" enforcement mode
+  // getQuota returns effectively-unlimited, so the banner stays hidden until
+  // enforcement flips — exactly the intended behavior.
+  const quota = getQuota(shop?.plan ?? "free", "conversations");
 
   const timezone = shop?.timezone || "UTC";
   return {
@@ -127,6 +138,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     feed,
     pendingQuestions,
     atcThisMonth,
+    usage,
+    quota: Number.isSafeInteger(quota) && quota < Number.MAX_SAFE_INTEGER ? quota : null,
   };
 };
 
@@ -177,10 +190,56 @@ export default function DashboardPage() {
 
   const syncing = syncFetcher.state !== "idle";
 
+  // Status banner (max one, by priority): AI off → near quota → setup left.
+  const [setupBannerDismissed, setSetupBannerDismissed] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      window.localStorage.getItem("cc-dashboard-setup-banner") === "1",
+  );
+  const nearQuota = data.quota !== null && data.quota > 0 && data.usage >= data.quota * 0.8;
+  const setupLeft = data.checklist.total - data.checklist.completed;
+
+  const banner = !data.aiEnabled ? (
+    <StripBanner
+      tone="warning"
+      icon="alert-triangle"
+      title="Your AI assistant is turned off"
+      action={{ label: "Turn it on", onClick: () => navigate("/app/ai-agent") }}
+    >
+      Shoppers can still leave messages, but the assistant isn&apos;t answering questions or
+      recommending products. Turn it back on from the AI Agent page.
+    </StripBanner>
+  ) : nearQuota ? (
+    <StripBanner
+      tone="warning"
+      icon="chart-line"
+      title={`You've used ${data.usage} of ${data.quota} conversations this month`}
+      action={{ label: "View plans", onClick: () => navigate("/app/plan-usage") }}
+    >
+      When the limit is reached the assistant pauses until the next billing period — upgrade to
+      keep it answering.
+    </StripBanner>
+  ) : setupLeft > 0 && !setupBannerDismissed ? (
+    <StripBanner
+      tone="info"
+      icon="info"
+      title={`${setupLeft} setup step${setupLeft === 1 ? "" : "s"} left to unlock the best results`}
+      onDismiss={() => {
+        setSetupBannerDismissed(true);
+        window.localStorage.setItem("cc-dashboard-setup-banner", "1");
+      }}
+    >
+      Finish the setup checklist below — stores that complete every step see noticeably better
+      answer quality and more assisted sales.
+    </StripBanner>
+  ) : null;
+
   return (
-    <s-page heading={`${data.greeting}, ${data.shopName} 👋`} inlineSize="large">
+    <s-page heading="Home" inlineSize="large">
       <s-stack gap="base">
         <DashboardHero
+          greeting={data.greeting}
+          shopName={data.shopName}
           pendingQuestions={data.pendingQuestions}
           atcThisMonth={data.atcThisMonth}
           aiEnabled={data.aiEnabled}
@@ -193,6 +252,8 @@ export default function DashboardPage() {
             window.open(`https://${data.shopDomain}`, "_blank", "noopener,noreferrer")
           }
         />
+
+        {banner}
 
         <DashboardOverview
           metrics={data.metrics}
@@ -211,7 +272,7 @@ export default function DashboardPage() {
           style={{
             display: "grid",
             gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-            gap: 16,
+            gap: SPACE.base,
             alignItems: "start",
           }}
         >

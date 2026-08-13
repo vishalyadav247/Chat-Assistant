@@ -17,9 +17,9 @@
     send: '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 10l14-6-6 14-2-6-6-2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>',
     chev: '<svg width="17" height="17" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M8 5l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     search: '<svg width="15" height="15" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="9" cy="9" r="5.5" stroke="currentColor" stroke-width="1.5"/><path d="m13.5 13.5 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
-    whatsapp: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 16l1-3a6 6 0 1 1 2.4 2.4L4 16Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
-    phone: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M5 4h3l1.5 3.5-2 1.2a8 8 0 0 0 3.8 3.8l1.2-2L16 15v3a1 1 0 0 1-1 1A11 11 0 0 1 4 5a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>',
-    email: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="3" y="5" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.4"/><path d="m4 6 6 5 6-5" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+    whatsapp: '<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413Z"/></svg>',
+    phone: '<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2Z"/></svg>',
+    email: '<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4-8 5-8-5V6l8 5 8-5v2z"/></svg>',
   };
 
   // ── helpers ──────────────────────────────────────────────────────────────
@@ -79,6 +79,18 @@
     return String(template || "").replace(/\{\{\s*customer_name\s*\}\}/g, customerName || "there");
   }
 
+  /* Campaign message merge tags (spec 12): {{customer_name}} + {{cart_total}}.
+   * cart_total renders the formatted cart value when the shell fetched it,
+   * else degrades to "your cart" so templates never show a raw tag. */
+  function campaignText(template, opts) {
+    var text = welcomeText(template, opts && opts.customerName);
+    var totalText =
+      opts && typeof opts.cartTotal === "number"
+        ? formatPrice(opts.cartTotal, opts && opts.currency)
+        : "your cart";
+    return text.replace(/\{\{\s*cart_total\s*\}\}/g, totalText);
+  }
+
   function digits(value) {
     return String(value || "").replace(/[^\d+]/g, "");
   }
@@ -101,6 +113,7 @@
       "aria-haspopup": "dialog",
     });
     if (style !== "icon") btn.classList.add("cw-launcher--pill");
+    if (lc.bgColor) btn.style.background = lc.bgColor; // custom launcher bg (else brand CSS vars)
 
     var iconMarkup = null;
     if (style === "icon" || style === "icon_label") {
@@ -115,6 +128,7 @@
     if (style === "label" || style === "icon_label") {
       var label = el("span");
       label.textContent = lc.label || "Chat with us";
+      if (lc.labelColor) label.style.color = lc.labelColor; // custom label color (else white)
       btn.appendChild(label);
     }
     if (callbacks && callbacks.onToggle) btn.addEventListener("click", callbacks.onToggle);
@@ -266,13 +280,30 @@
       var featured = (config.featuredFaqs || []).slice();
       if (featured.length > 0) {
         renderList(featured);
+        var clientFilter = function (q) {
+          return featured.filter(function (f) { return f.question.toLowerCase().indexOf(q) !== -1; });
+        };
+        var searchSeq = 0;
+        var searchTimer = null;
         input.addEventListener("input", function () {
           var q = input.value.trim().toLowerCase();
-          renderList(
-            q
-              ? featured.filter(function (f) { return f.question.toLowerCase().indexOf(q) !== -1; })
-              : featured,
-          );
+          if (searchTimer) clearTimeout(searchTimer);
+          if (!q) {
+            searchSeq++;
+            renderList(featured);
+            return;
+          }
+          // Instant client filter over featured, then (debounced) the server
+          // search across ALL published FAQs replaces it when it lands.
+          renderList(clientFilter(q));
+          if (!cb || !cb.onFaqSearch) return;
+          var seq = ++searchSeq;
+          searchTimer = setTimeout(function () {
+            cb.onFaqSearch(q).then(function (faqs) {
+              if (seq !== searchSeq || !faqs) return; // stale or failed → keep client results
+              renderList(faqs);
+            });
+          }, 250);
         });
       } else {
         var noneYet = el("div", "cw-row-sub");
@@ -761,7 +792,7 @@
     wrap.appendChild(x);
 
     var msg = el("div", "cw-pa-msg");
-    setText(msg, welcomeText(campaign.message, opts && opts.customerName));
+    setText(msg, campaignText(campaign.message, opts));
     wrap.appendChild(msg);
 
     var ctaBtn = null;

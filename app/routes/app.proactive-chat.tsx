@@ -22,7 +22,7 @@ import { ProactiveCampaignEditor, type CampaignDraft } from "../components/Proac
 import { campaignCtr, ProactiveCampaignTable } from "../components/ProactiveCampaignTable";
 import { ProactiveTemplatePicker } from "../components/ProactiveTemplatePicker";
 import { SaveBar } from "../components/SaveBar";
-import { StatGrid, StatTile } from "../components/StatTile";
+import { StatGrid, StatTile } from "../components/ui/StatTile";
 
 // Proactive Chat admin (spec 12, design proactive-chat.html): dashboard
 // (overview KPIs + campaign table) ⇄ template picker ⇄ minimal editor.
@@ -232,19 +232,39 @@ export default function ProactiveChatPage() {
 
             <s-section heading="Overview">
               <s-stack gap="base">
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <s-badge>Last 7 days</s-badge>
-                  <s-text tone="neutral">Totals shown are all-time in this version.</s-text>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <s-badge>All time</s-badge>
+                  <s-text tone="neutral">Per-range breakdowns arrive with analytics events.</s-text>
                 </div>
                 <StatGrid>
-                  <StatTile label="View" value={String(totals.views)} sub="campaign impressions" />
-                  <StatTile label="CTR" value={`${ctr.toFixed(2)}%`} sub="clicks ÷ views" />
+                  <StatTile
+                    label="Views"
+                    value={String(totals.views)}
+                    icon="view"
+                    tone="accent"
+                    sub="campaign impressions"
+                  />
+                  <StatTile
+                    label="CTR"
+                    value={`${ctr.toFixed(2)}%`}
+                    icon="target"
+                    tone="info"
+                    sub="clicks ÷ views"
+                  />
                   <StatTile
                     label="Revenue"
                     value={totals.orders > 0 || totals.revenue > 0 ? money.format(totals.revenue) : money.format(0)}
-                    sub={totals.orders > 0 || totals.revenue > 0 ? "attributed to campaigns" : "— no orders yet"}
+                    icon="money"
+                    tone="success"
+                    sub={totals.orders > 0 || totals.revenue > 0 ? "attributed to campaigns" : "no orders yet"}
                   />
-                  <StatTile label="Order" value={String(totals.orders)} sub="attributed orders" />
+                  <StatTile
+                    label="Orders"
+                    value={String(totals.orders)}
+                    icon="order"
+                    tone="warning"
+                    sub="attributed orders"
+                  />
                 </StatGrid>
               </s-stack>
             </s-section>

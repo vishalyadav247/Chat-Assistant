@@ -18,6 +18,8 @@ import {
 import { resolveShopId } from "../lib/tenancy.server";
 import { authenticate } from "../shopify.server";
 import { InboxDetails } from "../components/InboxDetails";
+import { BRAND } from "../components/ui/tokens";
+import { loadShopSettings } from "../lib/settings/save.server";
 import { InboxFilters } from "../components/InboxFilters";
 import { InboxList } from "../components/InboxList";
 import { InboxThread } from "../components/InboxThread";
@@ -43,16 +45,24 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       : (conversations.find((c) => !c.blocked)?.id ?? conversations[0]?.id ?? null);
   const active = activeId ? await getConversationDetail(shopId, activeId) : null;
 
-  const shop = await db.shop.findUnique({
-    where: { id: shopId },
-    select: { plan: true, currency: true },
-  });
+  const [shop, settings] = await Promise.all([
+    db.shop.findUnique({
+      where: { id: shopId },
+      select: { plan: true, currency: true, name: true },
+    }),
+    loadShopSettings(shopId),
+  ]);
 
   return {
     conversations,
     active,
     cartViewEnabled: hasFeature(shop?.plan ?? "free", "inbox_cart_view"),
     currency: shop?.currency ?? "USD",
+    // Assignable people: the owner + the team roster (spec 16 team v1).
+    assignees: [
+      { id: "owner", name: `${shop?.name || "Store owner"} (Owner)` },
+      ...settings.team.members.map((m) => ({ id: m.id, name: m.name })),
+    ],
   };
 };
 
@@ -87,6 +97,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return { ok: await blockConversation(shopId, conversationId), intent };
     case "delete":
       return { ok: await deleteConversation(shopId, conversationId), intent };
+    case "assign": {
+      const assigneeId = String(formData.get("assigneeId") ?? "");
+      // "" = unassign; otherwise the id must be the owner or a roster member.
+      if (assigneeId && assigneeId !== "owner") {
+        const settings = await loadShopSettings(shopId);
+        if (!settings.team.members.some((m) => m.id === assigneeId)) {
+          return { ok: false, intent };
+        }
+      }
+      const result = await db.conversation.updateMany({
+        where: { id: conversationId, shopId },
+        data: { assigneeId: assigneeId || null },
+      });
+      return { ok: result.count > 0, intent };
+    }
     default:
       return { ok: false, intent };
   }
@@ -206,6 +231,14 @@ export default function InboxPage() {
           active={active}
           cartViewEnabled={data.cartViewEnabled}
           currency={data.currency}
+          assignees={data.assignees}
+          onAssign={(assigneeId) =>
+            activeId &&
+            opFetcher.submit(
+              { intent: "assign", conversationId: activeId, assigneeId },
+              { method: "post" },
+            )
+          }
           onBlock={() => op("block")}
           onDelete={() => op("delete")}
         />
@@ -235,10 +268,10 @@ const WORKSPACE_CSS = `
 .cin-fil-grp{font-size:10.5px;font-weight:700;color:#9a9aa2;text-transform:uppercase;letter-spacing:.5px;padding:12px 8px 5px;}
 .cin-fil{display:flex;align-items:center;gap:9px;height:33px;padding:0 8px;border-radius:8px;width:100%;font-size:12.5px;font-weight:550;text-align:left;}
 .cin-fil:hover{background:#fbfbfc;}
-.cin-fil.active{background:#efeafe;color:#6d3bf5;font-weight:700;}
+.cin-fil.active{background:#efeafe;color:${BRAND.accent};font-weight:700;}
 .cin-fil-l{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .cin-fil-c{font-size:11px;font-weight:700;color:#6b6b73;}
-.cin-fil.active .cin-fil-c{color:#6d3bf5;}
+.cin-fil.active .cin-fil-c{color:${BRAND.accent};}
 .cin-fil-c.red{color:#fff;background:#f43f5e;border-radius:20px;padding:1px 6px;min-width:18px;text-align:center;}
 
 .cin-list-top{padding:12px 12px 10px;box-shadow:inset 0 -1px 0 #e9e9ec;flex:none;}
@@ -246,11 +279,11 @@ const WORKSPACE_CSS = `
 .cin-list-title{font-weight:750;color:#141417;font-size:14px;}
 .cin-unread-toggle{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:#6b6b73;}
 .cin-switch{width:34px;height:20px;border-radius:20px;background:#dcdce1;position:relative;transition:.15s;flex:none;display:inline-block;}
-.cin-switch.on{background:#6d3bf5;}
+.cin-switch.on{background:${BRAND.accent};}
 .cin-switch::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.15s;}
 .cin-switch.on::after{left:16px;}
 .cin-lsearch{width:100%;background:#fbfbfc;box-shadow:inset 0 0 0 1px #dcdce1;border:none;border-radius:9px;height:34px;padding:0 11px;font-family:inherit;font-size:12.5px;color:#2b2b30;outline:none;}
-.cin-lsearch:focus{box-shadow:inset 0 0 0 1px #6d3bf5;}
+.cin-lsearch:focus{box-shadow:inset 0 0 0 1px ${BRAND.accent};}
 .cin-conv-scroll{flex:1;overflow-y:auto;}
 .cin-list-empty{padding:30px;text-align:center;color:#6b6b73;font-size:12.5px;}
 .cin-conv{display:flex;gap:11px;padding:12px 13px;box-shadow:inset 0 -1px 0 #e9e9ec;width:100%;text-align:left;position:relative;}
@@ -296,13 +329,13 @@ const WORKSPACE_CSS = `
 .cin-mline.in{align-self:flex-start;}
 .cin-mline.out{align-self:flex-end;flex-direction:row-reverse;}
 .cin-mpa{width:28px;height:28px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;background:linear-gradient(135deg,#f472b6,#a78bfa);}
-.cin-mpa.bot{background:linear-gradient(135deg,#6d3bf5,#3b82f6);}
+.cin-mpa.bot{background:${BRAND.gradient};}
 .cin-mwrap{display:flex;flex-direction:column;min-width:0;}
 .cin-mmeta{font-size:11px;color:#9a9aa2;margin-bottom:4px;}
 .cin-mline.out .cin-mmeta{text-align:right;}
 .cin-bubble{padding:9px 13px;border-radius:14px;font-size:13px;line-height:1.5;white-space:pre-wrap;overflow-wrap:break-word;}
 .cin-bubble.in{background:#fff;color:#2b2b30;box-shadow:0 1px 2px rgba(20,20,25,.05),inset 0 0 0 1px #e9e9ec;border-bottom-left-radius:5px;}
-.cin-bubble.out{background:linear-gradient(135deg,#6d3bf5,#3b82f6);color:#fff;border-bottom-right-radius:5px;}
+.cin-bubble.out{background:${BRAND.gradient};color:#fff;border-bottom-right-radius:5px;}
 .cin-seen{align-self:flex-end;font-size:10.5px;color:#9a9aa2;margin-top:2px;}
 .cin-sys{align-self:center;font-size:11.5px;color:#9a9aa2;background:#fff;box-shadow:0 1px 2px rgba(20,20,25,.06);border-radius:20px;padding:5px 12px;margin:8px auto;display:table;}
 .cin-composer{flex:none;background:#fff;border:1px solid #dcdce1;border-radius:14px;margin:4px 11px 11px;padding:10px 12px;box-shadow:0 2px 10px rgba(20,20,25,.05);}
@@ -311,7 +344,7 @@ const WORKSPACE_CSS = `
 .cin-comp-bar{display:flex;align-items:center;gap:2px;margin-top:8px;padding-top:8px;box-shadow:inset 0 1px 0 #e9e9ec;}
 .cin-emoji{width:30px;height:30px;border-radius:8px;font-size:15px;display:flex;align-items:center;justify-content:center;}
 .cin-emoji:hover{background:#fbfbfc;}
-.cin-send{margin-left:auto;background:linear-gradient(135deg,#6d3bf5,#3b82f6);color:#fff;width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 10px rgba(109,59,245,.35);font-size:14px;}
+.cin-send{margin-left:auto;background:${BRAND.gradient};color:#fff;width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 10px rgba(109,59,245,.35);font-size:14px;}
 .cin-send:disabled{opacity:.4;box-shadow:none;}
 
 .cin-details{background:#f7f7f9;}
@@ -326,7 +359,8 @@ const WORKSPACE_CSS = `
 .cin-cf.inlin{display:inline;margin-left:6px;}
 .cin-assignee{display:flex;align-items:center;gap:8px;margin-top:8px;}
 .cin-an{flex:1;color:#2b2b30;font-weight:600;font-size:12.5px;}
-.cin-assign{color:#6d3bf5;font-weight:700;font-size:12.5px;opacity:.5;}
+.cin-assign{color:${BRAND.accent};font-weight:700;font-size:12.5px;opacity:.5;}
+.cin-assign-select{font:inherit;font-size:12.5px;font-weight:600;color:#2b2b30;background:#fbfbfc;border:1px solid #dcdce1;border-radius:8px;padding:6px 8px;width:100%;cursor:pointer;}
 .cin-accrow{display:flex;align-items:center;gap:8px;padding:11px 0;box-shadow:inset 0 -1px 0 #e9e9ec;font-size:12.5px;}
 .cin-accrow:last-child{box-shadow:none;}
 .cin-accrow.acc{display:block;}

@@ -8,7 +8,14 @@ import type {
 import { BrowseModalShell } from "./BrowseProductsModal";
 import { ChipInput } from "./ChipInput";
 import { QuotaMeter } from "./QuotaMeter";
-import { LearnCard, StatusBadge, SubTabs, formatDateTime, useTrainingFetcher } from "./TrainingShared";
+import {
+  LearnCard,
+  StatusBadge,
+  SubTabs,
+  downloadText,
+  formatDateTime,
+  useTrainingFetcher,
+} from "./TrainingShared";
 
 // Custom knowledge tab (spec 07, design #viewTraining → Custom knowledge):
 // learn card, suggested-Q&A review banner, sources table with type filters +
@@ -16,6 +23,13 @@ import { LearnCard, StatusBadge, SubTabs, formatDateTime, useTrainingFetcher } f
 // Manual Q&A, Import CSV, Upload file, Connect policies) with quota meters.
 
 type SourceFilter = "all" | "url" | "manual" | "csv" | "file" | "pages";
+
+const SAMPLE_CSV = [
+  "question,answer",
+  "What is your return policy?,You can return any item within 30 days of delivery for a full refund.",
+  "Do you ship internationally?,Yes — we ship worldwide. International orders arrive in 7–14 business days.",
+  "How do I track my order?,Use the tracking link in your shipping confirmation email.",
+].join("\n");
 
 const TYPE_LABEL: Record<string, string> = {
   url: "URL",
@@ -275,45 +289,36 @@ export function TrainingKnowledgeTab(props: {
               </s-text>
             </s-box>
           ) : (
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr>
-                  {["Source", "Type", "Status", "Last synced", "Actions"].map((h, i) => (
-                    <th
-                      key={h}
-                      style={{
-                        textAlign: i === 4 ? "right" : "left",
-                        padding: "8px 10px",
-                        borderBottom: "1px solid var(--s-color-border, #e3e3e3)",
-                        fontWeight: 600,
-                      }}
-                    >
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
+            <s-table>
+              <s-table-header-row>
+                {["Source", "Type", "Status", "Last synced", "Actions"].map((h, i) => (
+                  <s-table-header key={h} format={i === 4 ? "numeric" : "base"}>
+                    {h}
+                  </s-table-header>
+                ))}
+              </s-table-header-row>
+              <s-table-body>
                 {rows.map((source) => (
-                  <tr key={source.id}>
-                    <td style={cellStyle}>
+                  <s-table-row key={source.id}>
+                    <s-table-cell>
                       <span style={{ fontWeight: 600 }}>{source.name}</span>{" "}
                       <s-text tone="neutral">
                         · {source.chunkCount} chunk{source.chunkCount === 1 ? "" : "s"}
                       </s-text>
-                    </td>
-                    <td style={cellStyle}>
+                    </s-table-cell>
+                    <s-table-cell>
                       <s-badge tone="neutral">{TYPE_LABEL[source.type] ?? source.type}</s-badge>
-                    </td>
-                    <td style={cellStyle}>
+                    </s-table-cell>
+                    <s-table-cell>
                       <StatusBadge status={source.status} error={source.error} />
-                    </td>
-                    <td style={cellStyle}>
+                    </s-table-cell>
+                    <s-table-cell>
                       <s-text tone="neutral">
                         {source.lastSyncedAt ? formatDateTime(source.lastSyncedAt) : "—"}
                       </s-text>
-                    </td>
-                    <td style={{ ...cellStyle, textAlign: "right", whiteSpace: "nowrap" }}>
+                    </s-table-cell>
+                    <s-table-cell>
+                      <span style={{ whiteSpace: "nowrap" }}>
                       <s-button variant="tertiary" onClick={() => openEdit(source)}>
                         Edit
                       </s-button>
@@ -349,11 +354,12 @@ export function TrainingKnowledgeTab(props: {
                           Delete
                         </s-button>
                       )}
-                    </td>
-                  </tr>
+                      </span>
+                    </s-table-cell>
+                  </s-table-row>
                 ))}
-              </tbody>
-            </table>
+              </s-table-body>
+            </s-table>
           )}
           <s-text tone="neutral">
             Re-sync re-reads a source and rebuilds its chunks — use it after your website content
@@ -603,6 +609,15 @@ export function TrainingKnowledgeTab(props: {
         onClose={() => setCsvDraft(null)}
         footer={
           csvDraft ? (
+            <>
+              {!csvDraft.id ? (
+                <s-button
+                  variant="tertiary"
+                  onClick={() => downloadText("knowledge-sample.csv", SAMPLE_CSV)}
+                >
+                  Download a sample CSV
+                </s-button>
+              ) : null}
             <span style={{ marginLeft: "auto", display: "inline-flex", gap: 8 }}>
               <s-button onClick={() => setCsvDraft(null)}>Cancel</s-button>
               <s-button
@@ -621,6 +636,7 @@ export function TrainingKnowledgeTab(props: {
                 {csvDraft.id ? "Save" : "Import"}
               </s-button>
             </span>
+            </>
           ) : null
         }
       >
@@ -829,12 +845,6 @@ export function TrainingKnowledgeTab(props: {
   );
 }
 
-const cellStyle: React.CSSProperties = {
-  padding: "10px",
-  borderBottom: "1px solid var(--s-color-border-secondary, #f1f1f1)",
-  verticalAlign: "middle",
-};
-
 function StatusSelect(props: {
   value: "active" | "inactive";
   onChange: (value: "active" | "inactive") => void;
@@ -865,7 +875,14 @@ function AddTile(props: {
       type="button"
       onClick={props.onClick}
       style={{
-        display: "block",
+        // Flex column pinned to the top, children stretched full width —
+        // grid-stretched buttons otherwise vertically center short content
+        // (browser button default) and shrink-wrap the quota meters, making
+        // tiles/bars misaligned and inconsistently sized.
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "stretch",
+        justifyContent: "flex-start",
         width: "100%",
         textAlign: props.wide ? "center" : "left",
         font: "inherit",
@@ -887,7 +904,11 @@ function AddTile(props: {
       >
         {props.description}
       </div>
-      {props.children}
+      {props.children ? (
+        // Pinned to the tile bottom so meters line up across cards even when
+        // descriptions wrap to different line counts.
+        <div style={{ marginTop: "auto" }}>{props.children}</div>
+      ) : null}
     </button>
   );
 }

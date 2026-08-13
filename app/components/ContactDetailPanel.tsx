@@ -160,7 +160,7 @@ export function ContactDetailPanel(props: {
                         >
                           {c.preview || <s-text tone="neutral">No messages</s-text>}
                         </span>
-                        <Link to="/app/inbox">Open in Inbox</Link>
+                        <Link to={`/app/inbox?c=${c.id}`}>Open in Inbox</Link>
                       </s-stack>
                     </s-box>
                   ))

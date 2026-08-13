@@ -14,9 +14,10 @@ import {
   loadWidgetSettings,
   type ChatboxActionResult,
 } from "../lib/widget/settings-save.server";
-import { widgetRendererJs, widgetCssText } from "../lib/widget/renderer-assets.server";
+import { getWidgetRendererJs, getWidgetCssText } from "../lib/widget/renderer-assets.server";
 import type { WidgetSettingsData } from "../lib/settings/schemas";
 import { SaveBar } from "../components/SaveBar";
+import { TabPills } from "../components/ui/TabPills";
 import { ChatboxGeneral } from "../components/ChatboxGeneral";
 import { ChatboxChatPage } from "../components/ChatboxChatPage";
 import { ChatboxAppearance } from "../components/ChatboxAppearance";
@@ -61,8 +62,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       answerHtml: f.answerHtml,
       category: (f.categoryId && categoryName.get(f.categoryId)) || null,
     })),
-    rendererJs: widgetRendererJs,
-    widgetCss: widgetCssText,
+    rendererJs: getWidgetRendererJs(),
+    widgetCss: getWidgetCssText(),
+    currency: shop?.currency ?? "USD",
   };
 };
 
@@ -122,11 +124,17 @@ export default function ChatboxPage() {
   const active = data.settings.active;
   const toggling = toggleFetcher.state !== "idle";
   const toggleActive = useCallback(() => {
+    // The toggle round-trip revalidates the loader, which resets the draft to
+    // the saved blob — silently discarding unsaved edits. Block it while dirty.
+    if (dirty) {
+      shopify.toast.show("Save or discard your changes first", { isError: true });
+      return;
+    }
     toggleFetcher.submit(
       { intent: "toggle-active", payload: JSON.stringify({ active: !active }) },
       { method: "post" },
     );
-  }, [toggleFetcher, active]);
+  }, [toggleFetcher, active, dirty, shopify]);
 
   useEffect(() => {
     if (toggleFetcher.state !== "idle" || !toggleFetcher.data) return;
@@ -143,7 +151,7 @@ export default function ChatboxPage() {
       : undefined;
 
   return (
-    <s-page heading="Chatbox" inlineSize="large">
+    <s-page heading="Chatbox">
       <SaveBar dirty={dirty} saving={saving} onSave={save} onDiscard={discard} />
 
       <s-stack gap="base">
@@ -163,23 +171,13 @@ export default function ChatboxPage() {
           </s-button>
         </s-stack>
 
-        <s-stack direction="inline" gap="small">
-          {TABS.map((entry) => (
-            <s-button
-              key={entry.id}
-              variant={tab === entry.id ? "primary" : "tertiary"}
-              onClick={() => setTab(entry.id)}
-            >
-              {entry.label}
-            </s-button>
-          ))}
-        </s-stack>
+        <TabPills tabs={TABS} active={tab} onChange={setTab} />
 
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "minmax(0, 1fr) 380px",
-            gap: 20,
+            gridTemplateColumns: "minmax(0, 1fr) 340px",
+            gap: 16,
             alignItems: "start",
           }}
         >
@@ -197,7 +195,7 @@ export default function ChatboxPage() {
 
           <div style={{ position: "sticky", top: 20 }}>
             <s-stack gap="small">
-              <s-text type="strong">Preview</s-text>
+              <s-heading>Preview</s-heading>
               <ChatboxPreview
                 settings={draft}
                 tab={tab}
@@ -205,6 +203,7 @@ export default function ChatboxPage() {
                 featuredFaqs={data.featuredFaqs}
                 rendererJs={data.rendererJs}
                 widgetCss={data.widgetCss}
+                currency={data.currency}
               />
             </s-stack>
           </div>

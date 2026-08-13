@@ -217,12 +217,13 @@ export default function AnalyticsPage() {
           }
         />
 
+        {/* Paired cards stretch to the row height so side-by-side cards always
+            share the same card-background extent (no ragged bottoms). */}
         <div
           style={{
             display: "grid",
             gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
             gap: 16,
-            alignItems: "start",
           }}
         >
           <AnalyticsResolutionDonut breakdown={data.breakdown} />
@@ -234,7 +235,6 @@ export default function AnalyticsPage() {
             display: "grid",
             gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
             gap: 16,
-            alignItems: "start",
           }}
         >
           <AnalyticsFunnel funnel={data.funnel} />

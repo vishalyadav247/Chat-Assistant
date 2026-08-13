@@ -69,7 +69,7 @@
   justify-content: center;
   gap: 9px;
   box-shadow: 0 8px 20px rgba(20, 20, 25, 0.35);
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 650;
   overflow: hidden;
   transition: transform 0.15s ease;
@@ -82,6 +82,8 @@
 .cw-panel {
   width: 360px;
   max-width: calc(100vw - 40px);
+  /* Never collapse below 550px even with sparse content (e.g. FAQ answers). */
+  min-height: min(550px, calc(100vh - 110px));
   max-height: min(640px, calc(100vh - 110px));
   background: var(--cw-surface);
   border: 1px solid var(--cw-border);
@@ -155,7 +157,8 @@
 .cw-status .cw-d { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: none; }
 .cw-status--offline, .cw-status--break, .cw-status--holiday { color: var(--cw-muted); }
 .cw-actions { display: flex; align-items: center; gap: 9px; margin-top: 12px; flex-wrap: wrap; }
-.cw-chatnow {
+/* .cw-root scope beats the `.cw-root button { border: none }` reset. */
+.cw-root .cw-chatnow {
   height: 40px;
   display: inline-flex;
   align-items: center;
@@ -163,25 +166,41 @@
   gap: 7px;
   background: linear-gradient(135deg, var(--cw1), var(--cw2));
   color: #fff;
+  border: 1px solid var(--cw-border-strong);
   border-radius: 10px;
   padding: 0 14px;
   font-size: 12.5px;
   font-weight: 650;
+  transition: box-shadow 0.15s ease, transform 0.15s ease, filter 0.15s ease;
 }
+.cw-root .cw-chatnow:hover {
+  filter: brightness(1.05);
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.18);
+  transform: translateY(-1px);
+}
+.cw-root .cw-chatnow:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+/* Contact methods: plain recognizable icons, no background tiles. All icons
+   render at a consistent 22px inside a 40px hit target. */
 .cw-cm {
   width: 40px;
   height: 40px;
   border-radius: 10px;
-  color: #fff;
+  background: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: none;
   text-decoration: none;
+  transition: background 0.15s ease;
 }
-.cw-cm--whatsapp { background: #25d366; }
-.cw-cm--phone { background: #22c55e; }
-.cw-cm--email { background: #f5b301; }
+.cw-cm:hover { background: rgba(20, 20, 25, 0.06); }
+.cw-cm svg { width: 22px; height: 22px; }
+.cw-cm--whatsapp { color: #25d366; }
+.cw-cm--phone { color: #454549; }
+.cw-cm--email { color: #454549; }
 .cw-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; width: 100%; text-align: left; }
 .cw-row-sub { color: var(--cw-muted); font-size: 12px; margin-top: 3px; }
 .cw-search {
@@ -262,7 +281,16 @@
 .cw-msg-wrap { display: flex; flex-direction: column; min-width: 0; max-width: 85%; }
 .cw-msg-wrap .cw-bubble { max-width: 100%; }
 .cw-msg-meta { font-size: 10.5px; color: var(--cw-muted-2); margin: 0 4px 3px; }
-.cw-starters { display: flex; flex-direction: column; gap: 8px; margin-top: 2px; }
+/* Starter chips pin to the bottom-right of the chat area (margin-top: auto
+   inside the flex-column thread), like user-side suggestions. */
+.cw-starters {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: auto;
+  align-items: flex-end;
+  align-self: stretch;
+}
 .cw-chip {
   background: var(--cw-surface);
   box-shadow: inset 0 0 0 1px var(--cw-border-strong);

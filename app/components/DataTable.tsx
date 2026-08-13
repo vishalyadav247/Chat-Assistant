@@ -1,14 +1,22 @@
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
+import { SPACE } from "./ui/tokens";
 
-// Shared admin table (specs 07/09/11/12): client-side search + filter chips +
-// pagination (10/page) over loader-provided rows. Server-side pagination can
-// replace the paging seam later without changing consumers' markup.
+// Shared admin table (specs 07/09/11/12), rendered on the native Polaris
+// s-table family (user directive 2026-08-12 — no hand-rolled <table> markup).
+// Standard furniture per discount_screen_2.png, consistent app-wide:
+//   toolbar (pills/chips) left · collapsible search icon right,
+//   optional row selection + "N selected" bulk-action bar,
+//   footer always visible: pager centered, items-per-page (10/25/50) right.
+// Server-side pagination can replace the paging seam later without changing
+// consumers' markup.
 
 export interface Column<Row> {
   key: string;
   title: string;
   render: (row: Row) => React.ReactNode;
   align?: "start" | "end";
+  /** Column width (e.g. "40%" or 120). Omitted columns share the rest. */
+  width?: string | number;
 }
 
 export function DataTable<Row extends { id: string }>(props: {
@@ -16,25 +24,63 @@ export function DataTable<Row extends { id: string }>(props: {
   rows: Row[];
   searchPlaceholder?: string;
   searchFn?: (row: Row, query: string) => boolean;
+  /** Controlled search value — pass with onSearchChange when the query is
+   *  needed outside the table (e.g. Contacts' "current page" CSV export). */
+  search?: string;
+  onSearchChange?: (value: string) => void;
   emptyMessage: string;
+  /** Rich empty state (icon/title/action) — overrides emptyMessage rendering. */
+  empty?: React.ReactNode;
   onRowClick?: (row: Row) => void;
+  /** Initial rows per page (default 10). */
   perPage?: number;
   toolbar?: React.ReactNode;
+  /** Rendered at the far right of the toolbar row, after the search icon
+   *  (e.g. Contacts' Export menu button). */
+  toolbarEnd?: React.ReactNode;
+  /** Render the opened search field on its own full-width row below the
+   *  toolbar instead of inline next to the icon. */
+  searchFieldBelow?: boolean;
+  /** Always show the search field (no collapsible icon). */
+  searchAlwaysOpen?: boolean;
   /** Optional controlled page (1-based) — e.g. Contacts export needs to know
    *  the visible page server-side. Omit for internal paging state. */
   page?: number;
   onPageChange?: (page: number) => void;
-  /** Optional footer rendered on the pagination row (e.g. rows-per-page). */
+  /** Optional footer content on the pagination row, left of items-per-page. */
   footerExtra?: React.ReactNode;
+  /** Hide the built-in items-per-page select — for consumers whose page size
+   *  is fixed server-side. */
+  perPageSelector?: boolean;
+  /** Makes perPage controlled — pass when the page size is needed outside the
+   *  table (e.g. Contacts' "current page" CSV export). */
+  onPerPageChange?: (perPage: number) => void;
+  /** Enables the selection checkbox column. Renders the bulk-action buttons
+   *  shown in the "N selected" bar. */
+  bulkActions?: (selectedIds: string[], clearSelection: () => void) => React.ReactNode;
 }) {
-  const perPage = props.perPage ?? 10;
-  const [query, setQuery] = useState("");
+  const [queryState, setQueryState] = useState("");
+  const [searchOpenState, setSearchOpen] = useState(false);
+  const searchOpen = props.searchAlwaysOpen || searchOpenState;
   const [pageState, setPageState] = useState(1);
+  const [perPageState, setPerPageState] = useState(props.perPage ?? 10);
+  const query = props.onSearchChange ? (props.search ?? "") : queryState;
+  const setQuery = (value: string) => {
+    setQueryState(value);
+    props.onSearchChange?.(value);
+  };
+  const perPage = props.onPerPageChange ? (props.perPage ?? 10) : perPageState;
+  const setPerPage = (value: number) => {
+    setPerPageState(value);
+    props.onPerPageChange?.(value);
+  };
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const page = props.page ?? pageState;
   const setPage = (next: number) => {
     setPageState(next);
     props.onPageChange?.(next);
   };
+  const showPerPageSelector = props.perPageSelector ?? true;
 
   const filtered = useMemo(() => {
     if (!query.trim() || !props.searchFn) return props.rows;
@@ -46,111 +92,252 @@ export function DataTable<Row extends { id: string }>(props: {
   const current = Math.min(page, pages);
   const visible = filtered.slice((current - 1) * perPage, current * perPage);
 
+  const visibleSelected = visible.filter((r) => selected.has(r.id)).length;
+  const allVisibleSelected = visible.length > 0 && visibleSelected === visible.length;
+  const toggleVisible = (checked: boolean) => {
+    const next = new Set(selected);
+    for (const row of visible) {
+      if (checked) next.add(row.id);
+      else next.delete(row.id);
+    }
+    setSelected(next);
+  };
+  const toggleRow = (id: string, checked: boolean) => {
+    const next = new Set(selected);
+    if (checked) next.add(id);
+    else next.delete(id);
+    setSelected(next);
+  };
+  const clearSelection = () => setSelected(new Set());
+
+  // Column widths: s-table-header takes no style/class prop, but the headers
+  // are light-DOM elements, so a scoped stylesheet can size them (same
+  // technique as row-hover CSS elsewhere). nth-child shifts by one when the
+  // selection checkbox column is present.
+  const scopeClass = "dt" + useId().replace(/[^a-zA-Z0-9-]/g, "");
+  const widthCss = props.columns
+    .map((col, i) => {
+      if (col.width === undefined) return "";
+      const width = typeof col.width === "number" ? `${col.width}px` : col.width;
+      const nth = i + (props.bulkActions ? 2 : 1);
+      return `.${scopeClass} s-table-header:nth-child(${nth}) { width: ${width}; }`;
+    })
+    .filter(Boolean)
+    .join("\n");
+
+  const searchField = (
+    <s-search-field
+      label={props.searchPlaceholder ?? "Search"}
+      labelAccessibilityVisibility="exclusive"
+      placeholder={props.searchPlaceholder ?? "Search"}
+      value={query}
+      onInput={(e) => {
+        setQuery(e.currentTarget.value);
+        setPage(1);
+      }}
+    />
+  );
+
   return (
     <s-stack gap="base">
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        {props.searchFn ? (
-          <input
-            type="search"
-            value={query}
-            placeholder={props.searchPlaceholder ?? "Search"}
-            onChange={(e) => {
-              setQuery(e.currentTarget.value);
-              setPage(1);
-            }}
+      {props.searchFn || props.toolbar || props.toolbarEnd ? (
+        <div style={{ display: "flex", gap: SPACE.sm, alignItems: "center", flexWrap: "wrap" }}>
+          {props.toolbar}
+          <div
             style={{
-              flex: 1,
-              padding: "6px 10px",
-              borderRadius: 8,
-              border: "1px solid var(--s-color-border, #d4d4d4)",
-              font: "inherit",
+              marginLeft: "auto",
+              display: "flex",
+              alignItems: "center",
+              gap: SPACE.xs,
+              flex: searchOpen && !props.searchFieldBelow ? "1 1 220px" : undefined,
+              justifyContent: "flex-end",
             }}
-          />
-        ) : null}
-        {props.toolbar}
-      </div>
-
-      {visible.length === 0 ? (
-        <s-box padding="large">
-          <s-text tone="neutral">{props.emptyMessage}</s-text>
-        </s-box>
-      ) : (
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr>
-              {props.columns.map((col) => (
-                <th
-                  key={col.key}
-                  style={{
-                    textAlign: col.align === "end" ? "right" : "left",
-                    padding: "8px 12px",
-                    borderBottom: "1px solid var(--s-color-border, #e3e3e3)",
-                    fontWeight: 600,
-                    fontSize: 13,
-                  }}
-                >
-                  {col.title}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {visible.map((row) => (
-              <tr
-                key={row.id}
-                onClick={props.onRowClick ? () => props.onRowClick!(row) : undefined}
-                style={{ cursor: props.onRowClick ? "pointer" : undefined }}
-              >
-                {props.columns.map((col) => (
-                  <td
-                    key={col.key}
-                    style={{
-                      textAlign: col.align === "end" ? "right" : "left",
-                      padding: "10px 12px",
-                      borderBottom: "1px solid var(--s-color-border-secondary, #f1f1f1)",
-                      fontSize: 13,
-                    }}
-                  >
-                    {col.render(row)}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-
-      {pages > 1 || props.footerExtra ? (
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            alignItems: "center",
-            justifyContent: props.footerExtra ? "space-between" : "flex-end",
-          }}
-        >
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <s-button
-              variant="tertiary"
-              disabled={current <= 1}
-              onClick={() => setPage(current - 1)}
-            >
-              Prev
-            </s-button>
-            <s-text tone="neutral">
-              Page {current} / {pages}
-            </s-text>
-            <s-button
-              variant="tertiary"
-              disabled={current >= pages}
-              onClick={() => setPage(current + 1)}
-            >
-              Next
-            </s-button>
+          >
+            {props.searchFn && searchOpen && !props.searchFieldBelow ? (
+              <div style={{ flex: 1, minWidth: 180 }}>{searchField}</div>
+            ) : null}
+            {props.searchFn && !props.searchAlwaysOpen ? (
+              <s-button
+                variant="tertiary"
+                icon={searchOpen ? "x" : "search"}
+                accessibilityLabel={searchOpen ? "Close search" : "Search"}
+                onClick={() => {
+                  if (searchOpen) {
+                    setQuery("");
+                    setPage(1);
+                  }
+                  setSearchOpen(!searchOpen);
+                }}
+              />
+            ) : null}
+            {props.toolbarEnd}
           </div>
-          {props.footerExtra}
         </div>
       ) : null}
+      {props.searchFn && searchOpen && props.searchFieldBelow ? searchField : null}
+
+      {visible.length === 0 ? (
+        (props.empty ?? (
+          <s-box padding="large">
+            <s-text tone="neutral">{props.emptyMessage}</s-text>
+          </s-box>
+        ))
+      ) : (
+        // position:relative so the selection bar can OVERLAY the header row
+        // (Polaris IndexTable behavior) instead of inserting a row above the
+        // table — no layout shift when rows are selected/deselected.
+        <div className={scopeClass} style={{ position: "relative" }}>
+          {widthCss ? <style>{widthCss}</style> : null}
+          {props.bulkActions && selected.size > 0 ? (
+            <div
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                right: 0,
+                zIndex: 2,
+                display: "flex",
+                alignItems: "center",
+                gap: SPACE.sm,
+                padding: "4px 12px",
+                background: "var(--s-color-bg-surface-secondary, #f7f7f8)",
+                borderBottom: "1px solid var(--s-color-border, #e3e3e3)",
+                borderRadius: "8px 8px 0 0",
+              }}
+            >
+              <s-checkbox
+                label="Select all on this page"
+                labelAccessibilityVisibility="exclusive"
+                checked={allVisibleSelected}
+                indeterminate={visibleSelected > 0 && !allVisibleSelected}
+                onChange={(e) => toggleVisible(e.currentTarget.checked)}
+              />
+              <s-text>{selected.size} selected</s-text>
+              {selected.size < filtered.length ? (
+                <s-button
+                  variant="tertiary"
+                  onClick={() => setSelected(new Set(filtered.map((r) => r.id)))}
+                >
+                  Select all {filtered.length}
+                </s-button>
+              ) : null}
+              <div style={{ marginLeft: "auto", display: "flex", gap: SPACE.xs }}>
+                {props.bulkActions(Array.from(selected), clearSelection)}
+              </div>
+            </div>
+          ) : null}
+        <s-table>
+          <s-table-header-row>
+            {props.bulkActions ? (
+              <s-table-header>
+                <s-checkbox
+                  label="Select all on this page"
+                  labelAccessibilityVisibility="exclusive"
+                  checked={allVisibleSelected}
+                  indeterminate={visibleSelected > 0 && !allVisibleSelected}
+                  onChange={(e) => toggleVisible(e.currentTarget.checked)}
+                />
+              </s-table-header>
+            ) : null}
+            {props.columns.map((col) => (
+              <s-table-header key={col.key} format={col.align === "end" ? "numeric" : "base"}>
+                {col.title}
+              </s-table-header>
+            ))}
+          </s-table-header-row>
+          <s-table-body>
+            {visible.map((row) => (
+              // Row click via the native clickDelegate seam: the whole row
+              // forwards clicks to an s-clickable wrapping the first cell.
+              <s-table-row
+                key={row.id}
+                clickDelegate={props.onRowClick ? `dtrow-${row.id}` : undefined}
+              >
+                {props.bulkActions ? (
+                  <s-table-cell>
+                    <s-checkbox
+                      label="Select row"
+                      labelAccessibilityVisibility="exclusive"
+                      checked={selected.has(row.id)}
+                      onChange={(e) => toggleRow(row.id, e.currentTarget.checked)}
+                    />
+                  </s-table-cell>
+                ) : null}
+                {props.columns.map((col, i) => (
+                  <s-table-cell key={col.key}>
+                    {i === 0 && props.onRowClick ? (
+                      <s-clickable id={`dtrow-${row.id}`} onClick={() => props.onRowClick!(row)}>
+                        {col.render(row)}
+                      </s-clickable>
+                    ) : (
+                      col.render(row)
+                    )}
+                  </s-table-cell>
+                ))}
+              </s-table-row>
+            ))}
+          </s-table-body>
+        </s-table>
+        </div>
+      )}
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr auto 1fr",
+          alignItems: "center",
+        }}
+      >
+        <span />
+        <div style={{ display: "flex", gap: SPACE.sm, alignItems: "center" }}>
+          <s-button
+            variant="tertiary"
+            icon="chevron-left"
+            accessibilityLabel="Previous page"
+            disabled={current <= 1}
+            onClick={() => setPage(current - 1)}
+          />
+          <s-text tone="neutral">
+            Page {current} / {pages}
+          </s-text>
+          <s-button
+            variant="tertiary"
+            icon="chevron-right"
+            accessibilityLabel="Next page"
+            disabled={current >= pages}
+            onClick={() => setPage(current + 1)}
+          />
+        </div>
+        <div
+          style={{
+            justifySelf: "end",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {props.footerExtra}
+          {showPerPageSelector ? (
+            <>
+              <s-text tone="neutral">Items per page</s-text>
+              <s-select
+                label="Items per page"
+                labelAccessibilityVisibility="exclusive"
+                value={String(perPage)}
+                onChange={(e) => {
+                  setPerPage(Number(e.currentTarget.value));
+                  setPage(1);
+                }}
+              >
+                <s-option value="10">10</s-option>
+                <s-option value="25">25</s-option>
+                <s-option value="50">50</s-option>
+              </s-select>
+            </>
+          ) : null}
+        </div>
+      </div>
     </s-stack>
   );
 }

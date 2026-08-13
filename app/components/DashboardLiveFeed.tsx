@@ -1,4 +1,6 @@
 import type { LiveFeedItem } from "../lib/dashboard/dashboard.server";
+import { EmptyState } from "./ui/EmptyState";
+import { SPACE } from "./ui/tokens";
 
 // Live conversations feed (spec 13, design dashboard.html .feed): latest 4
 // open conversations — avatar initials, last shopper message, Live / Waiting
@@ -55,10 +57,13 @@ export function DashboardLiveFeed(props: {
       <s-stack gap="base">
         <s-text tone="neutral">Shoppers chatting with your AI right now.</s-text>
         {props.items.length === 0 ? (
-          <s-text tone="neutral">
-            No conversations yet — once the widget is live on your storefront, active chats will
-            appear here.
-          </s-text>
+          <EmptyState
+            icon="chat"
+            tone="accent"
+            compact
+            title="No conversations yet"
+            description="Once the widget is live on your storefront, active chats will appear here."
+          />
         ) : (
           <s-stack gap="small">
             {props.items.map((item, index) => (
@@ -68,7 +73,7 @@ export function DashboardLiveFeed(props: {
                 onClick={() => props.onOpen(item.id)}
                 style={{
                   display: "flex",
-                  gap: 12,
+                  gap: SPACE.md,
                   alignItems: "flex-start",
                   width: "100%",
                   padding: "8px 4px",

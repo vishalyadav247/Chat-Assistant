@@ -1,7 +1,7 @@
 import { z } from "zod";
 import db from "../../db.server";
 import { syncFaqKnowledge } from "../ingestion/knowledge-ingest.server";
-import { parseCsvContent } from "../ingestion/sources.server";
+import { CSV_ROW_CAP, splitCsv } from "../ingestion/sources.server";
 import { sanitizeHtml } from "../sanitize.server";
 import { requireShopId } from "../tenancy.server";
 
@@ -50,7 +50,7 @@ export async function ensureDefaultCategory(shopId: string): Promise<string> {
     data: {
       shopId,
       name: DEFAULT_CATEGORY_NAME,
-      icon: "📄",
+      icon: "page",
       position: count,
       status: "published",
       isDefault: true,
@@ -105,7 +105,8 @@ export async function listFaqTree(shopId: string): Promise<FaqCategoryData[]> {
 export const categoryInputSchema = z.object({
   id: z.string().optional(),
   name: z.string().trim().min(1).max(100),
-  icon: z.string().trim().min(1).max(16).default("📄"),
+  // Polaris icon name (user decision 2026-08-12); legacy rows may hold emoji.
+  icon: z.string().trim().min(1).max(32).default("page"),
   /** Desired 1-based position within the ordered category list. */
   position: z.number().int().min(1).optional(),
   status: z.enum(["published", "draft"]).default("published"),
@@ -152,6 +153,46 @@ export async function saveCategory(shopId: string, input: CategoryInput): Promis
   return id;
 }
 
+/**
+ * Delete a category. Its FAQs move to the default "Uncategorized" category
+ * (appended at the end, order preserved) — never deleted with it. The default
+ * category itself can't be deleted. Returns false when nothing was deleted.
+ */
+export async function deleteCategory(shopId: string, categoryId: string): Promise<boolean> {
+  requireShopId(shopId);
+  const category = await db.faqCategory.findFirst({
+    where: { id: categoryId, shopId },
+    select: { id: true, isDefault: true },
+  });
+  if (!category || category.isDefault) return false;
+
+  const defaultId = await ensureDefaultCategory(shopId);
+  const [orphans, max] = await Promise.all([
+    db.faq.findMany({
+      where: { shopId, categoryId },
+      orderBy: [{ position: "asc" }, { question: "asc" }],
+      select: { id: true },
+    }),
+    db.faq.aggregate({
+      where: { shopId, categoryId: defaultId },
+      _max: { position: true },
+    }),
+  ]);
+  let position = (max._max.position ?? -1) + 1;
+  await db.$transaction([
+    ...orphans.map((faq) =>
+      db.faq.updateMany({
+        where: { id: faq.id, shopId },
+        data: { categoryId: defaultId, position: position++ },
+      }),
+    ),
+    db.faqCategory.deleteMany({ where: { id: categoryId, shopId } }),
+  ]);
+  await normalizeCategoryPositions(shopId);
+  if (orphans.length > 0) await syncFaqKnowledgeSafe(shopId); // chunk order follows FAQ order
+  return true;
+}
+
 export async function setCategoryFeatured(
   shopId: string,
   categoryId: string,
@@ -190,6 +231,12 @@ export async function placeCategory(
   categoryId: string,
   position1: number,
 ): Promise<void> {
+  requireShopId(shopId);
+  const target = await db.faqCategory.findFirst({
+    where: { id: categoryId, shopId },
+    select: { id: true },
+  });
+  if (!target) return;
   const ordered = await db.faqCategory.findMany({
     where: { shopId },
     orderBy: [{ position: "asc" }, { name: "asc" }],
@@ -365,34 +412,110 @@ export interface FaqImportResult {
 }
 
 /**
- * Import "question,answer" CSV text (≤1MB): rows become published FAQs in the
- * default category. Column mapping/row cap via parseCsvContent (spec 04).
+ * Import FAQ CSV text (≤1MB). Full round-trip with exportFaqCsv: a header row
+ * may name question/answer plus the optional category/status/featured columns
+ * — categories are created by name as needed, status and featured are
+ * restored. Headerless files fall back to "question,answer" into the default
+ * category (published), matching the old behavior.
  */
 export async function importFaqCsv(shopId: string, csvText: string): Promise<FaqImportResult> {
   requireShopId(shopId);
   if (Buffer.byteLength(csvText, "utf-8") > FAQ_CSV_MAX_BYTES) {
     throw new Error("CSV too large (max 1MB)");
   }
-  const { rows, badRows } = parseCsvContent(csvText);
-  if (rows.length === 0) return { imported: 0, badRows };
+  const records = splitCsv(csvText);
+  const badRows: FaqImportResult["badRows"] = [];
+  if (records.length === 0) return { imported: 0, badRows };
+
+  const header = records[0].map((cell) => cell.trim().toLowerCase());
+  const qCol = header.findIndex((cell) => /question/.test(cell));
+  const aCol = header.findIndex((cell) => /answer/.test(cell));
+  const hadHeader = qCol >= 0 && aCol >= 0 && qCol !== aCol;
+  const catCol = hadHeader ? header.findIndex((cell) => /category/.test(cell)) : -1;
+  const statusCol = hadHeader ? header.findIndex((cell) => /status/.test(cell)) : -1;
+  const featCol = hadHeader ? header.findIndex((cell) => /featured/.test(cell)) : -1;
+  const questionCol = hadHeader ? qCol : 0;
+  const answerCol = hadHeader ? aCol : 1;
+
+  const data = hadHeader ? records.slice(1) : records;
+  const lineOffset = hadHeader ? 2 : 1;
+
   const defaultId = await ensureDefaultCategory(shopId);
-  const max = await db.faq.aggregate({
-    where: { shopId, categoryId: defaultId },
-    _max: { position: true },
+  const existing = await db.faqCategory.findMany({
+    where: { shopId },
+    select: { id: true, name: true },
   });
-  let position = (max._max.position ?? -1) + 1;
-  await db.faq.createMany({
-    data: rows.map((row) => ({
-      shopId,
-      categoryId: defaultId,
-      question: row.question.slice(0, 500),
-      answerHtml: sanitizeHtml(row.answer),
-      status: "published",
-      position: position++,
-    })),
-  });
-  await syncFaqKnowledgeSafe(shopId);
-  return { imported: rows.length, badRows };
+  const categoryByName = new Map(existing.map((c) => [c.name.toLowerCase(), c.id]));
+  let categoryCount = existing.length;
+
+  // Next FAQ position per category, resolved lazily per involved category.
+  const posByCategory = new Map<string, number>();
+  const nextPosition = async (categoryId: string): Promise<number> => {
+    if (!posByCategory.has(categoryId)) {
+      const max = await db.faq.aggregate({
+        where: { shopId, categoryId },
+        _max: { position: true },
+      });
+      posByCategory.set(categoryId, (max._max.position ?? -1) + 1);
+    }
+    const position = posByCategory.get(categoryId)!;
+    posByCategory.set(categoryId, position + 1);
+    return position;
+  };
+
+  let imported = 0;
+  for (let i = 0; i < data.length; i++) {
+    const line = i + lineOffset;
+    const question = (data[i][questionCol] ?? "").trim();
+    const answer = (data[i][answerCol] ?? "").trim();
+    if (!question || !answer) {
+      badRows.push({ line, reason: !question ? "missing question" : "missing answer" });
+      continue;
+    }
+    if (imported >= CSV_ROW_CAP) {
+      badRows.push({ line, reason: `row limit (${CSV_ROW_CAP}) exceeded` });
+      continue;
+    }
+
+    let categoryId = defaultId;
+    const categoryName = catCol >= 0 ? (data[i][catCol] ?? "").trim() : "";
+    if (categoryName && categoryName.toLowerCase() !== DEFAULT_CATEGORY_NAME.toLowerCase()) {
+      const key = categoryName.toLowerCase();
+      if (!categoryByName.has(key)) {
+        const created = await db.faqCategory.create({
+          data: {
+            shopId,
+            name: categoryName.slice(0, 100),
+            icon: "page",
+            position: categoryCount++,
+            status: "published",
+          },
+        });
+        categoryByName.set(key, created.id);
+      }
+      categoryId = categoryByName.get(key)!;
+    }
+
+    const status =
+      statusCol >= 0 && /draft/i.test((data[i][statusCol] ?? "").trim()) ? "draft" : "published";
+    const featured = featCol >= 0 && /^(true|yes|1)$/i.test((data[i][featCol] ?? "").trim());
+
+    await db.faq.create({
+      data: {
+        shopId,
+        categoryId,
+        question: question.slice(0, 500),
+        answerHtml: sanitizeHtml(answer),
+        status,
+        featured,
+        position: await nextPosition(categoryId),
+      },
+    });
+    imported++;
+  }
+
+  if (imported > 0) await syncFaqKnowledgeSafe(shopId);
+  return { imported, badRows };
 }
 
 /**

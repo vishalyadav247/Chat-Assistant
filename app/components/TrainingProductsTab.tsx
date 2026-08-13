@@ -2,7 +2,15 @@ import { useMemo, useState } from "react";
 import type { ProductDetail, ProductRow, TrainingActionResult } from "../routes/app.ai-agent.training";
 import { DataTable } from "./DataTable";
 import { BrowseModalShell, BrowseThumb } from "./BrowseProductsModal";
-import { LearnCard, StatusBadge, SubTabs, formatDateTime, useTrainingFetcher } from "./TrainingShared";
+import {
+  LearnCard,
+  StatusBadge,
+  SubTabs,
+  formatDateTime,
+  useSyncWatcher,
+  useTrainingFetcher,
+} from "./TrainingShared";
+import { BRAND } from "./ui/tokens";
 
 // Products tab (spec 07, design #viewTraining → Products): learn card with
 // master switch, manage card (Sync / disabled Manage metafields), sub-tabs
@@ -17,8 +25,12 @@ export function TrainingProductsTab(props: {
   lastSyncedAt: string | null;
   syncStatus: string;
   currency: string;
+  /** Master "Learn products" permission (ShopSettings.learn.products) —
+   *  independent of per-row learnEnabled, which applies only when this is on. */
+  masterEnabled: boolean;
 }) {
-  const { submit, busy } = useTrainingFetcher();
+  const { submit, pendingIntent } = useTrainingFetcher();
+  const syncWatch = useSyncWatcher(props.lastSyncedAt, "Products synced");
   const [subTab, setSubTab] = useState<SubTab>("all");
   const [detail, setDetail] = useState<ProductDetail | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -35,8 +47,6 @@ export function TrainingProductsTab(props: {
     );
   }, [props.rows, subTab]);
 
-  const allLearned = props.total > 0 && props.learned === props.total;
-
   const openDetail = (row: ProductRow) => {
     setDetail(null);
     setDetailOpen(true);
@@ -50,13 +60,12 @@ export function TrainingProductsTab(props: {
     <s-stack gap="base">
       <LearnCard
         title="Products"
-        chip={`${props.learned} of ${props.total} products learned`}
+        chip={`${props.masterEnabled ? props.learned : 0} of ${props.total} products learned`}
         description="Help customers discover products, get details about features and pricing, and find what they're looking for."
-        switchChecked={allLearned}
-        switchLabel="Learn all products"
-        switchDisabled={busy || props.total === 0}
+        switchChecked={props.masterEnabled}
+        switchLabel="Learn products"
         onSwitch={(checked) =>
-          submit("products-learn-all", { enabled: checked ? "true" : "false" })
+          submit("learn-master", { type: "products", enabled: checked ? "true" : "false" })
         }
       />
 
@@ -74,21 +83,18 @@ export function TrainingProductsTab(props: {
                 Manage metafields
                 <s-tooltip>Coming soon</s-tooltip>
               </s-button>
-              <s-button variant="primary" disabled={busy} onClick={() => submit("sync-products")}>
+              <s-button
+                variant="primary"
+                loading={syncWatch.syncing || pendingIntent === "sync-products"}
+                onClick={() => {
+                  submit("sync-products");
+                  syncWatch.start();
+                }}
+              >
                 Sync products
               </s-button>
             </div>
           </div>
-
-          <SubTabs
-            tabs={[
-              { id: "all", label: "All" },
-              { id: "active", label: "Active" },
-              { id: "inactive", label: "Inactive" },
-            ]}
-            active={subTab}
-            onChange={setSubTab}
-          />
 
           <DataTable
             rows={rows}
@@ -99,6 +105,39 @@ export function TrainingProductsTab(props: {
             }
             emptyMessage="No products found. Run a sync to import your catalog."
             perPage={10}
+            toolbar={
+              <SubTabs
+                tabs={[
+                  { id: "all", label: "All" },
+                  { id: "active", label: "Active" },
+                  { id: "inactive", label: "Inactive" },
+                ]}
+                active={subTab}
+                onChange={setSubTab}
+              />
+            }
+            bulkActions={(ids, clear) => (
+              <>
+                <s-button
+                  disabled={pendingIntent === "products-learn"}
+                  onClick={() => {
+                    submit("products-learn", { ids: ids.join(","), enabled: "true" });
+                    clear();
+                  }}
+                >
+                  Enable learning
+                </s-button>
+                <s-button
+                  disabled={pendingIntent === "products-learn"}
+                  onClick={() => {
+                    submit("products-learn", { ids: ids.join(","), enabled: "false" });
+                    clear();
+                  }}
+                >
+                  Disable learning
+                </s-button>
+              </>
+            )}
             columns={[
               {
                 key: "product",
@@ -109,11 +148,6 @@ export function TrainingProductsTab(props: {
                     <span style={{ fontWeight: 600 }}>{row.title}</span>
                   </span>
                 ),
-              },
-              {
-                key: "collections",
-                title: "Collections",
-                render: () => <s-text tone="neutral">—</s-text>,
               },
               {
                 key: "tags",
@@ -137,13 +171,8 @@ export function TrainingProductsTab(props: {
                 render: (row) => <StatusBadge status={row.status} />,
               },
               {
-                key: "faqs",
-                title: "FAQs",
-                render: () => <s-text tone="neutral">0</s-text>,
-              },
-              {
                 key: "learn",
-                title: "Learn",
+                title: "AI Learn",
                 render: (row) => (
                   <s-switch
                     label={`Learn ${row.title}`}
@@ -163,9 +192,12 @@ export function TrainingProductsTab(props: {
                 title: "Actions",
                 align: "end",
                 render: (row) => (
-                  <s-button variant="tertiary" onClick={() => openDetail(row)}>
-                    View
-                  </s-button>
+                  <s-button
+                    variant="tertiary"
+                    icon="view"
+                    accessibilityLabel={`View ${row.title}`}
+                    onClick={() => openDetail(row)}
+                  />
                 ),
               },
             ]}
@@ -194,7 +226,7 @@ export function TrainingProductsTab(props: {
                 href={detail.adminUrl}
                 target="_blank"
                 rel="noreferrer"
-                style={{ color: "var(--s-color-text-link, #6d3bf5)" }}
+                style={{ color: `var(--s-color-text-link, ${BRAND.accent})` }}
               >
                 {detail.numericId}
               </a>
@@ -209,7 +241,7 @@ export function TrainingProductsTab(props: {
                   href={detail.url}
                   target="_blank"
                   rel="noreferrer"
-                  style={{ color: "var(--s-color-text-link, #6d3bf5)", wordBreak: "break-all" }}
+                  style={{ color: `var(--s-color-text-link, ${BRAND.accent})`, wordBreak: "break-all" }}
                 >
                   {detail.url}
                 </a>
@@ -286,47 +318,19 @@ function ViewRow(props: { label: string; children: React.ReactNode }) {
 
 function ViewTable(props: { headers: [string, string]; rows: [string, string][] }) {
   return (
-    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-      <thead>
-        <tr>
-          {props.headers.map((h, i) => (
-            <th
-              key={h}
-              style={{
-                textAlign: i === 1 ? "right" : "left",
-                padding: "8px 12px",
-                background: "var(--s-color-bg-fill-secondary, #f7f7f7)",
-                borderBottom: "1px solid var(--s-color-border, #e3e3e3)",
-              }}
-            >
-              {h}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
+    <s-table>
+      <s-table-header-row>
+        <s-table-header>{props.headers[0]}</s-table-header>
+        <s-table-header format="numeric">{props.headers[1]}</s-table-header>
+      </s-table-header-row>
+      <s-table-body>
         {props.rows.map(([a, b], index) => (
-          <tr key={`${a}-${index}`}>
-            <td
-              style={{
-                padding: "8px 12px",
-                borderBottom: "1px solid var(--s-color-border-secondary, #f1f1f1)",
-              }}
-            >
-              {a}
-            </td>
-            <td
-              style={{
-                padding: "8px 12px",
-                textAlign: "right",
-                borderBottom: "1px solid var(--s-color-border-secondary, #f1f1f1)",
-              }}
-            >
-              {b}
-            </td>
-          </tr>
+          <s-table-row key={`${a}-${index}`}>
+            <s-table-cell>{a}</s-table-cell>
+            <s-table-cell>{b}</s-table-cell>
+          </s-table-row>
         ))}
-      </tbody>
-    </table>
+      </s-table-body>
+    </s-table>
   );
 }

@@ -5,7 +5,9 @@ import { unauthenticated } from "../shopify.server";
 // store logo (16). Accepts image buffers ≤2MB, returns the hosted CDN url.
 
 const MAX_BYTES = 2 * 1024 * 1024;
-const ALLOWED_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+// SVG uploads land as GenericFile on Shopify's Files API (contentType FILE —
+// MediaImage doesn't accept svg); raster types go through MediaImage.
+const ALLOWED_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/svg+xml"]);
 
 const STAGED_UPLOAD_MUTATION = `#graphql
   mutation ChatconvertStagedUpload($input: [StagedUploadInput!]!) {
@@ -22,6 +24,7 @@ const FILE_CREATE_MUTATION = `#graphql
       files {
         id
         ... on MediaImage { image { url } }
+        ... on GenericFile { url }
       }
       userErrors { field message }
     }
@@ -32,6 +35,7 @@ const FILE_QUERY = `#graphql
   query ChatconvertFile($id: ID!) {
     node(id: $id) {
       ... on MediaImage { image { url } }
+      ... on GenericFile { url }
     }
   }
 `;
@@ -44,8 +48,9 @@ export async function uploadImage(
     throw new Error("file too large (max 2MB)");
   }
   if (!ALLOWED_TYPES.has(file.type)) {
-    throw new Error("unsupported file type (PNG, JPG or WebP)");
+    throw new Error("unsupported file type (SVG, PNG, JPG or WebP)");
   }
+  const isSvg = file.type === "image/svg+xml";
 
   const { admin } = await unauthenticated.admin(shopDomain);
 
@@ -88,12 +93,14 @@ export async function uploadImage(
 
   // 3. Create the file record
   const createRes = await admin.graphql(FILE_CREATE_MUTATION, {
-    variables: { files: [{ originalSource: target.resourceUrl, contentType: "IMAGE" }] },
+    variables: {
+      files: [{ originalSource: target.resourceUrl, contentType: isSvg ? "FILE" : "IMAGE" }],
+    },
   });
   const created = (await createRes.json()) as {
     data: {
       fileCreate: {
-        files: Array<{ id: string; image: { url: string } | null }>;
+        files: Array<{ id: string; image: { url: string } | null; url: string | null }>;
         userErrors: Array<{ message: string }>;
       };
     };
@@ -104,13 +111,15 @@ export async function uploadImage(
   }
   const fileNode = created.data.fileCreate.files[0];
 
-  // Image URL may be processed asynchronously — poll briefly.
-  let url = fileNode.image?.url ?? null;
+  // File URL may be processed asynchronously — poll briefly.
+  let url = fileNode.image?.url ?? fileNode.url ?? null;
   for (let attempt = 0; !url && attempt < 5; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 1000));
     const pollRes = await admin.graphql(FILE_QUERY, { variables: { id: fileNode.id } });
-    const polled = (await pollRes.json()) as { data: { node: { image: { url: string } | null } | null } };
-    url = polled.data.node?.image?.url ?? null;
+    const polled = (await pollRes.json()) as {
+      data: { node: { image?: { url: string } | null; url?: string | null } | null };
+    };
+    url = polled.data.node?.image?.url ?? polled.data.node?.url ?? null;
   }
   if (!url) {
     throw new Error("file processed but no URL available yet — retry shortly");

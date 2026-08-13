@@ -380,6 +380,48 @@ export async function getWidgetThreadState(
   return { messages, mode: convo.mode, status: convo.status };
 }
 
+export interface WidgetHistoryMessage {
+  id: string;
+  role: string;
+  author: string;
+  content: string;
+  productCards: unknown;
+  createdAt: Date;
+}
+
+/**
+ * Full thread history for the widget restore (spec 05 delta: the conversation
+ * survives storefront page navigation). Ownership is bound to the caller's
+ * widget sessionId — a conversationId alone is never enough (review C1).
+ */
+export async function getWidgetThreadHistory(
+  shopId: string,
+  conversationId: string,
+  sessionId: string,
+): Promise<{ messages: WidgetHistoryMessage[]; mode: string; status: string } | null> {
+  requireShopId(shopId);
+  const convo = await db.conversation.findFirst({
+    where: { id: conversationId, shopId, sessionId },
+    select: { mode: true, status: true },
+  });
+  if (!convo) return null;
+
+  const messages = await db.message.findMany({
+    where: { shopId, conversationId, role: { in: ["in", "out"] } },
+    orderBy: { createdAt: "asc" },
+    take: 100,
+    select: {
+      id: true,
+      role: true,
+      author: true,
+      content: true,
+      productCards: true,
+      createdAt: true,
+    },
+  });
+  return { messages, mode: convo.mode, status: convo.status };
+}
+
 // ── Leave-a-message / collect-email form (proxy.handover-form) ──────────────
 
 export interface HandoverFormValues {

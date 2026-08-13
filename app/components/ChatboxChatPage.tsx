@@ -102,29 +102,33 @@ export function ChatboxChatPage(props: {
     onChange({ ...value, prechat: { ...prechat, ...next } });
 
   const usedFieldKeys = new Set(prechat.fields.map((field) => field.key));
-  const addableFields = (["name", "phone"] as const).filter((key) => !usedFieldKeys.has(key));
   const showCollect = prechat.mode === "guest" || prechat.mode === "both";
 
   return (
     <s-stack gap="base">
       <s-section heading="Welcome message">
+        <s-stack gap="base">
         <s-paragraph>Send the welcome message when visitors initiate the chat</s-paragraph>
-        <s-text-area
-          label="Message"
-          rows={3}
-          value={value.welcomeMessage}
-          maxLength={500}
-          onInput={(e) => onChange({ ...value, welcomeMessage: e.currentTarget.value })}
-        />
-        <s-button
-          variant="tertiary"
-          onClick={() => {
-            const next = `${value.welcomeMessage}{{customer_name}}`;
-            if (next.length <= 500) onChange({ ...value, welcomeMessage: next });
-          }}
-        >
-          Insert customer name
-        </s-button>
+        <s-stack gap="small-300">
+          <s-text-area
+            label="Message"
+            rows={3}
+            value={value.welcomeMessage}
+            maxLength={500}
+            onInput={(e) => onChange({ ...value, welcomeMessage: e.currentTarget.value })}
+          />
+          <s-stack direction="inline">
+            <s-button
+              variant="tertiary"
+              onClick={() => {
+                const next = `${value.welcomeMessage}{{customer_name}}`;
+                if (next.length <= 500) onChange({ ...value, welcomeMessage: next });
+              }}
+            >
+              Insert customer name
+            </s-button>
+          </s-stack>
+        </s-stack>
         <s-checkbox
           label="Use different offline message"
           checked={value.offlineMessageEnabled}
@@ -139,12 +143,16 @@ export function ChatboxChatPage(props: {
             onInput={(e) => onChange({ ...value, offlineMessage: e.currentTarget.value })}
           />
         ) : null}
+        </s-stack>
       </s-section>
 
-      <s-section heading="Conversation starter">
+      {/* Same shape as the Order tracking / FAQs cards: the switch carries the
+          visible title (no separate section heading — a bare unlabeled toggle
+          under a heading read as broken). */}
+      <s-section>
+        <s-stack gap="base">
         <s-switch
           label="Conversation starter"
-          labelAccessibilityVisibility="exclusive"
           details="Provide instant answers to customer's questions based on your FAQs"
           checked={starters.enabled}
           onChange={(e) =>
@@ -152,19 +160,21 @@ export function ChatboxChatPage(props: {
           }
         />
         {starters.items.map((item, index) => (
-          <div key={item.id || index} {...starterDrag.rowProps(index)}>
-            <s-stack direction="inline" gap="small" alignItems="center">
+          <div key={item.id || index} data-drag-row {...starterDrag.rowProps(index)}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 0" }}>
               <DragHandle
                 label={`Reorder ${item.question || "question"}`}
                 drag={starterDrag.handleProps(index)}
                 onKeyMove={(d) => moveStarter(index, d === "up" ? -1 : 1)}
               />
-              <s-box>
+              <div style={{ flex: 1, minWidth: 0 }}>
                 <s-stack gap="small-300">
                   <s-text type="strong">{`${item.emoji} ${item.question}`.trim()}</s-text>
-                  <s-text tone="neutral">{htmlToText(item.answerHtml).slice(0, 120) || "No answer yet"}</s-text>
+                  <s-text tone="neutral">
+                    {htmlToText(item.answerHtml).slice(0, 120) || "No answer yet"}
+                  </s-text>
                 </s-stack>
-              </s-box>
+              </div>
               <s-button
                 icon="edit"
                 variant="tertiary"
@@ -178,7 +188,7 @@ export function ChatboxChatPage(props: {
                 accessibilityLabel="Delete question"
                 onClick={() => setStarters(starters.items.filter((_, i) => i !== index))}
               />
-            </s-stack>
+            </div>
           </div>
         ))}
         <s-stack direction="inline" gap="base">
@@ -186,33 +196,39 @@ export function ChatboxChatPage(props: {
             Add question
           </s-button>
         </s-stack>
+        </s-stack>
       </s-section>
 
       <s-section heading="Chat avatar">
-        <s-choice-list
-          label="Chat avatar"
-          labelAccessibilityVisibility="exclusive"
-          name="chat-avatar"
-          values={[value.avatarMode]}
-          onChange={(e) => {
-            const avatarMode = (e.currentTarget.values[0] ?? "store_branding") as
-              | "store_branding"
-              | "team_member";
-            onChange({ ...value, avatarMode });
-          }}
-        >
-          <s-choice value="store_branding">Store branding</s-choice>
-          <s-choice value="team_member" disabled>
-            Team member profile (coming soon)
-          </s-choice>
-        </s-choice-list>
-        <s-paragraph>
-          Show your store logo and name in customer chats.{" "}
-          <Link to="/app/settings#general">Edit store logo</Link>
-        </s-paragraph>
+        <s-stack gap="base">
+        <s-stack gap="small-300">
+          <s-choice-list
+            label="Chat avatar"
+            labelAccessibilityVisibility="exclusive"
+            name="chat-avatar"
+            values={[value.avatarMode]}
+            onChange={(e) => {
+              const avatarMode = (e.currentTarget.values[0] ?? "store_branding") as
+                | "store_branding"
+                | "team_member";
+              onChange({ ...value, avatarMode });
+            }}
+          >
+            <s-choice value="store_branding">Store branding</s-choice>
+            <s-choice value="team_member" disabled>
+              Team member profile (coming soon)
+            </s-choice>
+          </s-choice-list>
+          <s-paragraph>
+            Show your store logo and name in customer chats.{" "}
+            <Link to="/app/settings#general">Edit store logo</Link>
+          </s-paragraph>
+        </s-stack>
+        </s-stack>
       </s-section>
 
       <s-section heading="Pre-chat form">
+        <s-stack gap="base">
         <s-paragraph>Collect leads from customers</s-paragraph>
         <s-choice-list
           label="How customers start a chat"
@@ -238,18 +254,25 @@ export function ChatboxChatPage(props: {
         </s-choice-list>
 
         {prechat.mode === "both" ? (
-          <s-box maxInlineSize="240px">
-            <s-number-field
-              label="Show form after X messages from visitors"
-              min={0}
-              max={20}
-              value={String(prechat.showAfterMessages)}
-              onChange={(e) => {
-                const n = Math.min(20, Math.max(0, Math.floor(Number(e.currentTarget.value) || 0)));
-                setPrechat({ showAfterMessages: n });
-              }}
-            />
-          </s-box>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <s-text>Show form after X messages from visitors</s-text>
+            <s-box maxInlineSize="90px">
+              <s-number-field
+                label="Show form after X messages from visitors"
+                labelAccessibilityVisibility="exclusive"
+                min={0}
+                max={20}
+                value={String(prechat.showAfterMessages)}
+                onChange={(e) => {
+                  const n = Math.min(
+                    20,
+                    Math.max(0, Math.floor(Number(e.currentTarget.value) || 0)),
+                  );
+                  setPrechat({ showAfterMessages: n });
+                }}
+              />
+            </s-box>
+          </div>
         ) : null}
 
         {showCollect ? (
@@ -261,48 +284,29 @@ export function ChatboxChatPage(props: {
               details="Description helps to convey the purpose of collecting user information"
               onInput={(e) => setPrechat({ description: e.currentTarget.value })}
             />
+            {/* Checkboxes (user request 2026-08-12 — replaces the add/remove
+                dropdown): tick a field to collect it. Email is always on. */}
             <s-stack gap="small">
               <s-text type="strong">Information to be collected</s-text>
-              {prechat.fields.map((field) => (
-                <s-stack key={field.key} direction="inline" gap="small" alignItems="center">
-                  <s-text>{FIELD_LABELS[field.key]}</s-text>
-                  <s-badge tone={field.required ? "success" : "info"}>
-                    {field.required ? "Required" : "Optional"}
-                  </s-badge>
-                  {field.key !== "email" ? (
-                    <s-button
-                      icon="delete"
-                      variant="tertiary"
-                      tone="critical"
-                      accessibilityLabel={`Remove ${FIELD_LABELS[field.key]}`}
-                      onClick={() =>
-                        setPrechat({ fields: prechat.fields.filter((f) => f.key !== field.key) })
-                      }
-                    />
-                  ) : null}
-                </s-stack>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <s-checkbox label="Email address" checked disabled />
+                <s-badge tone="info">Always required</s-badge>
+              </div>
+              {(["name", "phone"] as const).map((key) => (
+                <s-checkbox
+                  key={key}
+                  label={FIELD_LABELS[key]}
+                  checked={usedFieldKeys.has(key)}
+                  onChange={(e) => {
+                    if (e.currentTarget.checked) {
+                      if (!usedFieldKeys.has(key))
+                        setPrechat({ fields: [...prechat.fields, { key, required: false }] });
+                    } else {
+                      setPrechat({ fields: prechat.fields.filter((f) => f.key !== key) });
+                    }
+                  }}
+                />
               ))}
-              {addableFields.length > 0 ? (
-                <s-box maxInlineSize="220px">
-                  <s-select
-                    label="Add contact field"
-                    labelAccessibilityVisibility="exclusive"
-                    value=""
-                    onChange={(e) => {
-                      const key = e.currentTarget.value as "name" | "phone" | "";
-                      if (!key || usedFieldKeys.has(key)) return;
-                      setPrechat({ fields: [...prechat.fields, { key, required: false }] });
-                    }}
-                  >
-                    <s-option value="">Add contact field…</s-option>
-                    {addableFields.map((key) => (
-                      <s-option key={key} value={key}>
-                        {FIELD_LABELS[key]}
-                      </s-option>
-                    ))}
-                  </s-select>
-                </s-box>
-              ) : null}
             </s-stack>
             <s-checkbox
               label="Show marketing opt-in to customers"
@@ -338,18 +342,23 @@ export function ChatboxChatPage(props: {
             />
           </>
         ) : null}
+        </s-stack>
       </s-section>
 
       <s-section>
-        <s-switch
-          label="Display satisfaction survey"
-          checked={value.survey}
-          onChange={(e) => onChange({ ...value, survey: e.currentTarget.checked })}
-        />
-        <s-paragraph>
-          Turn on to send a satisfaction survey in your conversations with customers.{" "}
-          <Link to="/app/settings#survey">Configure survey</Link>
-        </s-paragraph>
+        <s-stack gap="base">
+        <s-stack gap="small-300">
+          <s-switch
+            label="Display satisfaction survey"
+            checked={value.survey}
+            onChange={(e) => onChange({ ...value, survey: e.currentTarget.checked })}
+          />
+          <s-paragraph>
+            Turn on to send a satisfaction survey in your conversations with customers.{" "}
+            <Link to="/app/settings#survey">Configure survey</Link>
+          </s-paragraph>
+        </s-stack>
+        </s-stack>
       </s-section>
 
       <s-modal
