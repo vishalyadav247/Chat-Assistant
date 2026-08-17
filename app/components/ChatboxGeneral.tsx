@@ -67,11 +67,41 @@ export function ChatboxGeneral(props: {
       <s-section heading="Chatbox header">
         <s-stack gap="base">
         <s-stack direction="inline" gap="base" alignItems="center">
-          <s-thumbnail
-            size="large"
-            src={value.header.logoUrl ?? undefined}
-            alt="Chatbox logo"
-          />
+          <div style={{ position: "relative" }}>
+            <s-thumbnail
+              size="large"
+              src={value.header.logoUrl ?? undefined}
+              alt="Chatbox logo"
+            />
+            {value.header.logoUrl ? (
+              <button
+                type="button"
+                aria-label="Remove logo"
+                onClick={() => onChange({ ...value, header: { ...value.header, logoUrl: null } })}
+                style={{
+                  position: "absolute",
+                  top: -6,
+                  right: -6,
+                  width: 18,
+                  height: 18,
+                  padding: 0,
+                  borderRadius: "50%",
+                  border: "1px solid var(--s-color-border, #d4d4d8)",
+                  background: "var(--s-color-bg, #fff)",
+                  boxShadow: "0 1px 2px rgba(20,20,25,.18)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: "pointer",
+                  fontSize: 10,
+                  lineHeight: 1,
+                  color: "var(--s-color-text-secondary, #5a5a63)",
+                }}
+              >
+                ✕
+              </button>
+            ) : null}
+          </div>
           <s-stack gap="small-200">
             <ChatboxUploadButton
               intent="upload-logo"
@@ -114,7 +144,7 @@ export function ChatboxGeneral(props: {
           />
           <s-paragraph>
             Set up online/offline status in{" "}
-            <Link to="/app/settings#availability">working hours settings</Link>
+            <Link to="/app/settings?tab=availability">working hours settings</Link>
           </s-paragraph>
         </s-stack>
         <s-divider />
@@ -220,7 +250,7 @@ export function ChatboxGeneral(props: {
           />
           <s-paragraph>
             Show the Order Tracking block to let customers track their orders. Select a tracking
-            method in <Link to="/app/settings#chatbox">Integration settings</Link>.
+            method in <Link to="/app/settings?tab=chatbox">Integration settings</Link>.
           </s-paragraph>
         </s-stack>
         </s-stack>
@@ -235,7 +265,7 @@ export function ChatboxGeneral(props: {
             onChange={(e) => onChange({ ...value, faqs: e.currentTarget.checked })}
           />
           <s-paragraph>
-            Show featured questions set up in <Link to="/app/ai-agent">FAQs settings</Link>.
+            Show featured questions set up in <Link to="/app/ai-agent/training?tab=faqs">FAQs settings</Link>.
           </s-paragraph>
         </s-stack>
         </s-stack>

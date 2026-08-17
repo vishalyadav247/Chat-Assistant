@@ -65,6 +65,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     rendererJs: getWidgetRendererJs(),
     widgetCss: getWidgetCssText(),
     currency: shop?.currency ?? "USD",
+    // Survey copy/format (Settings page) — the preview renders the real
+    // storefront surveyPrompt with it when "Display satisfaction survey" is on.
+    survey: {
+      format: shopSettings.survey.format,
+      intro: shopSettings.survey.intro,
+      thanks: shopSettings.survey.thanks,
+    },
+    // Order-tracking mode (Settings page) — decides which tracking form(s)
+    // the preview shows, same as the storefront.
+    orderTrackingMode: shopSettings.orderTracking.mode,
   };
 };
 
@@ -204,6 +214,8 @@ export default function ChatboxPage() {
                 rendererJs={data.rendererJs}
                 widgetCss={data.widgetCss}
                 currency={data.currency}
+                survey={data.survey}
+                orderTrackingMode={data.orderTrackingMode}
               />
             </s-stack>
           </div>

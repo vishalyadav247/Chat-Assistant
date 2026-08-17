@@ -229,7 +229,7 @@ export function ChatboxChatPage(props: {
           </s-choice-list>
           <s-paragraph>
             Show your store logo and name in customer chats.{" "}
-            <Link to="/app/settings#general">Edit store logo</Link>
+            <Link to="/app/settings?tab=general">Edit store logo</Link>
           </s-paragraph>
         </s-stack>
         </s-stack>
@@ -363,7 +363,7 @@ export function ChatboxChatPage(props: {
           />
           <s-paragraph>
             Turn on to send a satisfaction survey in your conversations with customers.{" "}
-            <Link to="/app/settings#survey">Configure survey</Link>
+            <Link to="/app/settings?tab=survey">Configure survey</Link>
           </s-paragraph>
         </s-stack>
         </s-stack>

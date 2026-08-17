@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import type { CSSProperties } from "react";
 import type { AvailabilityData } from "../lib/settings/schemas";
 
-// Settings → Chatbox → Chat availability sub-view (spec 16, #availability):
+// Settings → Chatbox → Chat availability sub-view (spec 16, ?tab=availability):
 // working hours, online-status mode, breaks, holidays, status messages with
 // {{schedule}} merge, timezone. Live status preview comes from the loader
 // (resolveAvailability) and reflects the last SAVED settings.
@@ -135,12 +135,26 @@ export function SettingsAvailability(props: {
           <s-choice value="custom">Custom time</s-choice>
         </s-choice-list>
         {value.mode === "custom" ? (
-          <s-stack gap="small">
+          // Card around the per-day schedule so the custom entries read as one
+          // grouped block under the "Custom time" choice. Sized to its content
+          // (not full-width) with breathing room above and below.
+          <div
+            style={{
+              width: "fit-content",
+              margin: "10px 0 0",
+              padding: "14px 18px",
+              border: "1px solid var(--s-color-border, #e3e3e6)",
+              borderRadius: 12,
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+            }}
+          >
             {DAY_ROWS.map(({ day, label }) => {
               const entry = dayEntry(day);
               return (
                 <div key={day} style={rowStyle}>
-                  <div style={{ width: 140 }}>
+                  <div style={{ width: 120 }}>
                     <s-checkbox
                       label={label}
                       checked={entry.enabled}
@@ -167,8 +181,11 @@ export function SettingsAvailability(props: {
                 </div>
               );
             })}
-          </s-stack>
+          </div>
         ) : null}
+        {/* Constant gap before this block — the custom-time card above only
+            renders in custom mode, so the spacing lives here, not on it. */}
+        <div style={{ marginTop: 14 }}>
         <s-choice-list
           label="Show online status"
           name="online-status-mode"
@@ -197,6 +214,7 @@ export function SettingsAvailability(props: {
             </s-text>
           </s-choice>
         </s-choice-list>
+        </div>
       </s-section>
 
       <s-section>
@@ -217,7 +235,7 @@ export function SettingsAvailability(props: {
           />
         </s-stack>
         {value.breaks.enabled ? (
-          <s-stack gap="small">
+          <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 12 }}>
             {value.breaks.ranges.map((range, index) => (
               <div key={index} style={rowStyle}>
                 <input
@@ -268,7 +286,7 @@ export function SettingsAvailability(props: {
                 Add break time
               </s-button>
             </s-box>
-          </s-stack>
+          </div>
         ) : null}
       </s-section>
 
@@ -290,13 +308,16 @@ export function SettingsAvailability(props: {
           />
         </s-stack>
         {value.holidays.enabled ? (
-          <s-stack gap="small">
+          <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 12 }}>
             {value.holidays.items.map((holiday, index) => (
               <div key={index} style={{ ...rowStyle, flexWrap: "wrap" }}>
                 <div style={{ minWidth: 200, flex: 1 }}>
+                  {/* Label hidden on EVERY row (screen readers still get it):
+                      a visible label on row 1 only made it taller and knocked
+                      the date inputs out of alignment with the other rows. */}
                   <s-text-field
                     label="Holiday name"
-                    labelAccessibilityVisibility={index === 0 ? "visible" : "exclusive"}
+                    labelAccessibilityVisibility="exclusive"
                     placeholder="Enter holiday name"
                     value={holiday.name}
                     onInput={(e) => setHoliday(index, { name: e.currentTarget.value })}
@@ -350,7 +371,7 @@ export function SettingsAvailability(props: {
                 Add holiday
               </s-button>
             </s-box>
-          </s-stack>
+          </div>
         ) : null}
       </s-section>
 

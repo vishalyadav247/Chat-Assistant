@@ -114,10 +114,10 @@
 .cw-head {
   background: linear-gradient(135deg, var(--cw1), var(--cw2));
   color: #fff;
-  padding: 16px 18px 18px;
+  padding: 12px 17px 11px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 5px;
   flex: none;
 }
 .cw-back { color: #fff; display: inline-flex; align-items: center; flex: none; }
@@ -129,7 +129,7 @@
   border-radius: 11px;
   overflow: hidden;
   flex: none;
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -137,7 +137,7 @@
 }
 .cw-logo img { width: 100%; height: 100%; object-fit: cover; }
 .cw-title { font-weight: 750; font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cw-sub { font-size: 13px; opacity: 0.92; margin-top: 2px; }
+.cw-sub { font-size: 13px; opacity: 0.92; }
 .cw-x { color: #fff; opacity: 0.9; flex: none; display: inline-flex; align-items: center; }
 .cw-x:hover { opacity: 0.7; }
 
@@ -421,14 +421,139 @@ textarea.cw-inp { resize: vertical; min-height: 64px; font-family: inherit; line
 .cw-dot { width: 16px; height: 16px; border-radius: 50%; border: 1.6px solid var(--cw-border-strong); flex: none; position: relative; }
 .cw-radio input:checked + .cw-dot { border-color: var(--cw1); }
 .cw-radio input:checked + .cw-dot::after { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--cw1); }
-.cw-track {
+/* .cw-root scope beats the `.cw-root button { background: none }` reset —
+   without it the brand gradient never applied and Track rendered plain. */
+.cw-root .cw-track {
   background: linear-gradient(135deg, var(--cw1), var(--cw2));
   color: #fff;
   border-radius: 10px;
-  padding: 11px;
+  padding: 8px;
   font-size: 13.5px;
   font-weight: 650;
+  width: 150px;
+  margin:auto;
+  transition: box-shadow 0.15s ease, transform 0.15s ease, filter 0.15s ease;
+}
+.cw-root .cw-track:hover {
+  filter: brightness(1.05);
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.18);
+  transform: translateY(-1px);
+}
+.cw-root .cw-track:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+.cw-root .cw-track:disabled { opacity: 0.6; cursor: default; transform: none; box-shadow: none; }
+
+/* In-widget order status result (design: ordertracking.png) */
+.cw-ot-results { display: flex; flex-direction: column; gap: 12px; }
+.cw-root .cw-ot-again {
   width: 100%;
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--cw-surface);
+  border: 1px solid var(--cw-border-strong);
+  color: var(--cw-ink-strong);
+  font-size: 13px;
+  font-weight: 650;
+  transition: background 0.15s ease;
+}
+.cw-root .cw-ot-again:hover { background: var(--cw-surface-2); }
+.cw-ot-card {
+  background: var(--cw-surface);
+  border-radius: 12px;
+  box-shadow: var(--cw-shadow-sm);
+  padding: 13px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.cw-ot-headrow { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cw-ot-name {
+  font-weight: 750;
+  color: var(--cw-ink-strong);
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cw-ot-total { margin-left: auto; font-weight: 750; color: var(--cw-ink-strong); font-size: 13.5px; flex: none; }
+.cw-ot-sub { color: var(--cw-muted); font-size: 12px; }
+.cw-ot-chip {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 650;
+  background: rgba(20, 20, 25, 0.06);
+  color: var(--cw-ink);
+  flex: none;
+}
+.cw-ot-chip--ok { background: rgba(22, 163, 74, 0.12); color: #15803d; }
+.cw-ot-chip--info { background: rgba(59, 130, 246, 0.12); color: #1d4ed8; }
+.cw-ot-chip--warn { background: rgba(220, 38, 38, 0.1); color: #b91c1c; }
+.cw-ot-events { display: flex; flex-direction: column; gap: 8px; }
+.cw-ot-ev { display: flex; flex-direction: column; gap: 2px; }
+.cw-ot-thumbs { display: flex; gap: 10px; }
+.cw-ot-thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  border: 1px solid var(--cw-border);
+  background: var(--cw-surface-2);
+  position: relative;
+  flex: none;
+}
+.cw-ot-thumb img { width: 100%; height: 100%; object-fit: cover; border-radius: 7px; }
+.cw-ot-qty {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #52525b;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 650;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cw-ot-muted { color: var(--cw-muted); font-size: 12px; }
+.cw-ot-divider { height: 1px; background: var(--cw-border); margin: 3px 0; }
+.cw-ot-title { font-weight: 750; color: var(--cw-ink-strong); font-size: 13px; }
+.cw-ot-grid { display: grid; grid-template-columns: auto 1fr; gap: 7px 14px; font-size: 12.5px; }
+.cw-ot-l { color: var(--cw-muted); max-width: 90px; }
+.cw-ot-v { color: var(--cw-ink); word-break: break-word; }
+
+/* ── Entrance animations ───────────────────────────────────────────────────
+   Everything that appears or swaps gets a soft fade-up (same curve as the
+   proactive bubble). display:none → visible re-runs the animation, so the
+   tracking form ↔ result swap animates both ways. Reduced-motion users get
+   instant rendering. */
+@media (prefers-reduced-motion: no-preference) {
+  .cw-panel { animation: cw-panel-in 0.22s ease; }
+  .cw-body > .cw-home,
+  .cw-body > .cw-tracking,
+  .cw-body > .cw-blk,
+  .cw-msg,
+  .cw-form,
+  .cw-ot-formwrap,
+  .cw-ot-results { animation: cw-in 0.22s ease; }
+  .cw-ot-results .cw-ot-card { animation: cw-in 0.25s ease both; }
+  .cw-ot-results .cw-ot-card:nth-child(2) { animation-delay: 0.06s; }
+  .cw-ot-results .cw-ot-card:nth-child(3) { animation-delay: 0.12s; }
+  .cw-ot-results .cw-ot-again { animation: cw-in 0.25s ease 0.12s both; }
+}
+@keyframes cw-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes cw-panel-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to { opacity: 1; transform: none; }
 }
 
 /* ── Pre-chat form / survey ────────────────────────────────────────────── */

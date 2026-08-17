@@ -39,12 +39,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   const shopId = await resolveShopId(session.shop);
-  await recordEvent(shopId, parsed.data.type as AnalyticsEventType, parsed.data.payload);
+  const { cart, conversationId, sessionId } = parsed.data;
+  // Persist identity into the stored payload (when the beacon carries it) so
+  // the contact's Activity timeline can attribute events like added_to_cart.
+  await recordEvent(shopId, parsed.data.type as AnalyticsEventType, {
+    ...parsed.data.payload,
+    ...(sessionId ? { sessionId } : {}),
+    ...(conversationId ? { conversationId } : {}),
+  });
 
   // Live cart → conversation pageContext. sessionId must match the stored
   // conversation (same binding as the pipeline, review C1) so a leaked id
   // can't overwrite another shopper's cart card.
-  const { cart, conversationId, sessionId } = parsed.data;
   if (cart && conversationId && sessionId) {
     const convo = await db.conversation.findFirst({
       where: { id: conversationId, shopId, sessionId },

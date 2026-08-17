@@ -62,6 +62,20 @@ export const TONES: Record<Tone, { bg: string; fg: string }> = {
   critical: { bg: "#fdeef1", fg: "#e11d48" },
 };
 
+/** App-standard overlay/panel scrollbars (identical to the inbox workspace's
+ *  "Conversation details" column): invisible at rest, slim 8px thumb that
+ *  fades in on hover. Usage: render `<style>{SCROLLBAR_CSS}</style>` once in
+ *  the component and put className "cc-scroll" on each scroll container. */
+export const SCROLLBAR_CSS = `
+.cc-scroll{scrollbar-width:thin;scrollbar-color:transparent transparent;}
+.cc-scroll:hover{scrollbar-color:#c9c9d2 transparent;}
+.cc-scroll::-webkit-scrollbar{width:8px;height:8px;}
+.cc-scroll::-webkit-scrollbar-track{background:transparent;}
+.cc-scroll::-webkit-scrollbar-thumb{background:transparent;border-radius:8px;}
+.cc-scroll:hover::-webkit-scrollbar-thumb{background:#c9c9d2;}
+.cc-scroll::-webkit-scrollbar-thumb:hover{background:#adadb8;}
+`;
+
 /** Muted text colors (the design's lightened ink ramp). */
 export const INK = {
   strong: "var(--s-color-text, #2e2e37)",

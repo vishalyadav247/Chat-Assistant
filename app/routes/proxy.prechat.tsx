@@ -71,6 +71,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         marketingOptIn: optIn,
       },
     });
+    await recordEvent(shopId, "contact_converted", {
+      contactId: contact.id,
+      from: "anonymous",
+      to: "lead",
+      source: "prechat",
+    });
   } else {
     contact = await db.contact.create({
       data: {

@@ -482,6 +482,15 @@ export async function submitHandoverForm(
               channel: "store",
             },
           });
+  if (anon && contact.id === anon.id) {
+    // The session's anonymous row was upgraded in place → timeline entry.
+    await recordEvent(shopId, "contact_converted", {
+      contactId: contact.id,
+      from: "anonymous",
+      to: "lead",
+      source: "handover_form",
+    });
+  }
 
   // Matched an existing lead: fold this session's anonymous row into it so the
   // person doesn't span two contact rows.

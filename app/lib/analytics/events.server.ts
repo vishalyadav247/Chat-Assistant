@@ -26,6 +26,9 @@ export type AnalyticsEventType =
   | "prechat_submitted"
   | "product_card_clicked"
   | "added_to_cart"
+  // 11 contacts (payload: contactId, from, to, source — powers the contact
+  // Activity timeline's conversion entries)
+  | "contact_converted"
   // 09 curated admin
   | "curated_answer_saved"
   | "curated_stock_flagged"

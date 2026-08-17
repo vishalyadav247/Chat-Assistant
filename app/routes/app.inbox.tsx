@@ -335,7 +335,7 @@ const WORKSPACE_CSS = `
 .cin-fil-l{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .cin-fil-c{font-size:11px;font-weight:700;color:#6b6b73;}
 .cin-fil.active .cin-fil-c{color:${BRAND.accent};}
-.cin-fil-c.red{color:#fff;background:#f43f5e;border-radius:20px;padding:1px 6px;min-width:18px;text-align:center;}
+.cin-fil-c.red{color:#fff;background:#f43f5e;border-radius:10px;padding:1px 3px;min-width:18px;text-align:center;}
 
 .cin-list-top{padding:12px 12px 10px;box-shadow:inset 0 -1px 0 #e9e9ec;flex:none;}
 .cin-list-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:13px;}

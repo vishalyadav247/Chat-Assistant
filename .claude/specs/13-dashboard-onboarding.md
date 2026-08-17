@@ -22,7 +22,7 @@ Range dropdown Last 7 days / 30 days / 12 months; compare-to label (previous equ
 
 ### Setup checklist
 Progress ring N/6; rows with To do/Done pills + deep links; completion detection:
-1. **Embed app to your theme** → settings#general; done = app embed enabled in published theme (Admin API themes/asset check or app-embed status API)
+1. **Embed app to your theme** → settings?tab=general; done = app embed enabled in published theme (Admin API themes/asset check or app-embed status API)
 2. **Customize your chatbox widget** → /app/chatbox; done = WidgetSettings saved ≥1
 3. **Sync your product & store data** → ai-agent training; done = ≥1 successful catalog sync
 4. **Set up AI instructions** → ai-agent instructions; done = persona role+style saved

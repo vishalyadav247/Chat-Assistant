@@ -8,11 +8,19 @@ type OrderTracking = ShopSettingsData["orderTracking"];
 export function SettingsChatbox(props: {
   cartDrawer: boolean;
   orderTracking: OrderTracking;
+  /** Last SAVED tracking config — drives the Connected state (the editable
+   *  draft may differ while the merchant types a new key). */
+  savedTracking: OrderTracking;
+  connecting: boolean;
   onCartDrawerChange: (value: boolean) => void;
   onOrderTrackingChange: (value: OrderTracking) => void;
+  /** Validate + persist the provider key ("" disconnects). */
+  onConnect: (apiKey: string) => void;
   onManageAvailability: () => void;
   onManageSurvey: () => void;
 }) {
+  const connected = Boolean(props.savedTracking.apiKey);
+  const keyDirty = props.orderTracking.apiKey.trim() !== props.savedTracking.apiKey;
   return (
     <s-stack gap="base">
       <s-section>
@@ -69,11 +77,18 @@ export function SettingsChatbox(props: {
               default link
             </s-text>
           </s-choice>
+          <s-choice value="integration">
+            Integrate with tracking app
+            <s-text slot="details">
+              Show real-time shipment status updates inside the chatbox for better customer support
+            </s-text>
+          </s-choice>
         </s-choice-list>
         {props.orderTracking.mode === "custom" ? (
           <s-text-field
             label="Custom tracking URL"
             placeholder="www.delhivery.com/track-v2/package/"
+            details="The tracking number is added to the end — or put {number} where it belongs in the URL."
             value={props.orderTracking.customUrl}
             onInput={(e) =>
               props.onOrderTrackingChange({ ...props.orderTracking, customUrl: e.currentTarget.value })
@@ -81,6 +96,68 @@ export function SettingsChatbox(props: {
           />
         ) : null}
       </s-section>
+
+      {props.orderTracking.mode === "integration" ? (
+        <s-section heading="Set up order tracking integration app">
+          <s-stack gap="base">
+            <s-stack gap="small-300">
+              <s-heading>Step 1. Select tracking provider</s-heading>
+              <s-stack gap="small-300">
+                <s-checkbox label="17Track" checked disabled={false} onChange={() => {}} />
+                <s-stack direction="inline" gap="small" alignItems="center">
+                  <s-checkbox label="TrackingMore" checked={false} disabled onChange={() => {}} />
+                  <s-badge tone="neutral">Coming soon</s-badge>
+                </s-stack>
+                <s-stack direction="inline" gap="small" alignItems="center">
+                  <s-checkbox label="Track123" checked={false} disabled onChange={() => {}} />
+                  <s-badge tone="neutral">Coming soon</s-badge>
+                </s-stack>
+              </s-stack>
+            </s-stack>
+
+            <s-stack gap="small-300">
+              <s-stack direction="inline" gap="small" alignItems="center">
+                <s-heading>Step 2. Set up integrations</s-heading>
+                {connected ? <s-badge tone="success">Connected</s-badge> : null}
+              </s-stack>
+              <s-paragraph>Enter your API key here to enable the integration</s-paragraph>
+              <s-text-field
+                label="API key"
+                placeholder="Your 17Track security key"
+                value={props.orderTracking.apiKey}
+                onInput={(e) =>
+                  props.onOrderTrackingChange({ ...props.orderTracking, apiKey: e.currentTarget.value })
+                }
+              />
+              <s-paragraph>
+                Don&apos;t have your API key?{" "}
+                <s-link href="https://api.17track.net/en/admin/settings">
+                  Learn how to find it
+                </s-link>
+              </s-paragraph>
+              <s-stack direction="inline" gap="small">
+                <s-button
+                  variant="primary"
+                  disabled={!props.orderTracking.apiKey.trim() || !keyDirty || props.connecting}
+                  loading={props.connecting}
+                  onClick={() => props.onConnect(props.orderTracking.apiKey.trim())}
+                >
+                  Connect
+                </s-button>
+                {connected ? (
+                  <s-button
+                    tone="critical"
+                    disabled={props.connecting}
+                    onClick={() => props.onConnect("")}
+                  >
+                    Disconnect
+                  </s-button>
+                ) : null}
+              </s-stack>
+            </s-stack>
+          </s-stack>
+        </s-section>
+      ) : null}
     </s-stack>
   );
 }

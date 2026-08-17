@@ -1,13 +1,18 @@
+import { Prisma } from "@prisma/client";
 import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
+import { loadShopSettings } from "../settings/save.server";
+import { recordEvent } from "../analytics/events.server";
 import {
   CONTACTS_PAGE_SIZE,
+  compareContacts,
   type ContactSort,
+  type ContactSortDir,
   type ContactType,
 } from "../../components/ContactsShared";
 
 export { CONTACTS_PAGE_SIZE };
-export type { ContactSort, ContactType };
+export type { ContactSort, ContactSortDir, ContactType };
 
 // Contacts CRM server helpers (spec 11). Contacts are CREATED elsewhere —
 // pre-chat / handover form upserts leads in proxy.prechat.tsx (specs 05/10);
@@ -18,6 +23,7 @@ export interface ContactListOptions {
   type?: ContactType;
   q?: string;
   sort?: ContactSort;
+  dir?: ContactSortDir;
 }
 
 export interface ContactListItem {
@@ -30,6 +36,7 @@ export interface ContactListItem {
   location: string | null;
   marketingOptIn: boolean;
   createdAt: Date;
+  lastActivityAt: Date | null;
   conversationCount: number;
 }
 
@@ -62,17 +69,15 @@ function listWhere(shopId: string, opts: ContactListOptions) {
 }
 
 /** List contacts for the admin table: optional type filter + name/email search,
- *  with per-contact conversation counts (test conversations excluded). */
+ *  with per-contact conversation counts and latest activity (test conversations
+ *  excluded). Sorted with the same comparator the table uses client-side. */
 export async function listContacts(
   shopId: string,
   opts: ContactListOptions = {},
 ): Promise<ContactListItem[]> {
   const contacts = await db.contact.findMany({
     where: listWhere(shopId, opts),
-    orderBy:
-      opts.sort === "name"
-        ? [{ name: { sort: "asc", nulls: "last" } }, { createdAt: "desc" }]
-        : { createdAt: "desc" },
+    orderBy: { createdAt: "desc" },
     select: CONTACT_SELECT,
   });
   if (contacts.length === 0) return [];
@@ -85,12 +90,17 @@ export async function listContacts(
       isTest: false,
     },
     _count: { _all: true },
+    _max: { lastMessageAt: true },
   });
   const countByContact = new Map(counts.map((row) => [row.contactId, row._count._all]));
-  return contacts.map((c) => ({
-    ...c,
-    conversationCount: countByContact.get(c.id) ?? 0,
-  }));
+  const activityByContact = new Map(counts.map((row) => [row.contactId, row._max.lastMessageAt]));
+  return contacts
+    .map((c) => ({
+      ...c,
+      lastActivityAt: activityByContact.get(c.id) ?? null,
+      conversationCount: countByContact.get(c.id) ?? 0,
+    }))
+    .sort((a, b) => compareContacts(a, b, opts.sort ?? "created", opts.dir ?? "desc"));
 }
 
 export interface ContactStats {
@@ -131,22 +141,99 @@ export async function ensureSessionContact(shopId: string, sessionId: string): P
   return created.id;
 }
 
-/** Backfill pass on page load: conversations started before anonymous-contact
- *  creation existed have contactId null — bind each session to an (existing or
- *  new anonymous) contact so they show up in the Anonymous tab. */
-export async function backfillAnonymousContacts(shopId: string): Promise<number> {
-  const orphaned = await db.conversation.groupBy({
-    by: ["sessionId"],
-    where: { shopId: requireShopId(shopId), contactId: null, isTest: false },
+/** Manual edit from the Contacts table: update basic identity fields. An
+ *  anonymous contact gaining an email becomes a lead (mirrors pre-chat).
+ *  Customers are NOT editable — their identity lives on the linked Shopify
+ *  profile and a local edit would silently desync from it (the UI hides the
+ *  button; this guard enforces it server-side). */
+export async function updateContactInfo(
+  shopId: string,
+  contactId: string,
+  data: { name: string; email: string; phone: string },
+): Promise<boolean> {
+  const existing = await db.contact.findFirst({
+    where: { id: contactId, shopId: requireShopId(shopId) },
+    select: { type: true },
   });
-  for (const row of orphaned) {
-    const contactId = await ensureSessionContact(shopId, row.sessionId);
-    await db.conversation.updateMany({
-      where: { shopId, sessionId: row.sessionId, contactId: null, isTest: false },
-      data: { contactId },
+  if (!existing || existing.type === "customer") return false;
+  const email = data.email.trim() || null;
+  const becomesLead = existing.type === "anonymous" && Boolean(email);
+  await db.contact.update({
+    where: { id: contactId },
+    data: {
+      name: data.name.trim() || null,
+      email,
+      phone: data.phone.trim() || null,
+      ...(becomesLead ? { type: "lead" } : {}),
+    },
+  });
+  if (becomesLead) {
+    await recordEvent(shopId, "contact_converted", {
+      contactId,
+      from: "anonymous",
+      to: "lead",
+      source: "manual",
     });
   }
-  return orphaned.length;
+  return true;
+}
+
+/** Delete a contact, their linked conversations (messages → unresolved
+ *  questions → conversations, mirroring the retention purge) AND their Shopify
+ *  customer profile if one is linked (contact4.png; merchant-confirmed
+ *  2026-08-14). The Shopify delete is fail-soft: Shopify refuses to delete
+ *  customers with orders — the app-side delete still proceeds. NOTE: the
+ *  Contacts loader must NOT backfill contact-less conversations — a deleted
+ *  contact would be recreated on the very next load. New conversations bind a
+ *  contact at creation (ensureSessionContact in the pipeline). */
+export async function deleteContact(
+  shopId: string,
+  contactId: string,
+  graphql: AdminGraphql,
+): Promise<boolean> {
+  const existing = await db.contact.findFirst({
+    where: { id: contactId, shopId: requireShopId(shopId) },
+    select: { id: true, sessionId: true, shopifyCustomerId: true },
+  });
+  if (!existing) return false;
+  if (existing.shopifyCustomerId) {
+    try {
+      await graphql(
+        `#graphql
+        mutation ContactCustomerDelete($input: CustomerDeleteInput!) {
+          customerDelete(input: $input) {
+            deletedCustomerId
+            userErrors { message }
+          }
+        }`,
+        { variables: { input: { id: existing.shopifyCustomerId } } },
+      );
+    } catch {
+      // Missing scope / API error — the contact + conversations still delete.
+    }
+  }
+  // Everything this person talked about: conversations bound to the contact,
+  // plus any unbound ones from the same widget session (legacy rows).
+  const conversations = await db.conversation.findMany({
+    where: {
+      shopId,
+      OR: [
+        { contactId },
+        ...(existing.sessionId
+          ? [{ sessionId: existing.sessionId, contactId: null }]
+          : []),
+      ],
+    },
+    select: { id: true },
+  });
+  const ids = conversations.map((c) => c.id);
+  if (ids.length > 0) {
+    await db.message.deleteMany({ where: { shopId, conversationId: { in: ids } } });
+    await db.unresolvedQuestion.deleteMany({ where: { shopId, conversationId: { in: ids } } });
+    await db.conversation.deleteMany({ where: { shopId, id: { in: ids } } });
+  }
+  await db.contact.delete({ where: { id: contactId } });
+  return true;
 }
 
 /** Minimal shape of admin.graphql from authenticate.admin — kept structural so
@@ -173,7 +260,7 @@ export async function matchContactsToShopifyCustomers(
     },
     orderBy: { createdAt: "desc" },
     take: 25,
-    select: { id: true, email: true },
+    select: { id: true, email: true, type: true },
   });
   if (candidates.length === 0) return 0;
 
@@ -209,6 +296,12 @@ export async function matchContactsToShopifyCustomers(
           where: { id: contact.id },
           data: { type: "customer", shopifyCustomerId: customerId },
         });
+        await recordEvent(shopId, "contact_converted", {
+          contactId: contact.id,
+          from: contact.type,
+          to: "customer",
+          source: "shopify_match",
+        });
         upgraded += 1;
       }
     }
@@ -216,6 +309,114 @@ export async function matchContactsToShopifyCustomers(
     // Missing scope / API error — leave contacts as-is, retry next load.
   }
   return upgraded;
+}
+
+export interface ConvertToCustomerInput {
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+}
+
+/** "Convert to customer" (detail panel, contact3.png): create a real Shopify
+ *  customer profile via customerCreate — or link the existing one if the email
+ *  is already taken — then upgrade the contact. Needs write_customers. */
+export async function convertContactToShopifyCustomer(
+  shopId: string,
+  contactId: string,
+  graphql: AdminGraphql,
+  input: ConvertToCustomerInput,
+): Promise<{ ok: boolean; error?: string }> {
+  const contact = await db.contact.findFirst({
+    where: { id: contactId, shopId: requireShopId(shopId) },
+  });
+  if (!contact) return { ok: false, error: "Contact not found." };
+  const email = input.email.trim();
+  if (!email) return { ok: false, error: "Email address is required." };
+  const firstName = input.firstName.trim();
+  const lastName = input.lastName.trim();
+  const phone = input.phone.trim();
+
+  let customerId: string | null = null;
+  let linkedExisting = false;
+  try {
+    const response = await graphql(
+      `#graphql
+      mutation ContactConvertCustomerCreate($input: CustomerInput!) {
+        customerCreate(input: $input) {
+          customer { id }
+          userErrors { message }
+        }
+      }`,
+      {
+        variables: {
+          input: {
+            email,
+            ...(firstName ? { firstName } : {}),
+            ...(lastName ? { lastName } : {}),
+            ...(phone ? { phone } : {}),
+          },
+        },
+      },
+    );
+    const body = (await response.json()) as {
+      data?: {
+        customerCreate?: {
+          customer?: { id: string } | null;
+          userErrors?: { message: string }[];
+        };
+      };
+    };
+    customerId = body.data?.customerCreate?.customer?.id ?? null;
+    const errors = body.data?.customerCreate?.userErrors ?? [];
+    if (!customerId && errors.length > 0) {
+      // Email already belongs to a Shopify customer → link that one instead.
+      if (errors.some((e) => /taken/i.test(e.message))) {
+        const lookup = await graphql(
+          `#graphql
+          query ContactConvertCustomerLookup($search: String!) {
+            customers(first: 1, query: $search) {
+              nodes { id email }
+            }
+          }`,
+          { variables: { search: `email:"${email.replace(/["\\]/g, "")}"` } },
+        );
+        const lookupBody = (await lookup.json()) as {
+          data?: { customers?: { nodes?: { id: string; email: string | null }[] } };
+        };
+        const match = lookupBody.data?.customers?.nodes?.find(
+          (n) => n.email?.toLowerCase() === email.toLowerCase(),
+        );
+        customerId = match?.id ?? null;
+        linkedExisting = customerId !== null;
+      }
+      if (!customerId) return { ok: false, error: errors.map((e) => e.message).join(" ") };
+    }
+  } catch {
+    return { ok: false, error: "Couldn't reach Shopify. Please try again." };
+  }
+  if (!customerId) return { ok: false, error: "Shopify didn't return a customer. Please try again." };
+
+  const name = `${firstName} ${lastName}`.trim();
+  await db.contact.update({
+    where: { id: contact.id },
+    data: {
+      type: "customer",
+      shopifyCustomerId: customerId,
+      email,
+      name: name || contact.name,
+      phone: phone || contact.phone,
+    },
+  });
+  if (contact.type !== "customer") {
+    await recordEvent(shopId, "contact_converted", {
+      contactId: contact.id,
+      from: contact.type,
+      to: "customer",
+      source: linkedExisting ? "manual_link" : "manual_create",
+    });
+  }
+  return { ok: true };
 }
 
 /** Re-evaluate a contact's type. v1 rule: a contact bound to a storefront
@@ -228,10 +429,17 @@ export async function classifyContact(shopId: string, contactId: string) {
   });
   if (!contact) return null;
   if (contact.type !== "customer" && contact.shopifyCustomerId) {
-    return db.contact.update({
+    const updated = await db.contact.update({
       where: { id: contact.id },
       data: { type: "customer" },
     });
+    await recordEvent(shopId, "contact_converted", {
+      contactId: contact.id,
+      from: contact.type,
+      to: "customer",
+      source: "storefront_id",
+    });
+    return updated;
   }
   return contact;
 }
@@ -254,12 +462,10 @@ export async function reclassifyPendingContacts(shopId: string): Promise<number>
 }
 
 export interface ExportOptions extends ContactListOptions {
-  scope: "page" | "all" | "selected";
+  scope: "page" | "all";
   page?: number;
   /** Rows per page for scope "page" (the table's items-per-page selector). */
   pageSize?: number;
-  /** Contact ids for scope "selected" (bulk-action export). */
-  ids?: string[];
 }
 
 function csvField(value: string): string {
@@ -267,21 +473,18 @@ function csvField(value: string): string {
 }
 
 /** Build the export CSV (UTF-8). scope "page" re-slices the same filtered +
- *  sorted list the table shows (pageSize/page from the table state); "selected"
- *  exports the bulk-selected ids; "all" exports every matching row. */
+ *  sorted list the table shows (pageSize/page from the table state); "all"
+ *  exports every matching row. */
 export async function exportContactsCsv(shopId: string, opts: ExportOptions): Promise<string> {
   const all = await listContacts(shopId, opts);
   const pageSize = opts.pageSize && opts.pageSize > 0 ? opts.pageSize : CONTACTS_PAGE_SIZE;
-  const idSet = new Set(opts.ids ?? []);
   const rows =
     opts.scope === "page"
       ? all.slice(
           (Math.max(1, opts.page ?? 1) - 1) * pageSize,
           Math.max(1, opts.page ?? 1) * pageSize,
         )
-      : opts.scope === "selected"
-        ? all.filter((c) => idSet.has(c.id))
-        : all;
+      : all;
 
   const header = [
     "name",
@@ -310,6 +513,28 @@ export async function exportContactsCsv(shopId: string, opts: ExportOptions): Pr
   return [header, ...lines].join("\n") + "\n";
 }
 
+export type ContactActivityKind =
+  | "first_seen"
+  | "conversation_started"
+  | "conversation_resolved"
+  | "handover"
+  | "rated"
+  | "recommended"
+  | "added_to_cart"
+  | "converted";
+
+export interface ContactActivity {
+  at: Date;
+  kind: ContactActivityKind;
+  /** Resolver name (the conversation's assignee) for conversation_resolved. */
+  by?: string;
+  rating?: number;
+  products?: string[];
+  /** Conversion entries: the new type + how it happened (contact_converted). */
+  to?: string;
+  source?: string;
+}
+
 export interface ContactDetail {
   contact: ContactListItem;
   conversations: {
@@ -318,16 +543,21 @@ export interface ContactDetail {
     status: string;
     lastMessageAt: Date;
   }[];
+  /** Timeline for the panel's Activity section (customer5.png), newest first. */
+  activities: ContactActivity[];
 }
 
-/** Contact + their conversations (latest-message preview) for the side panel. */
+/** Contact + their conversations (latest-message preview) + activity timeline
+ *  for the side panel. The timeline is DERIVED — conversation lifecycle rows,
+ *  handover messages, and product-card messages already carry timestamps, so
+ *  no separate activity table exists. */
 export async function contactDetail(
   shopId: string,
   contactId: string,
 ): Promise<ContactDetail | null> {
   const contact = await db.contact.findFirst({
     where: { id: contactId, shopId: requireShopId(shopId) },
-    select: CONTACT_SELECT,
+    select: { ...CONTACT_SELECT, sessionId: true },
   });
   if (!contact) return null;
 
@@ -335,24 +565,140 @@ export async function contactDetail(
     where: { shopId, contactId, isTest: false },
     orderBy: { lastMessageAt: "desc" },
     take: 20,
-    select: { id: true, status: true, lastMessageAt: true },
+    select: {
+      id: true,
+      status: true,
+      lastMessageAt: true,
+      startedAt: true,
+      endedAt: true,
+      rating: true,
+      assigneeId: true,
+    },
   });
+  const convoIds = conversations.map((c) => c.id);
 
-  const previews = await Promise.all(
-    conversations.map((c) =>
-      db.message.findFirst({
-        where: { shopId, conversationId: c.id, role: { in: ["in", "out"] } },
-        orderBy: { createdAt: "desc" },
-        select: { content: true },
-      }),
+  // added_to_cart beacons are attributed via the sessionId/conversationId the
+  // widget sends with the cart snapshot (stored into the payload since
+  // 2026-08-14 — older events carry no identity and can't be shown).
+  const atcConditions: Prisma.AnalyticsEventWhereInput[] = [
+    ...convoIds.map((id) => ({
+      payload: { path: ["conversationId"], equals: id } as Prisma.JsonFilter,
+    })),
+    ...(contact.sessionId
+      ? [{ payload: { path: ["sessionId"], equals: contact.sessionId } as Prisma.JsonFilter }]
+      : []),
+  ];
+
+  const [previews, handoverMessages, cardMessages, cartEvents, conversionEvents, settings] =
+    await Promise.all([
+    Promise.all(
+      conversations.map((c) =>
+        db.message.findFirst({
+          where: { shopId, conversationId: c.id, role: { in: ["in", "out"] } },
+          orderBy: { createdAt: "desc" },
+          select: { content: true },
+        }),
+      ),
     ),
-  );
+    convoIds.length
+      ? db.message.findMany({
+          where: { shopId, conversationId: { in: convoIds }, sourceLayer: "handover" },
+          orderBy: { createdAt: "asc" },
+          select: { conversationId: true, createdAt: true },
+        })
+      : Promise.resolve([]),
+    convoIds.length
+      ? db.message.findMany({
+          where: {
+            shopId,
+            conversationId: { in: convoIds },
+            NOT: { productCards: { equals: Prisma.DbNull } },
+          },
+          orderBy: { createdAt: "desc" },
+          take: 20,
+          select: { createdAt: true, productCards: true },
+        })
+      : Promise.resolve([]),
+    atcConditions.length
+      ? db.analyticsEvent.findMany({
+          where: { shopId, type: "added_to_cart", OR: atcConditions },
+          orderBy: { occurredAt: "desc" },
+          take: 20,
+          select: { occurredAt: true, payload: true },
+        })
+      : Promise.resolve([]),
+    db.analyticsEvent.findMany({
+      where: {
+        shopId,
+        type: "contact_converted",
+        payload: { path: ["contactId"], equals: contactId },
+      },
+      orderBy: { occurredAt: "desc" },
+      take: 10,
+      select: { occurredAt: true, payload: true },
+    }),
+    loadShopSettings(shopId),
+  ]);
+
+  const memberName = new Map(settings.team.members.map((m) => [m.id, m.name]));
+  const activities: ContactActivity[] = [{ at: contact.createdAt, kind: "first_seen" }];
+  for (const c of conversations) {
+    activities.push({ at: c.startedAt, kind: "conversation_started" });
+    if (c.status === "resolved") {
+      activities.push({
+        at: c.endedAt ?? c.lastMessageAt,
+        kind: "conversation_resolved",
+        by: c.assigneeId ? memberName.get(c.assigneeId) : undefined,
+      });
+    }
+    if (c.rating != null) {
+      // Ratings have no own timestamp — the conversation's last activity is
+      // the closest moment (the survey follows the final message).
+      activities.push({ at: c.endedAt ?? c.lastMessageAt, kind: "rated", rating: c.rating });
+    }
+  }
+  const seenHandover = new Set<string>();
+  for (const m of handoverMessages) {
+    if (seenHandover.has(m.conversationId)) continue;
+    seenHandover.add(m.conversationId);
+    activities.push({ at: m.createdAt, kind: "handover" });
+  }
+  for (const m of cardMessages) {
+    const cards = (m.productCards ?? []) as { title?: string }[];
+    const products = cards.map((card) => card.title ?? "").filter(Boolean);
+    if (products.length > 0) activities.push({ at: m.createdAt, kind: "recommended", products });
+  }
+  for (const event of cartEvents) {
+    const product = (event.payload as { product?: unknown } | null)?.product;
+    activities.push({
+      at: event.occurredAt,
+      kind: "added_to_cart",
+      products: typeof product === "string" && product ? [product] : undefined,
+    });
+  }
+  for (const event of conversionEvents) {
+    const payload = (event.payload ?? {}) as { to?: unknown; source?: unknown };
+    activities.push({
+      at: event.occurredAt,
+      kind: "converted",
+      to: typeof payload.to === "string" ? payload.to : undefined,
+      source: typeof payload.source === "string" ? payload.source : undefined,
+    });
+  }
+  activities.sort((a, b) => b.at.getTime() - a.at.getTime());
 
   return {
-    contact: { ...contact, conversationCount: conversations.length },
+    contact: {
+      ...contact,
+      lastActivityAt: conversations[0]?.lastMessageAt ?? null,
+      conversationCount: conversations.length,
+    },
     conversations: conversations.map((c, i) => ({
-      ...c,
+      id: c.id,
+      status: c.status,
+      lastMessageAt: c.lastMessageAt,
       preview: (previews[i]?.content ?? "").slice(0, 120),
     })),
+    activities: activities.slice(0, 50),
   };
 }

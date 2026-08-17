@@ -148,13 +148,12 @@
     head.appendChild(back);
 
     var brand = el("div", "cw-brand");
-    var logo = el("span", "cw-logo");
+    // No logo uploaded → no logo chip at all (no icon fallback).
     if (widget.header.logoUrl) {
+      var logo = el("span", "cw-logo");
       logo.appendChild(el("img", null, { src: widget.header.logoUrl, alt: "" }));
-    } else {
-      svg(logo, ICONS.chat);
+      brand.appendChild(logo);
     }
-    brand.appendChild(logo);
     var names = el("div");
     var title = el("div", "cw-title");
     title.textContent = widget.header.name || "ChatConvert";
@@ -471,21 +470,34 @@
   }
 
   // ── order tracking screen ────────────────────────────────────────────────
-  /** cb.onTrack({tab, value, contactMethod, contact}). */
+  /** cb.onTrack({tab, value, contactMethod, contact}).
+   *  Default mode → order-number form only; custom/integration modes add the
+   *  Tracking-number tab (config.orderTracking.mode, spec 16). */
   function trackingScreen(config, state, cb) {
+    var mode = (config && config.orderTracking && config.orderTracking.mode) || "default";
+    var withTrackingTab = mode !== "default";
+
     var screen = el("div", "cw-tracking");
     screen.style.display = "flex";
     screen.style.flexDirection = "column";
     screen.style.gap = "14px";
 
-    var tabs = el("div", "cw-tabs", { role: "tablist" });
+    // The form swaps out for the result card once a lookup succeeds.
+    var form = el("div", "cw-ot-formwrap");
+    form.style.display = "flex";
+    form.style.flexDirection = "column";
+    form.style.gap = "14px";
+
     var tabOrder = el("button", null, { type: "button", role: "tab", "aria-selected": "true" });
     tabOrder.textContent = "Order number";
     var tabTracking = el("button", null, { type: "button", role: "tab", "aria-selected": "false" });
     tabTracking.textContent = "Tracking number";
-    tabs.appendChild(tabOrder);
-    tabs.appendChild(tabTracking);
-    screen.appendChild(tabs);
+    if (withTrackingTab) {
+      var tabs = el("div", "cw-tabs", { role: "tablist" });
+      tabs.appendChild(tabOrder);
+      tabs.appendChild(tabTracking);
+      form.appendChild(tabs);
+    }
 
     var lbl = el("div", "cw-lbl");
     lbl.textContent = "Order number";
@@ -493,7 +505,7 @@
     var numWrap = el("div");
     numWrap.appendChild(lbl);
     numWrap.appendChild(numInput);
-    screen.appendChild(numWrap);
+    form.appendChild(numWrap);
 
     var radios = el("div", "cw-radios", { role: "radiogroup", "aria-label": "Contact method" });
     var current = { tab: "order", method: "email" };
@@ -503,6 +515,7 @@
       input.checked = checked;
       input.addEventListener("change", function () {
         current.method = value;
+        contactInput.value = ""; // an email is never a valid phone (and vice versa)
         contactInput.placeholder = value === "phone" ? "+1 555 000 0000" : "example@gmail.com";
         contactInput.setAttribute("aria-label", value === "phone" ? "Phone number" : "Email address");
       });
@@ -518,37 +531,335 @@
     });
     radios.appendChild(radio("email", "Email address", true));
     radios.appendChild(radio("phone", "Phone number", false));
-    screen.appendChild(radios);
-    screen.appendChild(contactInput);
+    form.appendChild(radios);
+    form.appendChild(contactInput);
 
     function selectTab(tab) {
+      if (current.tab === tab) return; // re-clicking the active tab keeps input
       current.tab = tab;
       var isTracking = tab === "tracking";
       tabOrder.setAttribute("aria-selected", String(!isTracking));
       tabTracking.setAttribute("aria-selected", String(isTracking));
       lbl.textContent = isTracking ? "Tracking number" : "Order number";
+      numInput.value = ""; // order and tracking numbers are different values
       numInput.placeholder = isTracking ? "e.g. AA12345" : "e.g. 1001";
       numInput.setAttribute("aria-label", lbl.textContent);
       radios.style.display = isTracking ? "none" : "flex";
       contactInput.style.display = isTracking ? "none" : "";
+      err.style.display = "none";
+      clearResults();
     }
     tabOrder.addEventListener("click", function () { selectTab("order"); });
     tabTracking.addEventListener("click", function () { selectTab("tracking"); });
 
+    var err = el("div", "cw-err");
+    err.style.display = "none";
+    form.appendChild(err);
+    numInput.addEventListener("input", function () { err.style.display = "none"; });
+    contactInput.addEventListener("input", function () { err.style.display = "none"; });
+
     var track = el("button", "cw-track", { type: "button" });
     track.textContent = "Track";
-    track.addEventListener("click", function () {
-      if (cb && cb.onTrack) {
-        cb.onTrack({
-          tab: current.tab,
-          value: numInput.value.trim(),
-          contactMethod: current.method,
-          contact: contactInput.value.trim(),
+
+    // In-widget results (order-number lookups render status cards here).
+    var results = el("div", "cw-ot-results");
+    results.style.display = "none";
+
+    function clearResults() {
+      results.textContent = "";
+      results.style.display = "none";
+    }
+
+    var api = {
+      loading: function (on) {
+        track.disabled = !!on;
+        track.textContent = on ? "Tracking…" : "Track";
+      },
+      fail: function (text) {
+        clearResults();
+        form.style.display = "flex";
+        err.textContent = text;
+        err.style.display = "";
+      },
+      show: function (node) {
+        err.style.display = "none";
+        api.loading(false); // reset the button for when the form returns
+        form.style.display = "none";
+        results.textContent = "";
+        results.appendChild(node);
+        var again = el("button", "cw-ot-again", { type: "button" });
+        again.textContent = "Track another order";
+        again.addEventListener("click", function () {
+          clearResults();
+          form.style.display = "flex";
+          numInput.focus();
         });
+        results.appendChild(again);
+        results.style.display = "flex";
+      },
+    };
+
+    track.addEventListener("click", function () {
+      var value = numInput.value.trim();
+      if (!value) {
+        err.textContent = current.tab === "tracking"
+          ? "Please enter your tracking number."
+          : "Please enter your order number.";
+        err.style.display = "";
+        numInput.focus();
+        return;
+      }
+      var contact = contactInput.value.trim();
+      if (current.tab === "order") {
+        if (current.method === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact)) {
+          err.textContent = "Please enter a valid email address.";
+          err.style.display = "";
+          contactInput.focus();
+          return;
+        }
+        if (current.method === "phone" && contact.replace(/\D/g, "").length < 7) {
+          err.textContent = "Please enter a valid phone number.";
+          err.style.display = "";
+          contactInput.focus();
+          return;
+        }
+      }
+      err.style.display = "none";
+      if (cb && cb.onTrack) {
+        cb.onTrack(
+          { tab: current.tab, value: value, contactMethod: current.method, contact: contact },
+          api,
+        );
       }
     });
-    screen.appendChild(track);
+    form.appendChild(track);
+    screen.appendChild(form);
+    screen.appendChild(results);
     return screen;
+  }
+
+  // ── order status result (spec 05 delta: in-widget lookup, no login) ──────
+  function fmtDate(iso) {
+    var d = new Date(iso);
+    if (!iso || isNaN(d.getTime())) return "";
+    var mm = String(d.getMonth() + 1);
+    var dd = String(d.getDate());
+    if (mm.length < 2) mm = "0" + mm;
+    if (dd.length < 2) dd = "0" + dd;
+    return mm + "/" + dd + "/" + d.getFullYear();
+  }
+
+  function statusLabel(status) {
+    if (!status) return "";
+    var s = String(status).toLowerCase().replace(/_/g, " ");
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+
+  function statusChip(status) {
+    var chip = el("span", "cw-ot-chip");
+    var label = statusLabel(status) || "—";
+    chip.textContent = label;
+    var l = label.toLowerCase();
+    if (l === "fulfilled" || l === "marked as fulfilled" || l === "delivered") {
+      chip.className += " cw-ot-chip--ok";
+    }
+    return chip;
+  }
+
+  function fmtDateTime(iso) {
+    var d = new Date(iso);
+    if (!iso || isNaN(d.getTime())) return "";
+    var hh = String(d.getHours());
+    var mi = String(d.getMinutes());
+    if (hh.length < 2) hh = "0" + hh;
+    if (mi.length < 2) mi = "0" + mi;
+    return fmtDate(iso) + " " + hh + ":" + mi;
+  }
+
+  function addGridRow(grid, label, value) {
+    var l = el("div", "cw-ot-l");
+    l.textContent = label;
+    var v = el("div", "cw-ot-v");
+    if (typeof value === "string") v.textContent = value;
+    else v.appendChild(value);
+    grid.appendChild(l);
+    grid.appendChild(v);
+  }
+
+  // 17Track main statuses → shopper-friendly labels (integration mode).
+  var SHIPMENT_LABELS = {
+    NotFound: "No updates yet",
+    InfoReceived: "Info received",
+    InTransit: "In transit",
+    Expired: "Expired",
+    AvailableForPickup: "Available for pickup",
+    OutForDelivery: "Out for delivery",
+    DeliveryFailure: "Delivery failure",
+    Delivered: "Delivered",
+    Exception: "Exception",
+  };
+
+  function shipmentChip(status) {
+    var chip = el("span", "cw-ot-chip");
+    chip.textContent = SHIPMENT_LABELS[status] || statusLabel(status) || "No updates yet";
+    if (status === "Delivered") chip.className += " cw-ot-chip--ok";
+    else if (status === "DeliveryFailure" || status === "Exception" || status === "Expired") chip.className += " cw-ot-chip--warn";
+    else if (status === "InTransit" || status === "OutForDelivery" || status === "AvailableForPickup") chip.className += " cw-ot-chip--info";
+    return chip;
+  }
+
+  /** order: /order-track response payload. config: widget config (currency fallback). */
+  function orderStatusCard(order, config) {
+    var wrap = el("div");
+    wrap.style.display = "flex";
+    wrap.style.flexDirection = "column";
+    wrap.style.gap = "12px";
+
+    var head = el("div", "cw-ot-card");
+    var headrow = el("div", "cw-ot-headrow");
+    var name = el("div", "cw-ot-name");
+    name.textContent = "Order " + order.name;
+    headrow.appendChild(name);
+    headrow.appendChild(statusChip(order.status));
+    var total = el("div", "cw-ot-total");
+    total.textContent = formatPrice(order.total, order.currency || (config && config.currency) || "USD");
+    headrow.appendChild(total);
+    head.appendChild(headrow);
+    var sub = el("div", "cw-ot-sub");
+    sub.textContent =
+      order.itemsCount + " item" + (order.itemsCount === 1 ? "" : "s") + " • " + fmtDate(order.createdAt);
+    head.appendChild(sub);
+    wrap.appendChild(head);
+
+    // One card per fulfillment; unfulfilled orders get a single card with the
+    // order-level status and N/A tracking rows (same layout as the design).
+    var fulfillments = order.fulfillments && order.fulfillments.length ? order.fulfillments : [null];
+    fulfillments.forEach(function (f, idx) {
+      var card = el("div", "cw-ot-card");
+
+      var thumbs = el("div", "cw-ot-thumbs");
+      (order.items || []).slice(0, 4).forEach(function (item) {
+        var t = el("div", "cw-ot-thumb");
+        if (item.image) t.appendChild(el("img", null, { src: item.image, alt: item.title || "" }));
+        if (item.quantity > 0) {
+          var q = el("span", "cw-ot-qty");
+          q.textContent = String(item.quantity);
+          t.appendChild(q);
+        }
+        thumbs.appendChild(t);
+      });
+      card.appendChild(thumbs);
+
+      var chipRow = el("div");
+      chipRow.appendChild(statusChip(f ? f.status : order.status));
+      card.appendChild(chipRow);
+
+      var updated = el("div", "cw-ot-muted");
+      updated.textContent = "Last updated: " + fmtDate(f ? f.updatedAt : order.createdAt);
+      card.appendChild(updated);
+
+      card.appendChild(el("div", "cw-ot-divider"));
+
+      var title = el("div", "cw-ot-title");
+      title.textContent = "Tracking information";
+      card.appendChild(title);
+
+      var grid = el("div", "cw-ot-grid");
+      var carrier =
+        (f && f.company) || (order.shipment && order.shipment.carrier) || "N/A";
+      addGridRow(grid, "Shipping carrier:", carrier);
+      if (f && f.trackingNumber && f.trackingUrl) {
+        var link = el("a", null, { href: f.trackingUrl, target: "_blank", rel: "noopener" });
+        link.textContent = f.trackingNumber;
+        addGridRow(grid, "Tracking number:", link);
+      } else {
+        addGridRow(grid, "Tracking number:", (f && f.trackingNumber) || "N/A");
+      }
+      addGridRow(grid, "Fulfilled date:", f ? fmtDate(f.createdAt) : "N/A");
+      card.appendChild(grid);
+
+      // Real-time provider status (integration mode) on the first card.
+      if (idx === 0 && order.shipment) {
+        card.appendChild(el("div", "cw-ot-divider"));
+        var st = el("div", "cw-ot-title");
+        st.textContent = "Shipment status";
+        card.appendChild(st);
+        var chipRow2 = el("div");
+        chipRow2.appendChild(shipmentChip(order.shipment.status));
+        card.appendChild(chipRow2);
+        var le = order.shipment.latestEvent;
+        if (le) {
+          var evd = el("div", "cw-ot-v");
+          evd.textContent = le.description + (le.location ? " — " + le.location : "");
+          card.appendChild(evd);
+          if (le.time) {
+            var evt = el("div", "cw-ot-muted");
+            evt.textContent = fmtDateTime(le.time);
+            card.appendChild(evt);
+          }
+        }
+      }
+
+      wrap.appendChild(card);
+    });
+
+    return wrap;
+  }
+
+  /** Bare tracking-number result (integration mode): real-time provider
+   *  status card. shipment: /order-track {trackingNumber} response payload. */
+  function shipmentCard(number, shipment) {
+    var wrap = el("div");
+    wrap.style.display = "flex";
+    wrap.style.flexDirection = "column";
+    wrap.style.gap = "12px";
+
+    var card = el("div", "cw-ot-card");
+    var headrow = el("div", "cw-ot-headrow");
+    var name = el("div", "cw-ot-name");
+    name.textContent = number;
+    headrow.appendChild(name);
+    headrow.appendChild(shipmentChip(shipment.status));
+    card.appendChild(headrow);
+
+    var grid = el("div", "cw-ot-grid");
+    addGridRow(grid, "Shipping carrier:", shipment.carrier || "N/A");
+    addGridRow(
+      grid,
+      "Last update:",
+      shipment.latestEvent && shipment.latestEvent.time
+        ? fmtDateTime(shipment.latestEvent.time)
+        : "N/A",
+    );
+    card.appendChild(grid);
+
+    if (shipment.events && shipment.events.length) {
+      card.appendChild(el("div", "cw-ot-divider"));
+      var title = el("div", "cw-ot-title");
+      title.textContent = "Recent updates";
+      card.appendChild(title);
+      var list = el("div", "cw-ot-events");
+      shipment.events.forEach(function (e) {
+        var row = el("div", "cw-ot-ev");
+        var desc = el("div", "cw-ot-v");
+        desc.textContent = e.description + (e.location ? " — " + e.location : "");
+        row.appendChild(desc);
+        if (e.time) {
+          var time = el("div", "cw-ot-muted");
+          time.textContent = fmtDateTime(e.time);
+          row.appendChild(time);
+        }
+        list.appendChild(row);
+      });
+      card.appendChild(list);
+    } else {
+      var none = el("div", "cw-ot-muted");
+      none.textContent = "No tracking events yet — check back soon.";
+      card.appendChild(none);
+    }
+
+    wrap.appendChild(card);
+    return wrap;
   }
 
   // ── pre-chat form ────────────────────────────────────────────────────────
@@ -855,6 +1166,8 @@
     productCards: productCards,
     inputBar: inputBar,
     trackingScreen: trackingScreen,
+    orderStatusCard: orderStatusCard,
+    shipmentCard: shipmentCard,
     prechatForm: prechatForm,
     handoverForm: handoverForm,
     surveyPrompt: surveyPrompt,

@@ -5,7 +5,7 @@
 
 ## Purpose
 
-`/app/settings` with hash/tab routing: **General**, **Chatbox**, **Privacy & Data Requests**; sub-views **Chat availability** (#availability) and **Satisfaction survey** (#survey) deep-linked from chatbox settings (06).
+`/app/settings` with `?tab=` routing (was hash; changed 2026-08-17 for URL-param consistency with the AI-agent pages): **General**, **Chatbox**, **Privacy & Data Requests**; sub-views **Chat availability** (?tab=availability) and **Satisfaction survey** (?tab=survey) deep-linked from chatbox settings (06).
 
 ## Data model
 
@@ -23,7 +23,7 @@
 - **Chat availability** → Manage (sub-view below)
 - **Satisfaction survey** → Manage (sub-view below)
 - **Open cart drawer after add to cart** toggle (ON default) → widget behavior (05).
-- **Order tracking**: radios Default tracking (carrier page) / Custom tracking + URL field (e.g. `www.delhivery.com/track-v2/package/`) shown only when custom → widget tracking screen (05).
+- **Order tracking**: radios Default tracking (widget shows the order-number form only — in-widget status card, no tracking-number tab) / Custom tracking + URL field (e.g. `www.delhivery.com/track-v2/package/`, supports a `{number}` placeholder) shown only when custom / **Integrate with tracking app** (delta 2026-08-14, per Chatty's `ordertracking3.png`): provider list (17Track live; TrackingMore/Track123 "Coming soon") + API key + Connect. Connect validates the key via 17Track `/getquota` BEFORE persisting (`connect-tracking` intent, `seventeen-track.server.ts`); Disconnect clears it. The key is server-only — widget config strips it, and the regular chatbox Save never touches it (SaveBar slice excludes apiKey). Integration mode → widget tracking-number tab shows real-time shipment status in-chat via `proxy.order-track`, and order lookups are enriched with the provider's live status.
 
 ## Sub-view: Chat availability
 
@@ -63,7 +63,7 @@
 
 ## Acceptance criteria
 
-1. All tabs/sub-views round-trip; hash deep links (#availability, #survey, #general, #chatbox, #privacy) land correctly from 06's links.
+1. All tabs/sub-views round-trip; `?tab=` deep links (availability, survey, general, chatbox, privacy) land correctly from 06's links.
 2. Embed badge reflects real theme state; Turn on deep-links to theme editor; onboarding step 1 flips when enabled.
 3. Availability: custom hours + break + holiday produce correct widget status strings incl. resolved {{schedule}}; timezone honored.
 4. Survey triggers: resolve-trigger and keyword-trigger each fire once; rating lands in analytics.

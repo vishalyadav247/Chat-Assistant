@@ -48,6 +48,10 @@ interface Renderer {
   inputBar: (cb: unknown) => { el: HTMLElement };
   trackingScreen: (config: unknown, state: unknown, cb: unknown) => HTMLElement;
   prechatForm: (config: unknown, state: { skippable: boolean }, cb: unknown) => HTMLElement;
+  surveyPrompt: (
+    survey: { format: string; intro: string; thanks: string },
+    cb: unknown,
+  ) => HTMLElement;
   footer: (showBranding: boolean) => HTMLElement;
 }
 
@@ -94,6 +98,12 @@ export function ChatboxPreview(props: {
   rendererJs: string;
   widgetCss: string;
   currency: string;
+  /** Survey copy/format from shop settings — rendered via the storefront's own
+   *  surveyPrompt builder when the chat page's survey toggle is on. */
+  survey: { format: string; intro: string; thanks: string };
+  /** Order-tracking mode from shop settings — "default" shows only the
+   *  order-number form; other modes add the Tracking-number tab. */
+  orderTrackingMode: "default" | "custom" | "integration";
 }) {
   const { settings, tab, availability, featuredFaqs } = props;
   const containerRef = useRef<HTMLDivElement>(null);
@@ -137,6 +147,9 @@ export function ChatboxPreview(props: {
       welcomeMessage: settings.welcomeMessage,
       currency: props.currency,
       showBranding,
+      // Same shape as the storefront widget config (customUrl not needed here —
+      // the preview never navigates).
+      orderTracking: { mode: props.orderTrackingMode, customUrl: "" },
     };
 
     container.textContent = "";
@@ -174,15 +187,21 @@ export function ChatboxPreview(props: {
 
         // No customer name in preview → {{customer_name}} renders "there".
         wrap.appendChild(R.messageBubble("bot", R.welcomeText(template, "")).el);
+        // Pre-chat form: the preview always shows it while it's enabled (on
+        // the storefront, "both" mode may delay it N messages) so merchants
+        // can see what they're configuring. Rendered before the starter chips.
+        if (settings.prechat.mode === "guest") {
+          wrap.appendChild(R.prechatForm(config, { skippable: false }, {}));
+        } else if (settings.prechat.mode === "both") {
+          wrap.appendChild(R.prechatForm(config, { skippable: true }, {}));
+        }
         if (settings.starters.enabled && settings.starters.items.length > 0) {
           wrap.appendChild(R.starterChips(settings.starters.items, {}));
         }
-        // Guest mode requires the pre-chat form before chat; "both" with
-        // showAfterMessages 0 shows it up front, skippable (chat-widget.js).
-        if (settings.prechat.mode === "guest") {
-          wrap.appendChild(R.prechatForm(config, { skippable: false }, {}));
-        } else if (settings.prechat.mode === "both" && settings.prechat.showAfterMessages === 0) {
-          wrap.appendChild(R.prechatForm(config, { skippable: true }, {}));
+        // "Display satisfaction survey" on → show the survey exactly as the
+        // storefront renders it at conversation end (same builder, same CSS).
+        if (settings.survey) {
+          wrap.appendChild(R.surveyPrompt(props.survey, {}));
         }
         body.appendChild(wrap);
       } else if (screen === "tracking") {
@@ -207,7 +226,18 @@ export function ChatboxPreview(props: {
     });
     root.appendChild(launcher);
     container.appendChild(root);
-  }, [ready, settings, screen, faq, minimized, availability, featuredFaqs, props.currency]);
+  }, [
+    ready,
+    settings,
+    screen,
+    faq,
+    minimized,
+    availability,
+    featuredFaqs,
+    props.currency,
+    props.survey,
+    props.orderTrackingMode,
+  ]);
 
   return <div className="ccpv" ref={containerRef} />;
 }

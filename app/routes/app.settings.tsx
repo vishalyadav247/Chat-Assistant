@@ -1,11 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { useFetcher, useLoaderData, useLocation, useRouteError } from "react-router";
+import type {
+  ActionFunctionArgs,
+  HeadersFunction,
+  LoaderFunctionArgs,
+  ShouldRevalidateFunction,
+} from "react-router";
+import { useFetcher, useLoaderData, useRouteError, useSearchParams } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { resolveShopId } from "../lib/tenancy.server";
+import { env } from "../lib/env.server";
+import { reviewFallbackUrl } from "../lib/review";
 import { resolveAvailability } from "../lib/settings/availability.server";
 import { applySettingsIntent, loadShopSettings } from "../lib/settings/save.server";
 import {
@@ -22,8 +29,21 @@ import { SettingsSurvey } from "../components/SettingsSurvey";
 import { SettingsPrivacy } from "../components/SettingsPrivacy";
 
 // Settings (spec 16): General / Chatbox / Privacy & Data Requests tabs plus
-// the Chat availability (#availability) and Satisfaction survey (#survey)
-// sub-views, deep-linkable via URL hash from other pages (06).
+// the Chat availability (?tab=availability) and Satisfaction survey
+// (?tab=survey) sub-views, deep-linkable via ?tab= from other pages (06) —
+// same URL convention as the AI-agent pages.
+
+/** Tab switches only change ?tab= — nothing the loader returns depends on it,
+ *  and re-running it would reset unsaved edits in the other tabs' drafts. */
+export const shouldRevalidate: ShouldRevalidateFunction = ({
+  currentUrl,
+  nextUrl,
+  formMethod,
+  defaultShouldRevalidate,
+}) => {
+  if (!formMethod && currentUrl.pathname === nextUrl.pathname) return false;
+  return defaultShouldRevalidate;
+};
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -56,6 +76,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       return getEmbedStatus(session.shop);
     })(),
     defaultStoreName: shop?.name ?? fallbackName,
+    // null until SHOPIFY_APP_STORE_HANDLE is set (listing live) — link hidden.
+    reviewUrl: reviewFallbackUrl(env().SHOPIFY_APP_STORE_HANDLE),
     owner: {
       name: ownerName,
       email: ownerSession?.email ?? "—",
@@ -120,7 +142,16 @@ function sliceFor(view: View, settings: ShopSettingsData, timezone: string): unk
     case "general":
       return { name: settings.storeInfo.name, theme: settings.theme, inbox: settings.inbox };
     case "chatbox":
-      return { cartDrawer: settings.cartDrawer, orderTracking: settings.orderTracking };
+      // apiKey is excluded: the Connect button owns it (validate-then-persist),
+      // so typing a key must not arm the SaveBar or ride along with Save.
+      return {
+        cartDrawer: settings.cartDrawer,
+        orderTracking: {
+          mode: settings.orderTracking.mode,
+          customUrl: settings.orderTracking.customUrl,
+          provider: settings.orderTracking.provider,
+        },
+      };
     case "availability":
       return { availability: settings.availability, timezone };
     case "survey":
@@ -132,29 +163,28 @@ function sliceFor(view: View, settings: ShopSettingsData, timezone: string): unk
 
 export default function SettingsPage() {
   const data = useLoaderData<typeof loader>();
-  const location = useLocation();
   const shopify = useAppBridge();
   const fetcher = useFetcher<typeof action>();
 
-  const [view, setView] = useState<View>(() => {
-    const tab = new URLSearchParams(location.search).get("tab");
-    return tab && isView(tab) ? tab : "general";
-  });
+  // The active view lives in the URL (?tab=general|chatbox|availability|
+  // survey|privacy) so tabs are deep-linkable and survive reloads.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawTab = searchParams.get("tab");
+  const view: View = rawTab && isView(rawTab) ? rawTab : "general";
 
-  useEffect(() => {
-    const applyHash = () => {
-      const hash = window.location.hash.replace(/^#/, "");
-      if (isView(hash)) setView(hash);
-    };
-    applyHash();
-    window.addEventListener("hashchange", applyHash);
-    return () => window.removeEventListener("hashchange", applyHash);
-  }, [location.hash, location.search]);
-
-  const go = useCallback((next: View) => {
-    setView(next);
-    window.history.replaceState(null, "", `#${next}`);
-  }, []);
+  const go = useCallback(
+    (next: View) => {
+      setSearchParams(
+        (prev) => {
+          const params = new URLSearchParams(prev);
+          params.set("tab", next);
+          return params;
+        },
+        { preventScrollReset: true },
+      );
+    },
+    [setSearchParams],
+  );
 
   const [draft, setDraft] = useState<ShopSettingsData>(data.settings);
   const [timezone, setTimezone] = useState(data.timezone);
@@ -236,6 +266,26 @@ export default function SettingsPage() {
     shopify.toast.show("Data request export downloaded");
   }, [downloadFetcher.state, downloadFetcher.data, shopify]);
 
+  // Order-tracking provider connect (spec 16 delta): own fetcher so the
+  // validate+persist round-trip doesn't collide with the SaveBar state.
+  const connectFetcher = useFetcher<typeof action>();
+  const connecting = connectFetcher.state !== "idle";
+  useEffect(() => {
+    if (connectFetcher.state !== "idle" || !connectFetcher.data) return;
+    if (connectFetcher.data.intent !== "connect-tracking") return;
+    if (connectFetcher.data.ok) {
+      shopify.toast.show("Order tracking integration updated");
+    }
+  }, [connectFetcher.state, connectFetcher.data, shopify]);
+
+  const connectError =
+    connectFetcher.state === "idle" &&
+    connectFetcher.data &&
+    connectFetcher.data.intent === "connect-tracking" &&
+    !connectFetcher.data.ok
+      ? connectFetcher.data.error
+      : undefined;
+
   const lastResult = fetcher.state === "idle" ? fetcher.data : undefined;
   useEffect(() => {
     if (fetcher.state === "idle" && fetcher.data?.ok) {
@@ -275,6 +325,7 @@ export default function SettingsPage() {
             apiKey={data.apiKey}
             owner={data.owner}
             members={data.settings.team.members}
+            reviewUrl={data.reviewUrl}
             onNameChange={(name) =>
               setDraft((d) => ({ ...d, storeInfo: { ...d.storeInfo, name } }))
             }
@@ -284,14 +335,29 @@ export default function SettingsPage() {
         ) : null}
 
         {view === "chatbox" ? (
-          <SettingsChatbox
-            cartDrawer={draft.cartDrawer}
-            orderTracking={draft.orderTracking}
-            onCartDrawerChange={(cartDrawer) => setDraft((d) => ({ ...d, cartDrawer }))}
-            onOrderTrackingChange={(orderTracking) => setDraft((d) => ({ ...d, orderTracking }))}
-            onManageAvailability={() => go("availability")}
-            onManageSurvey={() => go("survey")}
-          />
+          <s-stack gap="base">
+            {connectError ? (
+              <s-banner tone="critical" heading="Couldn't connect the tracking provider">
+                {connectError}
+              </s-banner>
+            ) : null}
+            <SettingsChatbox
+              cartDrawer={draft.cartDrawer}
+              orderTracking={draft.orderTracking}
+              savedTracking={data.settings.orderTracking}
+              connecting={connecting}
+              onCartDrawerChange={(cartDrawer) => setDraft((d) => ({ ...d, cartDrawer }))}
+              onOrderTrackingChange={(orderTracking) => setDraft((d) => ({ ...d, orderTracking }))}
+              onConnect={(apiKey) =>
+                connectFetcher.submit(
+                  { intent: "connect-tracking", payload: JSON.stringify({ apiKey }) },
+                  { method: "post" },
+                )
+              }
+              onManageAvailability={() => go("availability")}
+              onManageSurvey={() => go("survey")}
+            />
+          </s-stack>
         ) : null}
 
         {view === "availability" ? (

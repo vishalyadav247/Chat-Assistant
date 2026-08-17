@@ -60,3 +60,13 @@ Coarse geo from request (country/city via CDN headers if available) — best-eff
 ## Out of scope / gaps
 
 Multi-channel ingestion (email/messenger/whatsapp/instagram), contact editing/notes, segments, Shopify customer sync write-back.
+
+## Implementation delta (2026-08-14)
+
+Merchant-requested additions beyond v1 (contact3/contact4.png in resources/other):
+
+- **Contact CRUD in admin**: row hover reveals edit/delete; edit modal uses First/Last name fields (stored joined in the single `name` column, split on first space for prefills — `splitContactName`).
+- **Convert to customer** (lead, detail-panel header): opens a "Create customer" modal and creates a REAL Shopify customer via `customerCreate` (scope now `write_customers`); if the email is already taken, the existing customer is linked instead. Contact gets `type=customer` + `shopifyCustomerId`.
+- **Convert to lead** (anonymous, detail-panel header): modal collects name/email/phone; app-side upgrade only.
+- **Delete contact** (row + detail-panel header, label per type): deletes the contact, their linked conversations (messages → unresolved questions → conversations, mirroring retention purge), same-session unbound conversations, AND the linked Shopify customer profile via customerDelete (merchant-confirmed 2026-08-14; fail-soft — Shopify refuses customers with orders, the app-side delete still proceeds).
+- The loader's contact-less-conversation backfill was removed — it would resurrect deleted contacts; new conversations bind a contact at creation.

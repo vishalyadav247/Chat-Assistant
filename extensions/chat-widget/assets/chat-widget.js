@@ -940,16 +940,89 @@
   }
 
   // ── order tracking ───────────────────────────────────────────────────────
-  function onTrack(data) {
-    if (!data.value) return;
-    var tracking = config.orderTracking || { mode: "default", customUrl: "" };
-    var url;
-    if (tracking.mode === "custom" && tracking.customUrl) {
-      url = tracking.customUrl + encodeURIComponent(data.value);
-    } else {
-      url = "/account"; // default: customer's order list (order-status API deferred)
+  /** Custom tracking URL (spec 16): scheme-normalized; "{number}" positions the
+   *  number mid-URL, otherwise it's appended (path-style and ?param= both). */
+  function customTrackingUrl(customUrl, number) {
+    var url = String(customUrl || "").trim();
+    if (!/^https?:\/\//i.test(url)) url = "https://" + url.replace(/^\/+/, "");
+    return url.indexOf("{number}") !== -1
+      ? url.replace("{number}", encodeURIComponent(number))
+      : url + encodeURIComponent(number);
+  }
+
+  /** New-tab open via a real anchor click (window.open+noopener returns null
+   *  even on success, so it can't be used to detect blocking). */
+  function openExternal(url) {
+    var a = document.createElement("a");
+    a.href = url;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+
+  function onTrack(data, api) {
+    if (!data.value) return; // renderer validates; belt-and-braces
+    var tracking = (config && config.orderTracking) || { mode: "default", customUrl: "" };
+
+    if (data.tab === "tracking") {
+      if (!api) return; // admin preview passes no api — form only
+      if (tracking.mode === "integration") {
+        // Real-time status card from the connected tracking provider.
+        api.loading(true);
+        T.postJson(base + "/order-track", { trackingNumber: data.value })
+          .then(function (res) {
+            api.loading(false);
+            if (res && res.ok && res.shipment) {
+              api.show(R.shipmentCard(data.value, res.shipment));
+            } else if (res && res.error === "unavailable") {
+              api.fail("Tracking lookup isn't available right now. Please try again later.");
+            } else {
+              api.fail("We couldn't find that tracking number. Please check it and try again.");
+            }
+          })
+          .catch(function () {
+            api.loading(false);
+            api.fail("Tracking lookup isn't available right now. Please try again later.");
+          });
+        return;
+      }
+      // Custom mode: open the merchant's tracking page in a new tab.
+      if (!tracking.customUrl) {
+        api.fail("Tracking by number isn't set up for this store yet. Please track with your order number instead.");
+        return;
+      }
+      openExternal(customTrackingUrl(tracking.customUrl, data.value));
+      return;
     }
-    window.open(url, "_blank", "noopener");
+
+    // Order-number tab: instant in-widget status via the proxy (no login).
+    if (!api) return; // admin preview passes no api — form only
+    api.loading(true);
+    T.postJson(base + "/order-track", {
+      orderNumber: data.value,
+      method: data.contactMethod,
+      contact: data.contact,
+    })
+      .then(function (res) {
+        api.loading(false);
+        if (res && res.ok && res.order) {
+          api.show(R.orderStatusCard(res.order, config));
+        } else if (res && res.error === "unavailable") {
+          api.fail("Order lookup isn't available right now. Please try again later.");
+        } else {
+          api.fail(
+            "We couldn't find a matching order. Double-check the order number and " +
+              (data.contactMethod === "phone" ? "phone number." : "email address."),
+          );
+        }
+      })
+      .catch(function () {
+        api.loading(false);
+        api.fail("Order lookup isn't available right now. Please try again later.");
+      });
   }
 
   // ── handover (spec 10): leave-a-message form + AI dormancy ───────────────

@@ -7,6 +7,9 @@ const envSchema = z.object({
   LLM_PROVIDER: z.enum(["openai"]).default("openai"),
   CHAT_MODEL: z.string().default("gpt-4o-mini"),
   EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
+  // App Store listing handle (apps.shopify.com/<handle>). Blank until the
+  // listing is live; while blank the "Leave a review" fallback link is hidden.
+  SHOPIFY_APP_STORE_HANDLE: z.string().optional().default(""),
 });
 
 export type Env = z.infer<typeof envSchema>;

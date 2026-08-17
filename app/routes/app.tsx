@@ -4,16 +4,22 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
 import { authenticate } from "../shopify.server";
+import { resolveReviewPromptEligible } from "../lib/review.server";
+import { ReviewPrompt } from "../components/ReviewPrompt";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
+  const reviewPromptEligible = await resolveReviewPromptEligible(session.shop);
 
-  // eslint-disable-next-line no-undef
-  return { apiKey: process.env.SHOPIFY_API_KEY || "" };
+  return {
+    // eslint-disable-next-line no-undef
+    apiKey: process.env.SHOPIFY_API_KEY || "",
+    reviewPromptEligible,
+  };
 };
 
 export default function App() {
-  const { apiKey } = useLoaderData<typeof loader>();
+  const { apiKey, reviewPromptEligible } = useLoaderData<typeof loader>();
 
   return (
     <AppProvider embedded apiKey={apiKey}>
@@ -29,6 +35,7 @@ export default function App() {
         <s-link href="/app/plan-usage">Plan &amp; Usage</s-link>
         <s-link href="/app/settings">Settings</s-link>
       </s-app-nav>
+      <ReviewPrompt eligible={reviewPromptEligible} />
       <Outlet />
     </AppProvider>
   );

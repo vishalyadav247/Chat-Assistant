@@ -94,6 +94,7 @@ export function ChatboxAppearance(props: {
 
   // Launcher previews honor the custom button background when set.
   const bg = launcher.bgColor || launcherGradient(appearance);
+  const brandHex = appearance.colorMode === "solid" ? appearance.solid : appearance.gradient.start;
   const iconChipStyle = (selected: boolean): React.CSSProperties => ({
     width: 36,
     height: 36,
@@ -251,43 +252,36 @@ export function ChatboxAppearance(props: {
 
         <LauncherRow label="Background">
           {/* Toggle (user request 2026-08-13): brand color by default; turning
-              it off reveals the picker. Empty bgColor = brand. Keeping the
-              picker unmounted while the toggle is on also fixes the old
-              "Reset to brand" bug (the field's onChange re-applied the brand
-              hex as a custom color the moment bgColor was cleared). */}
+              it off enables the picker. Empty bgColor = brand (effective value
+              the widget reads); customBgColor remembers the merchant's pick so
+              toggling brand on and off again restores it instead of resetting
+              the picker to the brand hex (user request 2026-08-17). */}
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <s-switch
               label="Use brand color"
               checked={!launcher.bgColor}
               onChange={(e) =>
                 setLauncher({
-                  bgColor: e.currentTarget.checked
-                    ? ""
-                    : appearance.colorMode === "solid"
-                      ? appearance.solid
-                      : appearance.gradient.start,
+                  bgColor: e.currentTarget.checked ? "" : launcher.customBgColor || brandHex,
                 })
               }
             />
             <div style={{ width: 120 }}>
               {/* Always visible; editable only with the brand toggle off. A
-                  disabled field fires no change events, so the brand hex it
+                  disabled field fires no change events, so the value it
                   displays never writes back into bgColor. */}
               <s-color-field
                 label="Button background color"
                 labelAccessibilityVisibility="exclusive"
                 disabled={!launcher.bgColor}
-                value={
-                  launcher.bgColor ||
-                  (appearance.colorMode === "solid" ? appearance.solid : appearance.gradient.start)
-                }
+                value={launcher.bgColor || launcher.customBgColor || brandHex}
                 onInput={(e) => {
                   const bgColor = normalizeHex(e.currentTarget.value);
-                  if (bgColor) setLauncher({ bgColor });
+                  if (bgColor) setLauncher({ bgColor, customBgColor: bgColor });
                 }}
                 onChange={(e) => {
                   const bgColor = normalizeHex(e.currentTarget.value);
-                  if (bgColor) setLauncher({ bgColor });
+                  if (bgColor) setLauncher({ bgColor, customBgColor: bgColor });
                 }}
               />
             </div>
@@ -318,13 +312,56 @@ export function ChatboxAppearance(props: {
                 {CHAT_ICON}
               </span>
             </button>
-            {launcher.icon === "custom" && launcher.customIconUrl ? (
-              <span style={iconChipStyle(true)} aria-label="Custom icon selected">
-                <img
-                  src={launcher.customIconUrl}
-                  alt="Custom launcher icon"
-                  style={{ width: 26, height: 26, borderRadius: 6, objectFit: "cover" }}
-                />
+            {/* The uploaded icon stays as a selectable chip even when the
+                default is active (user request 2026-08-17) — picking the
+                default no longer discards the upload; only the ✕ does. */}
+            {launcher.customIconUrl ? (
+              <span style={{ position: "relative", display: "inline-flex" }}>
+                <button
+                  type="button"
+                  aria-label="Uploaded icon"
+                  aria-pressed={launcher.icon === "custom"}
+                  style={iconChipStyle(launcher.icon === "custom")}
+                  onClick={() => setLauncher({ icon: "custom" })}
+                >
+                  <img
+                    src={launcher.customIconUrl}
+                    alt=""
+                    style={{ width: 26, height: 26, borderRadius: 6, objectFit: "cover" }}
+                  />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Remove uploaded icon"
+                  title="Remove uploaded icon"
+                  onClick={() =>
+                    setLauncher({
+                      customIconUrl: null,
+                      icon: launcher.icon === "custom" ? "chat" : launcher.icon,
+                    })
+                  }
+                  style={{
+                    position: "absolute",
+                    top: -6,
+                    right: -6,
+                    width: 16,
+                    height: 16,
+                    borderRadius: "50%",
+                    border: "1px solid #dcdce1",
+                    background: "#fff",
+                    color: "#141417",
+                    fontSize: 10,
+                    lineHeight: 1,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    cursor: "pointer",
+                    padding: 0,
+                    boxShadow: "0 1px 2px rgba(0,0,0,.12)",
+                  }}
+                >
+                  ✕
+                </button>
               </span>
             ) : null}
             <ChatboxUploadButton

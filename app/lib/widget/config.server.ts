@@ -33,7 +33,12 @@ export type WidgetConfigPayload =
       aiAvailable: boolean;
       shopDomain: string;
       survey: ShopSettingsData["survey"];
-      orderTracking: ShopSettingsData["orderTracking"];
+      /** apiKey/provider stay server-side — the widget only needs the mode
+       *  ("integration" → in-widget lookup via proxy) and the custom URL. */
+      orderTracking: {
+        mode: ShopSettingsData["orderTracking"]["mode"];
+        customUrl: string;
+      };
       cartDrawer: boolean;
       /** Active proactive-chat campaigns (spec 12): priority-ordered, premium
        *  templates already filtered server-side by plan. */
@@ -92,7 +97,10 @@ export async function buildWidgetConfig(
     aiAvailable: config.aiEnabled && allowed,
     shopDomain,
     survey: config.settings.survey,
-    orderTracking: config.settings.orderTracking,
+    orderTracking: {
+      mode: config.settings.orderTracking.mode,
+      customUrl: config.settings.orderTracking.customUrl,
+    },
     cartDrawer: config.settings.cartDrawer,
     campaigns,
   };

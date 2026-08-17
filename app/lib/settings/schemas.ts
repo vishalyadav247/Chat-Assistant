@@ -87,8 +87,15 @@ export const widgetSettingsSchema = z.object({
           icon: z.enum(["chat", "help", "custom"]).catch("chat"),
           customIconUrl: z.string().max(500).nullable().catch(null),
           position: z.enum(["bottom_right", "bottom_left", "top_right", "top_left"]).catch("bottom_right"),
-          /** Launcher button background — "" inherits the brand colors. */
+          /** Effective launcher button background — "" inherits the brand colors. */
           bgColor: z
+            .string()
+            .regex(/^#[0-9a-fA-F]{6}$/)
+            .or(z.literal(""))
+            .catch(""),
+          /** The merchant's last custom pick, remembered while "Use brand color"
+           *  is on so re-disabling the toggle restores it (2026-08-17). */
+          customBgColor: z
             .string()
             .regex(/^#[0-9a-fA-F]{6}$/)
             .or(z.literal(""))
@@ -100,14 +107,16 @@ export const widgetSettingsSchema = z.object({
             .or(z.literal(""))
             .catch(""),
         })
-        .catch({ style: "icon", label: "Chat with us", icon: "chat", customIconUrl: null, position: "bottom_right", bgColor: "", labelColor: "" }),
+        // Pre-2026-08-17 rows: a custom bgColor without the remembered pick.
+        .transform((l) => ({ ...l, customBgColor: l.customBgColor || l.bgColor }))
+        .catch({ style: "icon", label: "Chat with us", icon: "chat", customIconUrl: null, position: "bottom_right", bgColor: "", customBgColor: "", labelColor: "" }),
       removeBranding: z.boolean().catch(false),
     })
     .catch({
       colorMode: "gradient",
       solid: "#6d3bf5",
       gradient: { start: "#6d3bf5", end: "#3b82f6" },
-      launcher: { style: "icon", label: "Chat with us", icon: "chat", customIconUrl: null, position: "bottom_right", bgColor: "", labelColor: "" },
+      launcher: { style: "icon", label: "Chat with us", icon: "chat", customIconUrl: null, position: "bottom_right", bgColor: "", customBgColor: "", labelColor: "" },
       removeBranding: false,
     }),
 });
@@ -169,8 +178,15 @@ export const shopSettingsSchema = z.object({
   availability: availabilitySchema.catch(availabilitySchema.parse({})),
   survey: surveySchema.catch(surveySchema.parse({})),
   orderTracking: z
-    .object({ mode: z.enum(["default", "custom"]).catch("default"), customUrl: z.string().max(500).catch("") })
-    .catch({ mode: "default", customUrl: "" }),
+    .object({
+      mode: z.enum(["default", "custom", "integration"]).catch("default"),
+      customUrl: z.string().max(500).catch(""),
+      /** Tracking-app integration (spec 16 delta): provider API key is
+       *  SERVER-ONLY — widget config strips it (config.server.ts). */
+      provider: z.enum(["17track"]).catch("17track"),
+      apiKey: z.string().max(200).catch(""),
+    })
+    .catch({ mode: "default", customUrl: "", provider: "17track", apiKey: "" }),
   cartDrawer: z.boolean().catch(true),
   retentionDays: z.union([z.literal(0), z.literal(7), z.literal(30), z.literal(60), z.literal(90)]).catch(0), // 0 = forever
   /** Real-time discount webhook sync (spec 02, Pro+ plan gate applies on top). */

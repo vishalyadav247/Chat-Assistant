@@ -11,6 +11,7 @@ import {
   shopSettingsSchema,
   type ShopSettingsData,
 } from "./schemas";
+import { validate17TrackKey } from "../tracking/seventeen-track.server";
 
 // Settings save workflow (spec 16): one intent per tab/card. Every intent
 // zod-parses the incoming slice, merges it onto the current settings blob,
@@ -102,7 +103,13 @@ export async function applySettingsIntent(args: {
         }
         case "save-chatbox": {
           const p = chatboxPayload.parse(raw);
-          next = { ...current, cartDrawer: p.cartDrawer, orderTracking: p.orderTracking };
+          next = {
+            ...current,
+            cartDrawer: p.cartDrawer,
+            // The provider key changes only via connect-tracking (the payload
+            // omits it, and the schema would otherwise default it to "").
+            orderTracking: { ...p.orderTracking, apiKey: current.orderTracking.apiKey },
+          };
           break;
         }
         case "save-availability": {
@@ -122,6 +129,31 @@ export async function applySettingsIntent(args: {
         case "save-privacy": {
           const p = privacyPayload.parse(raw);
           next = { ...current, retentionDays: p.retentionDays };
+          break;
+        }
+
+        // ── Order-tracking app integration (spec 16 delta) ──────────────────
+        // Connect validates the key against the provider BEFORE persisting;
+        // an empty key disconnects. Persisting also switches the mode so
+        // Connect is the single activation step (mirrors the design).
+        case "connect-tracking": {
+          const p = z.object({ apiKey: z.string().trim().max(200) }).parse(raw);
+          if (p.apiKey && !(await validate17TrackKey(p.apiKey))) {
+            return {
+              ok: false,
+              intent,
+              error: "17Track rejected this API key. Check it and try again.",
+            };
+          }
+          next = {
+            ...current,
+            orderTracking: {
+              ...current.orderTracking,
+              mode: p.apiKey ? "integration" : "default",
+              provider: "17track",
+              apiKey: p.apiKey,
+            },
+          };
           break;
         }
 

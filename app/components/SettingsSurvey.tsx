@@ -1,7 +1,7 @@
 import type { ShopSettingsData } from "../lib/settings/schemas";
 import { ChipInput } from "./ChipInput";
 
-// Settings → Chatbox → Satisfaction survey sub-view (spec 16, #survey):
+// Settings → Chatbox → Satisfaction survey sub-view (spec 16, ?tab=survey):
 // format (stars/emoji), content, trigger criteria (on-resolve + keywords).
 
 type SurveyData = ShopSettingsData["survey"];

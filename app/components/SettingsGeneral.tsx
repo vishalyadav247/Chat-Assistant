@@ -32,6 +32,7 @@ export function SettingsGeneral(props: {
   apiKey?: string;
   owner: TeamMemberRow;
   members: TeamMemberData[];
+  reviewUrl: string | null;
   onNameChange: (name: string) => void;
   onThemeChange: (theme: Theme) => void;
   onInboxChange: (inbox: Inbox) => void;
@@ -332,6 +333,20 @@ export function SettingsGeneral(props: {
           <s-text tone="neutral">No team members match your search.</s-text>
         ) : null}
       </s-section>
+
+      {/* ── Leave a review (manual fallback for merchants the review modal
+             can't reach: mobile, mid-cooldown, past the annual cap) ────────── */}
+      {props.reviewUrl ? (
+        <s-section heading="Enjoying ChatConvert?">
+          <s-paragraph>
+            Reviews help other merchants find us.{" "}
+            {/* target="_blank" is required — the App Store refuses to load inside the admin iframe. */}
+            <s-link href={props.reviewUrl} target="_blank">
+              Leave a review on the Shopify App Store
+            </s-link>
+          </s-paragraph>
+        </s-section>
+      ) : null}
 
       {/* ── Invite member modal ──────────────────────────────────────────── */}
       <BrowseModalShell

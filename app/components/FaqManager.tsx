@@ -15,15 +15,13 @@ import { ConfirmDeleteModal } from "./ui/ConfirmDeleteModal";
 // free emoji input). Legacy rows may still hold an emoji; CategoryIcon falls
 // back to rendering it as text.
 const ICON_PRESETS = [
-  "page",
+  "exchange",
   "cart",
   "return",
   "credit-card",
   "delivery",
-  "question-circle",
   "discount",
   "gift-card",
-  "receipt",
   "store",
   "globe",
   "person",

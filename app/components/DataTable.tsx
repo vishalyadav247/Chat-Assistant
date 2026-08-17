@@ -41,6 +41,14 @@ export function DataTable<Row extends { id: string }>(props: {
   /** Render the opened search field on its own full-width row below the
    *  toolbar instead of inline next to the icon. */
   searchFieldBelow?: boolean;
+  /** Rendered to the right of the below-toolbar search field (searchFieldBelow),
+   *  e.g. Contacts' sort menu per contacts.png. */
+  searchRowEnd?: React.ReactNode;
+  /** Per-row action buttons in a trailing column, revealed on row hover. */
+  rowActions?: (row: Row) => React.ReactNode;
+  /** Rows are being re-fetched: keeps them visible under a centered spinner
+   *  overlay (covers only the rows region, not toolbar/search/pager). */
+  loading?: boolean;
   /** Always show the search field (no collapsible icon). */
   searchAlwaysOpen?: boolean;
   /** Optional controlled page (1-based) — e.g. Contacts export needs to know
@@ -124,6 +132,20 @@ export function DataTable<Row extends { id: string }>(props: {
     })
     .filter(Boolean)
     .join("\n");
+  // No custom hover/cursor CSS for clickable rows: the s-* table hosts are
+  // display:contents (the real tr/td live in shadow DOM), so external
+  // backgrounds never paint. Polaris supplies whole-row hover + pointer
+  // natively (.has-delegate:hover) when clickDelegate is set on the row.
+  const scopedCss = [
+    widthCss,
+    props.rowActions
+      ? `.${scopeClass} .dt-row-actions { opacity: 0; transition: opacity .12s ease; }
+.${scopeClass} s-table-row:hover .dt-row-actions,
+.${scopeClass} .dt-row-actions:focus-within { opacity: 1; }`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   const searchField = (
     <s-search-field
@@ -174,8 +196,36 @@ export function DataTable<Row extends { id: string }>(props: {
           </div>
         </div>
       ) : null}
-      {props.searchFn && searchOpen && props.searchFieldBelow ? searchField : null}
+      {props.searchFn && searchOpen && props.searchFieldBelow ? (
+        // stretch → searchRowEnd controls (e.g. the sort button) match the
+        // search field's height exactly.
+        <div style={{ display: "flex", gap: SPACE.xs, alignItems: "stretch" }}>
+          <div style={{ flex: 1 }}>{searchField}</div>
+          {props.searchRowEnd}
+        </div>
+      ) : null}
 
+      <div style={{ position: "relative" }}>
+      {props.loading ? (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 5,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "rgba(255,255,255,.6)",
+            borderRadius: 8,
+          }}
+        >
+          {/* Polaris has no medium spinner (base | large | large-100) — a
+              scaled-down large reads as one. */}
+          <span style={{ display: "inline-flex", transform: "scale(0.7)" }}>
+            <s-spinner size="large" accessibilityLabel="Loading rows" />
+          </span>
+        </div>
+      ) : null}
       {visible.length === 0 ? (
         (props.empty ?? (
           <s-box padding="large">
@@ -187,7 +237,7 @@ export function DataTable<Row extends { id: string }>(props: {
         // (Polaris IndexTable behavior) instead of inserting a row above the
         // table — no layout shift when rows are selected/deselected.
         <div className={scopeClass} style={{ position: "relative" }}>
-          {widthCss ? <style>{widthCss}</style> : null}
+          {scopedCss ? <style>{scopedCss}</style> : null}
           {props.bulkActions && selected.size > 0 ? (
             <div
               style={{
@@ -241,17 +291,41 @@ export function DataTable<Row extends { id: string }>(props: {
             ) : null}
             {props.columns.map((col) => (
               <s-table-header key={col.key} format={col.align === "end" ? "numeric" : "base"}>
-                {col.title}
+                {/* The shadow th's padding/height are fixed (28px), so padded
+                    light-DOM content is what makes the header row taller. */}
+                <span style={{ display: "inline-block", padding: "6px 0" }}>{col.title}</span>
               </s-table-header>
             ))}
+            {props.rowActions ? <s-table-header /> : null}
           </s-table-header-row>
           <s-table-body>
             {visible.map((row) => (
-              // Row click via the native clickDelegate seam: the whole row
-              // forwards clicks to an s-clickable wrapping the first cell.
+              // clickDelegate provides the native whole-row hover styling
+              // (.has-delegate:hover) — but its click forwarding doesn't fire
+              // reliably, so a native listener (via ref; the React typing has
+              // no onClick) handles clicks outside the first cell. The guard
+              // skips interactive children (row actions, the s-clickable) so
+              // nothing double-fires.
               <s-table-row
                 key={row.id}
                 clickDelegate={props.onRowClick ? `dtrow-${row.id}` : undefined}
+                ref={
+                  props.onRowClick
+                    ? (el: HTMLElement | null) => {
+                        if (!el) return;
+                        el.onclick = (e) => {
+                          const target = e.target as HTMLElement;
+                          if (
+                            target.closest(
+                              "button, a, input, label, s-button, s-checkbox, s-clickable, s-link, .dt-row-actions",
+                            )
+                          )
+                            return;
+                          props.onRowClick!(row);
+                        };
+                      }
+                    : undefined
+                }
               >
                 {props.bulkActions ? (
                   <s-table-cell>
@@ -274,12 +348,23 @@ export function DataTable<Row extends { id: string }>(props: {
                     )}
                   </s-table-cell>
                 ))}
+                {props.rowActions ? (
+                  <s-table-cell>
+                    <div
+                      className="dt-row-actions"
+                      style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}
+                    >
+                      {props.rowActions(row)}
+                    </div>
+                  </s-table-cell>
+                ) : null}
               </s-table-row>
             ))}
           </s-table-body>
         </s-table>
         </div>
       )}
+      </div>
 
       <div
         style={{

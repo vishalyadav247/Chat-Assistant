@@ -16,10 +16,10 @@ Admin page `/app/chatbox` where merchants configure the widget. Left: settings (
   active: bool,
   chatFocusMode: bool,                       // jump straight to chat; only with liveChat on
   header: { logoUrl?, name ("" → "ChatConvert"), description },
-  chatStatus: bool,                          // links to settings#availability
+  chatStatus: bool,                          // links to settings?tab=availability
   liveChat: bool,
   contactMethods: { enabled: bool, items: [{type: whatsapp|phone|email, value, countryCode?, order}] },
-  orderTracking: bool,                       // method configured in settings#chatbox
+  orderTracking: bool,                       // method configured in settings?tab=chatbox
   faqs: bool,                                // featured FAQs from spec 07
   welcomeMessage (supports {{customer_name}}), offlineMessageEnabled, offlineMessage,
   starters: { enabled: bool, items: [{emoji, question ≤100, answerHtml, order}] },
@@ -27,11 +27,14 @@ Admin page `/app/chatbox` where merchants configure the widget. Left: settings (
   prechat: { mode: guest|anonymous|both, showAfterMessages: int (both mode), description,
              fields: [{key: email|name|phone, required}],   // email always present+required
              marketingOptIn: bool, disclaimer: {enabled, html} },
-  survey: bool,                              // configured in settings#survey
+  survey: bool,                              // configured in settings?tab=survey
   appearance: {
     colorMode: solid|gradient, solid: hex, gradient: {start, end},
     launcher: { style: icon|label|icon_label, label ("Chat with us"), icon: chat|help|custom, customIconUrl?,
-                position: bottom_right|bottom_left|top_right|top_left },
+                position: bottom_right|bottom_left|top_right|top_left,
+                bgColor ("" = brand; effective value the widget reads), customBgColor (remembered pick —
+                "Use brand color" on/off restores it instead of resetting; 2026-08-17), labelColor },
+    // Upload chip stays selectable while the default icon is active; only its ✕ clears customIconUrl.
     removeBranding: bool                     // Basic+ gate
   }
 }
@@ -45,7 +48,7 @@ File uploads (logo ≤2MB PNG/JPG, custom launcher icon) → Shopify Files API (
 Chat focus mode toggle; Header card (logo upload, name, description — live to preview header); Contact & Chat card (chat status → link to availability, live chat toggle, contact methods: add-dropdown WhatsApp/Phone/Email single-use per type, rows with drag reorder + flag/country code for phone + delete); Order tracking toggle (link to settings); FAQs toggle (link to ai-agent FAQs).
 
 ### Chat page tab
-Welcome message textarea with `{{customer_name}}` insert link + emoji picker + "use different offline message" checkbox; Conversation starter master toggle + question cards (edit modal: question ≤100 with counter, rich-text answer; delete; add; "Import from FAQs" pulls published FAQs); Chat avatar radio (store branding w/ edit link → settings#general | team member profile); Pre-chat form (start-mode radios w/ conditional blocks, show-after-X input in both-mode, description, field rows: Email `Required` fixed, add Name/Phone as `Optional`, delete; marketing opt-in checkbox; disclaimer checkbox → info note + RTE default "By sending us a message, you agree to our privacy policy."); Display satisfaction survey toggle (link settings#survey).
+Welcome message textarea with `{{customer_name}}` insert link + emoji picker + "use different offline message" checkbox; Conversation starter master toggle + question cards (edit modal: question ≤100 with counter, rich-text answer; delete; add; "Import from FAQs" pulls published FAQs); Chat avatar radio (store branding w/ edit link → settings#general | team member profile); Pre-chat form (start-mode radios w/ conditional blocks, show-after-X input in both-mode, description, field rows: Email `Required` fixed, add Name/Phone as `Optional`, delete; marketing opt-in checkbox; disclaimer checkbox → info note + RTE default "By sending us a message, you agree to our privacy policy."); Display satisfaction survey toggle (link settings?tab=survey).
 
 ### Appearance tab
 Brand colors segmented Solid|Gradient, 6 preset swatches each + custom hex inputs w/ color chips; Chatbox button: launcher style radio-cards, icon choice incl. upload, position select; Remove-branding toggle (gated: locked + upgrade prompt below Basic).
