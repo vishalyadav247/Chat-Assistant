@@ -38,7 +38,7 @@ export function SettingsGeneral(props: {
   onInboxChange: (inbox: Inbox) => void;
 }) {
   const shopify = useAppBridge();
-  const uploadFetcher = useFetcher<{ ok: boolean; error?: string; logoUrl?: string }>();
+  const uploadFetcher = useFetcher<{ ok: boolean; intent?: string; error?: string; logoUrl?: string }>();
   const fileRef = useRef<HTMLInputElement>(null);
   const [teamQuery, setTeamQuery] = useState("");
 
@@ -76,12 +76,17 @@ export function SettingsGeneral(props: {
 
   const inviteValid = invite.name.trim().length > 0 && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(invite.email.trim());
 
-  const uploading = uploadFetcher.state !== "idle";
+  // Upload and ✕ share the fetcher but must not share UI state — otherwise
+  // removing flips the Upload button into "Uploading…".
+  const inFlightIntent =
+    uploadFetcher.state !== "idle" ? uploadFetcher.formData?.get("intent") : null;
+  const uploading = inFlightIntent === "upload-logo";
+  const removing = inFlightIntent === "remove-logo";
 
   useEffect(() => {
     if (uploadFetcher.state === "idle" && uploadFetcher.data) {
       if (uploadFetcher.data.ok) {
-        shopify.toast.show("Logo updated");
+        shopify.toast.show(uploadFetcher.data.intent === "remove-logo" ? "Logo removed" : "Logo updated");
       } else if (uploadFetcher.data.error) {
         shopify.toast.show(uploadFetcher.data.error, { isError: true });
       }
@@ -125,8 +130,8 @@ export function SettingsGeneral(props: {
     <s-stack gap="base">
       <s-section heading="Store information">
         <s-paragraph>Name and logo will be shown in conversations with customers</s-paragraph>
-        <s-stack direction="inline" gap="large-200" alignItems="start">
-          <s-box minInlineSize="260px">
+        <s-stack gap="base">
+          <s-box maxInlineSize="360px">
             <s-text-field
               label="Name"
               value={props.name}
@@ -134,29 +139,68 @@ export function SettingsGeneral(props: {
               onInput={(e) => props.onNameChange(e.currentTarget.value)}
             />
           </s-box>
+          {/* Logo below the name (user request 2026-08-17); ✕ removes it
+              (immediate, like the upload — own fetcher, not the save bar). */}
           <s-stack gap="small">
             <s-text>Logo</s-text>
             <s-stack direction="inline" gap="base" alignItems="center">
-              <s-avatar
-                size="large"
-                initials={initials}
-                src={props.logoUrl ?? undefined}
-                alt="Store logo"
-              />
-              <s-button
-                icon="upload"
-                disabled={uploading}
-                onClick={() => fileRef.current?.click()}
-              >
-                {uploading ? "Uploading…" : "Upload logo"}
-              </s-button>
+              <div style={{ position: "relative" }}>
+                {/* Same box + placeholder as the chatbox header logo (user
+                    request 2026-08-17) — no initials avatar here. */}
+                <s-thumbnail size="large" src={props.logoUrl ?? undefined} alt="Store logo" />
+                {props.logoUrl ? (
+                  <button
+                    type="button"
+                    aria-label="Remove logo"
+                    title="Remove logo"
+                    disabled={removing || uploading}
+                    onClick={() => {
+                      const fd = new FormData();
+                      fd.set("intent", "remove-logo");
+                      uploadFetcher.submit(fd, { method: "post" });
+                    }}
+                    style={{
+                      position: "absolute",
+                      top: -6,
+                      right: -6,
+                      width: 18,
+                      height: 18,
+                      padding: 0,
+                      borderRadius: "50%",
+                      border: "1px solid var(--s-color-border, #d4d4d8)",
+                      background: "var(--s-color-bg, #fff)",
+                      boxShadow: "0 1px 2px rgba(20,20,25,.18)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      cursor: "pointer",
+                      fontSize: 10,
+                      lineHeight: 1,
+                      color: "var(--s-color-text-secondary, #5a5a63)",
+                    }}
+                  >
+                    ✕
+                  </button>
+                ) : null}
+              </div>
+              <s-stack gap="small-200">
+                <s-button
+                  icon="upload"
+                  disabled={uploading || removing}
+                  onClick={() => fileRef.current?.click()}
+                >
+                  {uploading ? "Uploading…" : props.logoUrl ? "Change logo" : "Upload logo"}
+                </s-button>
+                {/* Same file guidance as the chatbox logo/icon uploads. */}
+                <s-text tone="neutral">SVG, PNG or JPG · square, up to 2MB</s-text>
+              </s-stack>
             </s-stack>
           </s-stack>
         </s-stack>
         <input
           ref={fileRef}
           type="file"
-          accept="image/png,image/jpeg,image/webp"
+          accept="image/png,image/jpeg,image/webp,image/svg+xml"
           style={{ display: "none" }}
           aria-label="Upload store logo"
           onChange={onFile}

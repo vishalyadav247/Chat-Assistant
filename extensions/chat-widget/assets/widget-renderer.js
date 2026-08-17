@@ -50,6 +50,41 @@
     return node;
   }
 
+  // Bot/agent identity on message bubbles (spec 06 "Chat avatar"): with
+  // "Store branding" the shell passes {url, name} from Settings → General →
+  // Store information — logo (or the name's initials) as the avatar and the
+  // name as the author caption. null → default chat icon, no caption.
+  var botIdentity = null;
+  function setAvatar(identity) {
+    botIdentity = identity && (identity.url || identity.name) ? identity : null;
+  }
+  function initials(name) {
+    var parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return "";
+    var a = parts[0].charAt(0);
+    var b = parts.length > 1 ? parts[parts.length - 1].charAt(0) : "";
+    return (a + b).toUpperCase();
+  }
+  function avatar() {
+    var av = el("span", "cw-av");
+    if (botIdentity && botIdentity.url) {
+      av.className += " cw-av--img";
+      av.appendChild(el("img", null, { src: botIdentity.url, alt: "" }));
+      return av;
+    }
+    if (botIdentity && initials(botIdentity.name)) {
+      av.className += " cw-av--initials";
+      av.textContent = initials(botIdentity.name);
+      return av;
+    }
+    return svg(av, ICONS.chat);
+  }
+  /** Author caption for bot bubbles: explicit label wins (e.g. "Team"). */
+  function botLabel(label) {
+    if (label) return label;
+    return botIdentity && botIdentity.name ? botIdentity.name : null;
+  }
+
   function themeVars(appearance) {
     if (appearance && appearance.colorMode === "solid") {
       return { c1: appearance.solid, c2: appearance.solid };
@@ -346,10 +381,16 @@
   function messageBubble(kind, content, label) {
     var row = el("div", "cw-msg cw-msg--" + (kind === "user" ? "in" : kind === "sys" ? "sys" : "out"));
     if (kind === "bot") {
-      row.appendChild(svg(el("span", "cw-av"), ICONS.chat));
+      row.appendChild(avatar());
     }
     var bubble = el("div", "cw-bubble" + (kind === "user" ? " cw-bubble--user" : kind === "sys" ? " cw-bubble--sys" : ""));
     setText(bubble, content);
+    appendWithLabel(row, bubble, kind === "bot" ? botLabel(label) : label);
+    return { el: row, bubbleEl: bubble };
+  }
+
+  /** Bubble + optional author caption (store name / "Team") above it. */
+  function appendWithLabel(row, bubble, label) {
     if (label) {
       var wrap = el("div", "cw-msg-wrap");
       var meta = el("div", "cw-msg-meta");
@@ -360,22 +401,21 @@
     } else {
       row.appendChild(bubble);
     }
-    return { el: row, bubbleEl: bubble };
   }
 
   /** Canned bubble whose body is merchant-authored HTML (starter answers). */
   function htmlBubble(html) {
     var row = el("div", "cw-msg cw-msg--out");
-    row.appendChild(svg(el("span", "cw-av"), ICONS.chat));
+    row.appendChild(avatar());
     var bubble = el("div", "cw-bubble");
     bubble.innerHTML = html || "";
-    row.appendChild(bubble);
+    appendWithLabel(row, bubble, botLabel(null));
     return { el: row, bubbleEl: bubble };
   }
 
   function typingIndicator() {
     var row = el("div", "cw-msg cw-msg--out", { "aria-label": "Assistant is typing" });
-    row.appendChild(svg(el("span", "cw-av"), ICONS.chat));
+    row.appendChild(avatar());
     var dots = el("div", "cw-bubble cw-typing");
     dots.appendChild(el("span"));
     dots.appendChild(el("span"));
@@ -1168,6 +1208,7 @@
     trackingScreen: trackingScreen,
     orderStatusCard: orderStatusCard,
     shipmentCard: shipmentCard,
+    setAvatar: setAvatar,
     prechatForm: prechatForm,
     handoverForm: handoverForm,
     surveyPrompt: surveyPrompt,

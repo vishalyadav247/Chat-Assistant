@@ -105,12 +105,12 @@ export function ChatboxGeneral(props: {
           <s-stack gap="small-200">
             <ChatboxUploadButton
               intent="upload-logo"
-              label="Upload logo"
+              label={value.header.logoUrl ? "Change logo" : "Upload logo"}
               onUploaded={(url) =>
                 onChange({ ...value, header: { ...value.header, logoUrl: url } })
               }
             />
-            <s-text tone="neutral">PNG or JPG, up to 2MB</s-text>
+            <s-text tone="neutral">SVG, PNG or JPG · square, up to 2MB</s-text>
           </s-stack>
         </s-stack>
         <s-text-field

@@ -31,7 +31,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = await resolveShopId(session.shop);
 
-  const [shop, settings, shopSettings, faqs, categories] = await Promise.all([
+  const [shop, settings, shopSettings, faqs, categories, importableFaqs] = await Promise.all([
     db.shop.findUnique({ where: { id: shopId } }),
     loadWidgetSettings(shopId),
     loadShopSettings(shopId),
@@ -44,6 +44,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     db.faqCategory.findMany({
       where: { shopId, status: "published" },
       select: { id: true, name: true },
+    }),
+    // Every published FAQ — offered by "Import from FAQs" in Conversation starters.
+    db.faq.findMany({
+      where: { shopId, status: "published" },
+      orderBy: { position: "asc" },
+      take: 300,
+      select: { id: true, question: true, answerHtml: true },
     }),
   ]);
 
@@ -75,6 +82,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     // Order-tracking mode (Settings page) — decides which tracking form(s)
     // the preview shows, same as the storefront.
     orderTrackingMode: shopSettings.orderTracking.mode,
+    importableFaqs,
+    // Store information (Settings → General) — the "Store branding" chat
+    // avatar (logo, or name initials) + author caption on bot messages.
+    storeInfo: {
+      logoUrl: shopSettings.storeInfo.logoUrl,
+      name: shopSettings.storeInfo.name.trim() || shop?.name || session.shop.replace(".myshopify.com", ""),
+    },
   };
 };
 
@@ -193,7 +207,9 @@ export default function ChatboxPage() {
         >
           <div>
             {tab === "general" ? <ChatboxGeneral value={draft} onChange={setDraft} /> : null}
-            {tab === "chatpage" ? <ChatboxChatPage value={draft} onChange={setDraft} /> : null}
+            {tab === "chatpage" ? (
+              <ChatboxChatPage value={draft} onChange={setDraft} faqs={data.importableFaqs} />
+            ) : null}
             {tab === "appearance" ? (
               <ChatboxAppearance
                 value={draft}
@@ -216,6 +232,7 @@ export default function ChatboxPage() {
                 currency={data.currency}
                 survey={data.survey}
                 orderTrackingMode={data.orderTrackingMode}
+                storeInfo={data.storeInfo}
               />
             </s-stack>
           </div>

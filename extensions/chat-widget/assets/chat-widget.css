@@ -254,6 +254,14 @@
   overflow: hidden;
 }
 .cw-av img { width: 100%; height: 100%; object-fit: cover; }
+/* Store-branding avatar (logo image): neutral surface instead of the brand
+   gradient so logos with transparency don't sit on a colored blob. */
+.cw-av--img {
+  background: var(--cw-surface, #fff);
+  box-shadow: inset 0 0 0 1px rgba(20, 20, 25, 0.08);
+}
+/* No logo uploaded → store-name initials on the brand gradient. */
+.cw-av--initials { font-size: 10.5px; font-weight: 700; letter-spacing: 0.2px; }
 .cw-bubble {
   background: var(--cw-surface);
   box-shadow: var(--cw-shadow-sm);
@@ -266,6 +274,15 @@
   max-width: 85%;
   overflow-wrap: break-word;
 }
+/* Merchant-authored rich text (starter answers, FAQ bodies): keep the
+   editor's structure readable regardless of theme resets. */
+.cw-bubble p { margin: 0 0 6px; }
+.cw-bubble p:last-child { margin-bottom: 0; }
+.cw-bubble ul, .cw-bubble ol { margin: 4px 0 4px 18px; padding: 0; }
+.cw-bubble ul { list-style: disc; }
+.cw-bubble ol { list-style: decimal; }
+.cw-bubble li { margin: 2px 0; }
+.cw-bubble a { text-decoration: underline; }
 .cw-bubble--user {
   background: linear-gradient(135deg, var(--cw1), var(--cw2));
   color: #fff;

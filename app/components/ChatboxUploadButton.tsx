@@ -21,6 +21,9 @@ export function ChatboxUploadButton(props: {
   /** MIME allowlist for the file picker; the server re-validates per intent. */
   accept?: string;
   onUploaded: (url: string) => void;
+  /** Custom trigger instead of the default upload button (e.g. a placeholder
+   *  box that opens the picker). Receives the opener + in-flight state. */
+  renderTrigger?: (open: () => void, uploading: boolean) => React.ReactNode;
 }) {
   const shopify = useAppBridge();
   const fetcher = useFetcher<UploadResult>();
@@ -52,9 +55,13 @@ export function ChatboxUploadButton(props: {
 
   return (
     <>
-      <s-button icon="upload" disabled={uploading} onClick={() => fileRef.current?.click()}>
-        {uploading ? "Uploading…" : props.label}
-      </s-button>
+      {props.renderTrigger ? (
+        props.renderTrigger(() => fileRef.current?.click(), uploading)
+      ) : (
+        <s-button icon="upload" disabled={uploading} onClick={() => fileRef.current?.click()}>
+          {uploading ? "Uploading…" : props.label}
+        </s-button>
+      )}
       <input
         ref={fileRef}
         type="file"

@@ -22,6 +22,8 @@ export interface ShopConfig {
   aiEnabled: boolean;
   currency: string;
   timezone: string;
+  /** Shopify shop name — default store name when Settings → General is blank. */
+  shopName: string;
   persona: Persona | null;
   guardrails: Guardrails | null;
   widget: WidgetSettingsData;
@@ -59,6 +61,7 @@ export async function getShopConfig(shopId: string): Promise<ShopConfig> {
     aiEnabled: shop?.aiEnabled ?? true,
     currency: shop?.currency ?? "USD",
     timezone: shop?.timezone ?? "UTC",
+    shopName: shop?.name ?? "",
     persona,
     guardrails,
     widget: widgetSettingsSchema.parse(widgetRow?.settings ?? {}),

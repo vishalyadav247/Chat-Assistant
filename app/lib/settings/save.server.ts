@@ -88,6 +88,11 @@ export async function applySettingsIntent(args: {
       });
       next = { ...current, storeInfo: { ...current.storeInfo, logoUrl: url } };
       extra.logoUrl = url;
+    } else if (intent === "remove-logo") {
+      // ✕ on the store logo (2026-08-17): back to the initials avatar. The
+      // CDN file itself is left in place (harmless; Files cleanup is out of scope).
+      next = { ...current, storeInfo: { ...current.storeInfo, logoUrl: null } };
+      extra.logoUrl = "";
     } else {
       const raw: unknown = JSON.parse(String(formData.get("payload") ?? "{}"));
       switch (intent) {

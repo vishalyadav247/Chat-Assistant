@@ -53,6 +53,8 @@ interface Renderer {
     cb: unknown,
   ) => HTMLElement;
   footer: (showBranding: boolean) => HTMLElement;
+  /** Bot identity on message bubbles (null → default chat icon, no caption). */
+  setAvatar?: (identity: { url: string | null; name: string } | null) => void;
 }
 
 declare global {
@@ -104,6 +106,9 @@ export function ChatboxPreview(props: {
   /** Order-tracking mode from shop settings — "default" shows only the
    *  order-number form; other modes add the Tracking-number tab. */
   orderTrackingMode: "default" | "custom" | "integration";
+  /** Store information (Settings → General) — the "Store branding" chat
+   *  avatar (logo or name initials) + author caption on bot messages. */
+  storeInfo: { logoUrl: string | null; name: string };
 }) {
   const { settings, tab, availability, featuredFaqs } = props;
   const containerRef = useRef<HTMLDivElement>(null);
@@ -151,6 +156,14 @@ export function ChatboxPreview(props: {
       // the preview never navigates).
       orderTracking: { mode: props.orderTrackingMode, customUrl: "" },
     };
+
+    // Same rule as config.server.ts: store branding → Settings → General
+    // store logo/name (NOT the chatbox header logo); else default chat icon.
+    R.setAvatar?.(
+      settings.avatarMode === "store_branding"
+        ? { url: props.storeInfo.logoUrl, name: props.storeInfo.name }
+        : null,
+    );
 
     container.textContent = "";
     const root = R.el("div", `cw-root cw-pos-${settings.appearance.launcher.position}`);
@@ -237,6 +250,7 @@ export function ChatboxPreview(props: {
     props.currency,
     props.survey,
     props.orderTrackingMode,
+    props.storeInfo,
   ]);
 
   return <div className="ccpv" ref={containerRef} />;

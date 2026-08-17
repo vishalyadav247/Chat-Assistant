@@ -2,32 +2,42 @@ import { useState } from "react";
 import { Link } from "react-router";
 import type { WidgetSettingsData } from "../lib/settings/schemas";
 import { arrayMove, DragHandle, useDragReorder } from "./DragReorder";
+import { htmlTextLength, RichTextEditor } from "./ui/RichTextEditor";
+import { INK, SCROLLBAR_CSS } from "./ui/tokens";
 
 // Chatbox → Chat page tab (spec 06): welcome/offline message, conversation
-// starters (add/edit modal, reorder, delete), chat avatar, pre-chat form,
-// satisfaction survey toggle.
+// starters (add/edit modal with rich-text answer, import from FAQs, reorder,
+// delete), chat avatar, pre-chat form, satisfaction survey toggle.
 
 type Starter = WidgetSettingsData["starters"]["items"][number];
 type PrechatField = WidgetSettingsData["prechat"]["fields"][number];
 
 const MODAL_ID = "chatbox-starter-modal";
+const IMPORT_MODAL_ID = "chatbox-starter-import-modal";
 
 interface ModalEl extends HTMLElement {
   showOverlay: () => void;
   hideOverlay: () => void;
 }
 
-const modalEl = () => document.getElementById(MODAL_ID) as ModalEl | null;
+const modalEl = (id: string = MODAL_ID) => document.getElementById(id) as ModalEl | null;
 
-/** v1 plain-text answer editor (rich text deferred): newlines ↔ <br>. */
-const textToHtml = (text: string) => text.replace(/\n/g, "<br>");
-const htmlToText = (html: string) =>
-  html.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]*>/g, "");
+/** Published FAQ available for "Import from FAQs" (spec 06). */
+export interface ImportableFaq {
+  id: string;
+  question: string;
+  answerHtml: string;
+}
+
+const ANSWER_MAX = 5000;
+const newStarterId = () =>
+  `st-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
 interface StarterDraft {
   index: number | null; // null = adding
   emoji: string;
   question: string;
+  /** Rich-text HTML (sanitized server-side on save). */
   answer: string;
 }
 
@@ -40,11 +50,15 @@ const FIELD_LABELS: Record<PrechatField["key"], string> = {
 export function ChatboxChatPage(props: {
   value: WidgetSettingsData;
   onChange: (next: WidgetSettingsData) => void;
+  /** Published FAQs offered by "Import from FAQs" (loader-provided). */
+  faqs: ImportableFaq[];
 }) {
   const { value, onChange } = props;
   const starters = value.starters;
   const prechat = value.prechat;
   const [modal, setModal] = useState<StarterDraft>({ index: null, emoji: "💬", question: "", answer: "" });
+  const [importSelected, setImportSelected] = useState<Set<string>>(new Set());
+  const [importQuery, setImportQuery] = useState("");
 
   const setStarters = (items: Starter[]) =>
     onChange({
@@ -57,26 +71,20 @@ export function ChatboxChatPage(props: {
       setModal({ index: null, emoji: "💬", question: "", answer: "" });
     } else {
       const item = starters.items[index];
-      setModal({
-        index,
-        emoji: item.emoji,
-        question: item.question,
-        answer: htmlToText(item.answerHtml),
-      });
+      setModal({ index, emoji: item.emoji, question: item.question, answer: item.answerHtml });
     }
     modalEl()?.showOverlay();
   };
 
+  const answerTooLong = modal.answer.length > ANSWER_MAX;
+
   const saveModal = () => {
-    if (!modal.question.trim()) return;
+    if (!modal.question.trim() || answerTooLong) return;
     const next: Starter = {
-      id:
-        modal.index !== null
-          ? starters.items[modal.index].id
-          : `st-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      id: modal.index !== null ? starters.items[modal.index].id : newStarterId(),
       emoji: modal.emoji || "💬",
       question: modal.question.slice(0, 100),
-      answerHtml: textToHtml(modal.answer).slice(0, 5000),
+      answerHtml: modal.answer,
       order: modal.index !== null ? starters.items[modal.index].order : starters.items.length,
     };
     const items = [...starters.items];
@@ -84,6 +92,45 @@ export function ChatboxChatPage(props: {
     else items.push(next);
     setStarters(items);
     modalEl()?.hideOverlay();
+  };
+
+  // ── Import from FAQs ────────────────────────────────────────────────────
+  const normalizeQ = (q: string) => q.trim().toLowerCase();
+  const existingQuestions = new Set(starters.items.map((s) => normalizeQ(s.question)));
+  const importableFaqs = props.faqs.filter((f) => {
+    const q = importQuery.trim().toLowerCase();
+    return !q || f.question.toLowerCase().includes(q);
+  });
+  const selectableIds = importableFaqs
+    .filter((f) => !existingQuestions.has(normalizeQ(f.question)))
+    .map((f) => f.id);
+
+  const openImport = () => {
+    setImportSelected(new Set());
+    setImportQuery("");
+    modalEl(IMPORT_MODAL_ID)?.showOverlay();
+  };
+
+  const toggleImport = (id: string, checked: boolean) =>
+    setImportSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+
+  const importFaqs = () => {
+    const picked = props.faqs.filter((f) => importSelected.has(f.id));
+    if (picked.length === 0) return;
+    const added: Starter[] = picked.map((f, i) => ({
+      id: newStarterId(),
+      emoji: "💬",
+      question: f.question.slice(0, 100),
+      answerHtml: f.answerHtml.slice(0, ANSWER_MAX),
+      order: starters.items.length + i,
+    }));
+    setStarters([...starters.items, ...added]);
+    modalEl(IMPORT_MODAL_ID)?.hideOverlay();
   };
 
   const moveStarter = (index: number, delta: number) => {
@@ -202,6 +249,9 @@ export function ChatboxChatPage(props: {
         <s-stack direction="inline" gap="base">
           <s-button icon="plus" onClick={() => openModal(null)}>
             Add question
+          </s-button>
+          <s-button icon="import" onClick={openImport}>
+            Import from FAQs
           </s-button>
         </s-stack>
         </s-stack>
@@ -395,26 +445,138 @@ export function ChatboxChatPage(props: {
               setModal((m) => ({ ...m, question }));
             }}
           />
-          <s-text-area
+          <RichTextEditor
             label="Answer"
             rows={5}
             value={modal.answer}
-            maxLength={5000}
-            onInput={(e) => {
-              const answer = e.currentTarget.value;
-              setModal((m) => ({ ...m, answer }));
-            }}
+            placeholder="Write the instant answer shoppers see when they tap this question…"
+            onChange={(answer) => setModal((m) => ({ ...m, answer }))}
+            details={
+              answerTooLong
+                ? "Answer is too long — shorten it to save."
+                : `${htmlTextLength(modal.answer)} characters`
+            }
           />
         </s-stack>
         <s-button
           slot="primary-action"
           variant="primary"
-          disabled={!modal.question.trim()}
+          disabled={!modal.question.trim() || answerTooLong}
           onClick={saveModal}
         >
           Save
         </s-button>
         <s-button slot="secondary-actions" onClick={() => modalEl()?.hideOverlay()}>
+          Cancel
+        </s-button>
+      </s-modal>
+
+      <s-modal id={IMPORT_MODAL_ID} heading="Import from FAQs">
+        <style>{SCROLLBAR_CSS}</style>
+        <s-stack gap="base">
+          {props.faqs.length === 0 ? (
+            <s-paragraph>
+              No published FAQs yet.{" "}
+              <Link to="/app/ai-agent/training?tab=faqs">Create FAQs</Link> first, then import
+              them here as conversation starters.
+            </s-paragraph>
+          ) : (
+            <>
+              <s-text-field
+                label="Search FAQs"
+                labelAccessibilityVisibility="exclusive"
+                placeholder="Search questions"
+                icon="search"
+                value={importQuery}
+                onInput={(e) => setImportQuery(e.currentTarget.value)}
+              />
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <s-text tone="neutral">
+                  {importSelected.size} selected · {selectableIds.length} available
+                </s-text>
+                <s-button
+                  variant="tertiary"
+                  disabled={selectableIds.length === 0}
+                  onClick={() =>
+                    setImportSelected(
+                      selectableIds.every((id) => importSelected.has(id))
+                        ? new Set()
+                        : new Set(selectableIds),
+                    )
+                  }
+                >
+                  {selectableIds.length > 0 && selectableIds.every((id) => importSelected.has(id))
+                    ? "Clear selection"
+                    : "Select all"}
+                </s-button>
+              </div>
+              {/* The FAQ list is the ONLY scroller: capped so the modal body
+                  itself never overflows (two nested scrollbars otherwise). */}
+              <div
+                className="cc-scroll"
+                style={{
+                  maxHeight: "max(140px, min(300px, calc(100vh - 340px)))",
+                  overflowY: "auto",
+                  paddingRight: 4,
+                }}
+              >
+                {importableFaqs.length === 0 ? (
+                  <s-text tone="neutral">No FAQs match your search.</s-text>
+                ) : (
+                  importableFaqs.map((faq, i) => {
+                    const already = existingQuestions.has(normalizeQ(faq.question));
+                    return (
+                      <div
+                        key={faq.id}
+                        style={{
+                          display: "flex",
+                          alignItems: "flex-start",
+                          gap: 10,
+                          padding: "8px 0",
+                          borderTop: i > 0 ? `1px solid ${INK.border}` : "none",
+                          opacity: already ? 0.6 : 1,
+                        }}
+                      >
+                        <s-checkbox
+                          label={faq.question}
+                          labelAccessibilityVisibility="exclusive"
+                          checked={already || importSelected.has(faq.id)}
+                          disabled={already}
+                          onChange={(e) => toggleImport(faq.id, e.currentTarget.checked)}
+                        />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <s-text type="strong">{faq.question}</s-text>
+                          <div
+                            style={{
+                              fontSize: 12.5,
+                              color: INK.muted,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {faq.answerHtml.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim() ||
+                              "No answer"}
+                          </div>
+                        </div>
+                        {already ? <s-badge>Added</s-badge> : null}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </>
+          )}
+        </s-stack>
+        <s-button
+          slot="primary-action"
+          variant="primary"
+          disabled={importSelected.size === 0}
+          onClick={importFaqs}
+        >
+          {importSelected.size > 0 ? `Import ${importSelected.size}` : "Import"}
+        </s-button>
+        <s-button slot="secondary-actions" onClick={() => modalEl(IMPORT_MODAL_ID)?.hideOverlay()}>
           Cancel
         </s-button>
       </s-modal>

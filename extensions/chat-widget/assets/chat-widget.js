@@ -172,6 +172,9 @@
         R = window.ChatConvertRenderer;
         T = window.ChatConvertTransport;
         if (!R || !T) throw new Error("modules missing");
+        // Bot identity (store branding → Settings → General store logo/name;
+        // else default chat icon, no caption).
+        if (R.setAvatar) R.setAvatar(config && config.avatar);
       });
     }
     return modulesPromise;

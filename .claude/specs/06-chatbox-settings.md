@@ -62,6 +62,8 @@ Home screen (blocks show/hide with toggles, empty state), chat screen (welcome b
 - Activate/Deactivate toggles `active` — deactivated widget renders nothing on storefront.
 - Onboarding checklist step "Customize your chatbox widget" (13) completes on first save.
 - All mutations shop-scoped; validation server-side (zod) mirrors UI constraints (lengths, hex colors, url types).
+- Chat avatar (2026-08-17): `avatarMode: store_branding` → widget config `avatar: {url, name}` from Settings → General → Store information ONLY (`storeInfo.logoUrl` / `storeInfo.name`, name defaulting to the Shopify shop name — never the chatbox header logo). Renderer `setAvatar(identity)`: logo image (or name initials on the brand gradient when no logo) as the bot avatar on message bubbles, canned answers and the typing indicator, and the store name as the author caption above bot bubbles (an explicit label like "Team" wins). Off → default chat icon, no caption. Admin preview mirrors it (`storeInfo` from the chatbox loader).
+- Conversation starters (2026-08-17): answers use the app's `RichTextEditor` (`components/ui/RichTextEditor.tsx` — contentEditable + bold/italic/underline/lists/link toolbar, admin-description-editor look; HTML sanitized server-side on save, links get `target=_blank`); "Import from FAQs" modal lists every published FAQ (search, select all, already-added marked) and appends them as starters — the chatbox loader supplies `importableFaqs`.
 
 ## Plan gating
 

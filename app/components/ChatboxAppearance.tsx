@@ -364,11 +364,44 @@ export function ChatboxAppearance(props: {
                 </button>
               </span>
             ) : null}
+            {/* No upload yet → a second, dashed "add icon" rectangle opens the
+                picker (user request 2026-08-17); once uploaded, the chip above
+                takes its place and a small "Change icon" link re-opens it. */}
             <ChatboxUploadButton
               intent="upload-icon"
-              label="Upload icon"
+              label={launcher.customIconUrl ? "Change icon" : "Add icon"}
               accept="image/png,image/svg+xml"
               onUploaded={(url) => setLauncher({ icon: "custom", customIconUrl: url })}
+              renderTrigger={(open, uploading) =>
+                launcher.customIconUrl ? (
+                  <s-button variant="tertiary" disabled={uploading} onClick={open}>
+                    {uploading ? "Uploading…" : "Change icon"}
+                  </s-button>
+                ) : (
+                  <button
+                    type="button"
+                    aria-label="Add icon"
+                    title="Add icon"
+                    disabled={uploading}
+                    onClick={open}
+                    style={{
+                      ...iconChipStyle(false),
+                      border: "1.5px dashed #b5b5bd",
+                      color: "#8a8a93",
+                      background: "var(--s-color-bg-surface-secondary, #f7f7f8)",
+                      opacity: uploading ? 0.6 : 1,
+                    }}
+                  >
+                    {uploading ? (
+                      <span style={{ fontSize: 10 }}>…</span>
+                    ) : (
+                      <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                        <path d="M10 4v12M4 10h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                      </svg>
+                    )}
+                  </button>
+                )
+              }
             />
           </div>
           <s-text tone="neutral">SVG or PNG · square, at least 64×64 px</s-text>

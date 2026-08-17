@@ -43,6 +43,11 @@ export type WidgetConfigPayload =
       /** Active proactive-chat campaigns (spec 12): priority-ordered, premium
        *  templates already filtered server-side by plan. */
       campaigns: WidgetCampaign[];
+      /** Bot/agent identity on message bubbles (Chatbox → Chat avatar, spec 06):
+       *  store_branding → Settings → General → Store information: logo (or the
+       *  name's initials when no logo) as the avatar + name as the author
+       *  caption. null → default chat icon, no caption. */
+      avatar: { url: string | null; name: string } | null;
     };
 
 export async function buildWidgetConfig(
@@ -103,5 +108,12 @@ export async function buildWidgetConfig(
     },
     cartDrawer: config.settings.cartDrawer,
     campaigns,
+    avatar:
+      config.widget.avatarMode === "store_branding"
+        ? {
+            url: config.settings.storeInfo.logoUrl || null,
+            name: config.settings.storeInfo.name.trim() || config.shopName || shopDomain.replace(".myshopify.com", ""),
+          }
+        : null,
   };
 }
