@@ -70,11 +70,17 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
   await boss.work(JOBS.reconcileAll, async () => {
     const shops = await db.shop.findMany({
       where: { uninstalledAt: null },
-      select: { domain: true },
+      select: { id: true, domain: true },
     });
+    const { catalogAutoSyncAllowed } = await import("../ingestion/catalog-sync.server");
     for (const shop of shops) {
-      await boss.send(JOBS.catalogSync, { shopDomain: shop.domain });
-      await boss.send(JOBS.collectionSync, { shopDomain: shop.domain });
+      // Auto sync toggle + plan gate per data type (Products / Collections tabs).
+      if (await catalogAutoSyncAllowed(shop.id, "products")) {
+        await boss.send(JOBS.catalogSync, { shopDomain: shop.domain });
+      }
+      if (await catalogAutoSyncAllowed(shop.id, "collections")) {
+        await boss.send(JOBS.collectionSync, { shopDomain: shop.domain });
+      }
     }
   });
   await boss.schedule(JOBS.reconcileAll, "17 3 * * *", {}, {}).catch((error: unknown) => {

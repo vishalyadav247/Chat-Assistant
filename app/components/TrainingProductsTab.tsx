@@ -3,10 +3,10 @@ import type { ProductDetail, ProductRow, TrainingActionResult } from "../routes/
 import { DataTable } from "./DataTable";
 import { BrowseModalShell, BrowseThumb } from "./BrowseProductsModal";
 import {
+  AutoSyncControl,
   LearnCard,
   StatusBadge,
   SubTabs,
-  formatDateTime,
   useSyncWatcher,
   useTrainingFetcher,
 } from "./TrainingShared";
@@ -14,9 +14,10 @@ import { BRAND } from "./ui/tokens";
 
 // Products tab (spec 07, design #viewTraining → Products): learn card with
 // master switch, manage card (Sync / disabled Manage metafields), sub-tabs
-// All/Active/Inactive, table with per-row learn toggle + read-only view modal.
+// All/Active/Inactive + Learning on/off (2026-08-17), table with per-row learn
+// toggle + read-only view modal (row click opens it too).
 
-type SubTab = "all" | "active" | "inactive";
+type SubTab = "all" | "active" | "inactive" | "learning_on" | "learning_off";
 
 export function TrainingProductsTab(props: {
   rows: ProductRow[];
@@ -28,6 +29,10 @@ export function TrainingProductsTab(props: {
   /** Master "Learn products" permission (ShopSettings.learn.products) —
    *  independent of per-row learnEnabled, which applies only when this is on. */
   masterEnabled: boolean;
+  /** Plan feature `catalog_auto_sync` (Pro+) — toggle is locked when false. */
+  autoSyncAvailable: boolean;
+  /** ShopSettings.catalogAutoSync.products — daily full re-sync (webhooks unaffected). */
+  autoSyncEnabled: boolean;
 }) {
   const { submit, pendingIntent } = useTrainingFetcher();
   const syncWatch = useSyncWatcher(props.lastSyncedAt, "Products synced");
@@ -41,10 +46,18 @@ export function TrainingProductsTab(props: {
   });
 
   const rows = useMemo(() => {
-    if (subTab === "all") return props.rows;
-    return props.rows.filter((row) =>
-      subTab === "active" ? row.status === "active" : row.status !== "active",
-    );
+    switch (subTab) {
+      case "active":
+        return props.rows.filter((row) => row.status === "active");
+      case "inactive":
+        return props.rows.filter((row) => row.status !== "active");
+      case "learning_on":
+        return props.rows.filter((row) => row.learnEnabled);
+      case "learning_off":
+        return props.rows.filter((row) => !row.learnEnabled);
+      default:
+        return props.rows;
+    }
   }, [props.rows, subTab]);
 
   const openDetail = (row: ProductRow) => {
@@ -71,20 +84,26 @@ export function TrainingProductsTab(props: {
 
       <s-section heading="Manage data">
         <s-stack gap="base">
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
-            <div style={{ flex: 1, minWidth: 220 }}>
-              <s-text tone="neutral">
-                Auto sync: Daily · Last updated: {formatDateTime(props.lastSyncedAt)}
-                {props.syncStatus === "running" ? " · Sync running…" : ""}
-              </s-text>
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
+          <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="start">
+            <AutoSyncControl
+              type="products"
+              available={props.autoSyncAvailable}
+              enabled={props.autoSyncEnabled}
+              busy={pendingIntent === "catalog-autosync"}
+              lastSyncedAt={props.lastSyncedAt}
+              running={props.syncStatus === "running" || syncWatch.syncing}
+              onChange={(enabled) =>
+                submit("catalog-autosync", { type: "products", enabled: enabled ? "true" : "false" })
+              }
+            />
+            <s-stack direction="inline" gap="small-200" alignItems="center">
               <s-button disabled={true}>
                 Manage metafields
                 <s-tooltip>Coming soon</s-tooltip>
               </s-button>
               <s-button
                 variant="primary"
+                icon="refresh"
                 loading={syncWatch.syncing || pendingIntent === "sync-products"}
                 onClick={() => {
                   submit("sync-products");
@@ -93,8 +112,8 @@ export function TrainingProductsTab(props: {
               >
                 Sync products
               </s-button>
-            </div>
-          </div>
+            </s-stack>
+          </s-grid>
 
           <DataTable
             rows={rows}
@@ -105,12 +124,15 @@ export function TrainingProductsTab(props: {
             }
             emptyMessage="No products found. Run a sync to import your catalog."
             perPage={10}
+            onRowClick={openDetail}
             toolbar={
               <SubTabs
                 tabs={[
                   { id: "all", label: "All" },
                   { id: "active", label: "Active" },
                   { id: "inactive", label: "Inactive" },
+                  { id: "learning_on", label: "Learning on" },
+                  { id: "learning_off", label: "Learning off" },
                 ]}
                 active={subTab}
                 onChange={setSubTab}
@@ -143,26 +165,26 @@ export function TrainingProductsTab(props: {
                 key: "product",
                 title: "Product",
                 render: (row) => (
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+                  <s-stack direction="inline" alignItems="center" gap="small-200">
                     <BrowseThumb imageUrl={row.imageUrl} title={row.title} />
-                    <span style={{ fontWeight: 600 }}>{row.title}</span>
-                  </span>
+                    <s-text type="strong">{row.title}</s-text>
+                  </s-stack>
                 ),
               },
               {
                 key: "tags",
                 title: "Tags",
                 render: (row) => (
-                  <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
+                  <s-stack direction="inline" gap="small-400">
                     {row.tags.slice(0, 3).map((tag) => (
                       <s-badge key={tag} tone="neutral">
                         {tag}
                       </s-badge>
                     ))}
                     {row.tags.length > 3 ? (
-                      <s-text tone="neutral">+{row.tags.length - 3}</s-text>
+                      <s-text color="subdued">+{row.tags.length - 3}</s-text>
                     ) : null}
-                  </span>
+                  </s-stack>
                 ),
               },
               {
@@ -173,6 +195,7 @@ export function TrainingProductsTab(props: {
               {
                 key: "learn",
                 title: "AI Learn",
+                width: 110, // keeps the heading on one line
                 render: (row) => (
                   <s-switch
                     label={`Learn ${row.title}`}
@@ -210,9 +233,9 @@ export function TrainingProductsTab(props: {
         title="View product"
         onClose={() => setDetailOpen(false)}
         footer={
-          <span style={{ marginLeft: "auto" }}>
+          <s-stack direction="inline" justifyContent="end">
             <s-button onClick={() => setDetailOpen(false)}>Close</s-button>
-          </span>
+          </s-stack>
         }
       >
         {!detail ? (
@@ -254,9 +277,9 @@ export function TrainingProductsTab(props: {
             <ViewRow label="Description">{detail.description || "—"}</ViewRow>
 
             <s-heading>Tags</s-heading>
-            <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
+            <s-stack direction="inline" gap="small-400">
               {detail.tags.length === 0 ? (
-                <s-text tone="neutral">—</s-text>
+                <s-text color="subdued">—</s-text>
               ) : (
                 detail.tags.map((tag) => (
                   <s-badge key={tag} tone="neutral">
@@ -264,7 +287,7 @@ export function TrainingProductsTab(props: {
                   </s-badge>
                 ))
               )}
-            </span>
+            </s-stack>
 
             <s-heading>Prices</s-heading>
             <ViewTable
@@ -297,22 +320,15 @@ export function TrainingProductsTab(props: {
 
 function ViewRow(props: { label: string; children: React.ReactNode }) {
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "140px 1fr",
-        gap: 16,
-        padding: "10px 0",
-        borderBottom: "1px solid var(--s-color-border-secondary, #f1f1f1)",
-        fontSize: 13,
-        alignItems: "start",
-      }}
-    >
-      <span style={{ fontWeight: 600, color: "var(--s-color-text-secondary, #6b6b73)" }}>
-        {props.label}
-      </span>
-      <span>{props.children}</span>
-    </div>
+    <s-stack gap="small-200">
+      <s-grid gridTemplateColumns="140px 1fr" gap="base" alignItems="start">
+        <s-text color="subdued" type="strong">
+          {props.label}
+        </s-text>
+        <s-text>{props.children}</s-text>
+      </s-grid>
+      <s-divider />
+    </s-stack>
   );
 }
 

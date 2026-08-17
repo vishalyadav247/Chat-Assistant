@@ -24,7 +24,8 @@
     "widget:size": "tsx scripts/check-widget-size.ts",
     "migrate:new": "prisma migrate dev --create-only && tsx scripts/scrub-migration.ts && prisma migrate deploy && prisma generate",
     "dev:stop": "powershell -NoProfile -Command \"foreach ($p in 3000, 9292, 9293, 5555) { try { Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction Stop | ForEach-Object { Write-Host ('Killing PID ' + $_.OwningProcess + ' on port ' + $p); Stop-Process -Id $_.OwningProcess -Force } } catch {} }; Get-Process query-engine-windows -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '*chat-convert*' } | ForEach-Object { Write-Host ('Killing orphaned Prisma engine PID ' + $_.Id); Stop-Process -Id $_.Id -Force }; exit 0\"",
-    "dev:tunnel": "powershell -NoProfile -Command \"try { $r = Invoke-RestMethod http://127.0.0.1:20241/quicktunnel -TimeoutSec 2 } catch { Write-Host 'cloudflared is not running. Start it first (leave it running all day):'; Write-Host '  cloudflared tunnel --url http://localhost:3000 --metrics 127.0.0.1:20241'; exit 1 }; Write-Host ('Using tunnel https://' + $r.hostname); npm run dev -- --tunnel-url ('https://' + $r.hostname + ':3000')\""
+    "dev:tunnel": "powershell -NoProfile -Command \"try { $r = Invoke-RestMethod http://127.0.0.1:20241/quicktunnel -TimeoutSec 2 } catch { Write-Host 'cloudflared is not running. Start it first (leave it running all day):'; Write-Host '  cloudflared tunnel --url http://localhost:3000 --metrics 127.0.0.1:20241'; exit 1 }; Write-Host ('Using tunnel https://' + $r.hostname); npm run dev -- --tunnel-url ('https://' + $r.hostname + ':3000')\"",
+    "eval:golden": "tsx scripts/eval-golden.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

@@ -2,9 +2,9 @@ import { useMemo, useState } from "react";
 import type { CollectionRow } from "../routes/app.ai-agent.training";
 import { DataTable } from "./DataTable";
 import {
+  AutoSyncControl,
   LearnCard,
   SubTabs,
-  formatDateTime,
   useSyncWatcher,
   useTrainingFetcher,
 } from "./TrainingShared";
@@ -21,6 +21,10 @@ export function TrainingCollectionsTab(props: {
   /** Master "Learn collections" permission (ShopSettings.learn.collections) —
    *  independent of per-row learnEnabled, which applies only when this is on. */
   masterEnabled: boolean;
+  /** Plan feature `catalog_auto_sync` (Pro+) — toggle is locked when false. */
+  autoSyncAvailable: boolean;
+  /** ShopSettings.catalogAutoSync.collections — daily full re-sync (webhooks unaffected). */
+  autoSyncEnabled: boolean;
 }) {
   const { submit, pendingIntent } = useTrainingFetcher();
   const syncWatch = useSyncWatcher(props.lastSyncedAt, "Collections synced");
@@ -48,14 +52,21 @@ export function TrainingCollectionsTab(props: {
 
       <s-section heading="Manage data">
         <s-stack gap="base">
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
-            <div style={{ flex: 1, minWidth: 220 }}>
-              <s-text tone="neutral">
-                Auto sync: Daily · Last updated: {formatDateTime(props.lastSyncedAt)}
-              </s-text>
-            </div>
+          <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="start">
+            <AutoSyncControl
+              type="collections"
+              available={props.autoSyncAvailable}
+              enabled={props.autoSyncEnabled}
+              busy={pendingIntent === "catalog-autosync"}
+              lastSyncedAt={props.lastSyncedAt}
+              running={syncWatch.syncing}
+              onChange={(enabled) =>
+                submit("catalog-autosync", { type: "collections", enabled: enabled ? "true" : "false" })
+              }
+            />
             <s-button
               variant="primary"
+              icon="refresh"
               loading={syncWatch.syncing || pendingIntent === "sync-collections"}
               onClick={() => {
                 submit("sync-collections");
@@ -64,7 +75,7 @@ export function TrainingCollectionsTab(props: {
             >
               Sync collections
             </s-button>
-          </div>
+          </s-grid>
 
           <DataTable
             rows={rows}
@@ -72,6 +83,7 @@ export function TrainingCollectionsTab(props: {
             searchFn={(row, q) => row.title.toLowerCase().includes(q)}
             emptyMessage="No collections found. Run a sync to import them."
             perPage={10}
+            hoverable
             toolbar={
               <SubTabs
                 tabs={[
@@ -109,7 +121,7 @@ export function TrainingCollectionsTab(props: {
               {
                 key: "title",
                 title: "Title",
-                render: (row) => <span style={{ fontWeight: 600 }}>{row.title}</span>,
+                render: (row) => <s-text type="strong">{row.title}</s-text>,
               },
               {
                 key: "description",
@@ -137,7 +149,7 @@ export function TrainingCollectionsTab(props: {
               {
                 key: "learn",
                 title: "AI Learn",
-                align: "end",
+                width: 110, // keeps the heading on one line; left-aligned like the other tabs
                 render: (row) => (
                   <s-switch
                     label={`Learn ${row.title}`}

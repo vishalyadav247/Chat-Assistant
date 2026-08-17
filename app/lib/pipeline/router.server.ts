@@ -22,10 +22,14 @@ export async function route(args: {
   bannedTopics: string[];
   storeScope: string;
 }): Promise<RouteResult> {
-  const system =
-    ROUTER +
-    `\nBANNED TOPICS: ${args.bannedTopics.join(", ") || "(none)"}` +
-    `\nSTORE SCOPE: ${args.storeScope || "this store's products and services"}`;
+  // Mirror the validated demo (chatconvert_ui.py route()): the BANNED TOPICS /
+  // STORE SCOPE lines are appended ONLY when the merchant configured them.
+  // Injecting a generic scope made the router flag off_topic far more often.
+  const banned = args.bannedTopics.map((t) => t.trim()).filter(Boolean);
+  const scope = args.storeScope.trim();
+  let system = ROUTER;
+  if (banned.length > 0) system += `\nBANNED TOPICS: ${banned.join(", ")}`;
+  if (scope) system += `\nSTORE SCOPE: ${scope}`;
 
   const messages: ChatMessage[] = [
     { role: "system", content: system },

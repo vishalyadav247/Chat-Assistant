@@ -191,6 +191,12 @@ export const shopSettingsSchema = z.object({
   retentionDays: z.union([z.literal(0), z.literal(7), z.literal(30), z.literal(60), z.literal(90)]).catch(0), // 0 = forever
   /** Real-time discount webhook sync (spec 02, Pro+ plan gate applies on top). */
   discountRealtime: z.boolean().catch(true),
+  /** Catalog auto sync (Products / Collections tabs, 2026-08-17): the DAILY
+   *  full re-sync only — Shopify webhooks always apply immediately and manual
+   *  "Sync now" always works. Plan-gated (`catalog_auto_sync`, Pro+) on top. */
+  catalogAutoSync: z
+    .object({ products: z.boolean().catch(true), collections: z.boolean().catch(true) })
+    .catch({ products: true, collections: true }),
   /** AI recommendation rules (spec 08 Rules card). excludeOutOfStock OFF lets
    *  unavailable products appear in recommendation cards. */
   recommendationRules: z
@@ -236,11 +242,11 @@ const replyTime = z.enum(["24h", "12h", "48h", "same_day"]).catch("24h");
 export const handoverConfigSchema = z.object({
   triggers: z
     .object({
-      cannotAnswer: z.object({ enabled: z.boolean().catch(true), threshold: z.number().int().min(1).max(10).catch(2) }).catch({ enabled: true, threshold: 2 }),
-      repeatedQuestion: z.object({ enabled: z.boolean().catch(true), threshold: z.number().int().min(2).max(10).catch(2) }).catch({ enabled: true, threshold: 2 }),
+      cannotAnswer: z.object({ enabled: z.boolean().catch(true), threshold: z.number().int().min(1).max(10).catch(3) }).catch({ enabled: true, threshold: 3 }),
+      repeatedQuestion: z.object({ enabled: z.boolean().catch(true), threshold: z.number().int().min(2).max(10).catch(3) }).catch({ enabled: true, threshold: 3 }),
       negativeSentiment: z.object({ enabled: z.boolean().catch(false) }).catch({ enabled: false }),
     })
-    .catch({ cannotAnswer: { enabled: true, threshold: 2 }, repeatedQuestion: { enabled: true, threshold: 2 }, negativeSentiment: { enabled: false } }),
+    .catch({ cannotAnswer: { enabled: true, threshold: 3 }, repeatedQuestion: { enabled: true, threshold: 3 }, negativeSentiment: { enabled: false } }),
   intentRules: z.array(z.object({ topic: z.string().max(150) })).max(20).catch([]),
   destination: z.enum(["inbox", "collect_email", "contact_methods"]).catch("inbox"),
   inbox: z
@@ -256,14 +262,14 @@ export const handoverConfigSchema = z.object({
           postSubmitMessage: z.string().max(300).catch("Thanks — our team will follow up soon."),
         })
         .catch({ replyTime: "24h", collect: collectFields.parse({}), formMessage: "Leave your details and we'll get back to you.", postSubmitMessage: "Thanks — our team will follow up soon." }),
-      aiWhileWaiting: z.enum(["never", "outside_hours", "always"]).catch("outside_hours"),
+      aiWhileWaiting: z.enum(["never", "outside_hours", "always"]).catch("always"),
     })
     .catch({
       onlineAskMessage: "Would you like me to connect you with our team?",
       afterHandoverMessage: "You're connected — a team member will reply here shortly.",
       offlineMode: "leave_message",
       leaveMessage: { replyTime: "24h", collect: collectFields.parse({}), formMessage: "Leave your details and we'll get back to you.", postSubmitMessage: "Thanks — our team will follow up soon." },
-      aiWhileWaiting: "outside_hours",
+      aiWhileWaiting: "always",
     }),
   collectEmail: z
     .object({

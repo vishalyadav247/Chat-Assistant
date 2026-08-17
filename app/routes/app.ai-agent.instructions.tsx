@@ -339,11 +339,7 @@ export default function InstructionsPage() {
           tabs={TABS}
           activeTab={tab}
           onTabChange={setTab}
-          toolbar={
-            <s-button variant="tertiary" onClick={() => navigate("/app/ai-agent/test")}>
-              Test AI
-            </s-button>
-          }
+          toolbar={<s-button onClick={() => navigate("/app/ai-agent/test")}>Test AI</s-button>}
         />
 
         {tab === "general" ? (

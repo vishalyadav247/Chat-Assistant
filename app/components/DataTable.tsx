@@ -32,6 +32,10 @@ export function DataTable<Row extends { id: string }>(props: {
   /** Rich empty state (icon/title/action) — overrides emptyMessage rendering. */
   empty?: React.ReactNode;
   onRowClick?: (row: Row) => void;
+  /** Whole-row hover highlight without a row action. Polaris only paints row
+   *  hover for rows with a click delegate (the tr lives in shadow DOM, so no
+   *  external CSS can), so this wires a no-op delegate. */
+  hoverable?: boolean;
   /** Initial rows per page (default 10). */
   perPage?: number;
   toolbar?: React.ReactNode;
@@ -89,6 +93,8 @@ export function DataTable<Row extends { id: string }>(props: {
     props.onPageChange?.(next);
   };
   const showPerPageSelector = props.perPageSelector ?? true;
+  // hoverable → same delegate wiring as a real row click, with a no-op handler.
+  const onRowClick = props.onRowClick ?? (props.hoverable ? () => {} : undefined);
 
   const filtered = useMemo(() => {
     if (!query.trim() || !props.searchFn) return props.rows;
@@ -293,7 +299,9 @@ export function DataTable<Row extends { id: string }>(props: {
               <s-table-header key={col.key} format={col.align === "end" ? "numeric" : "base"}>
                 {/* The shadow th's padding/height are fixed (28px), so padded
                     light-DOM content is what makes the header row taller. */}
-                <span style={{ display: "inline-block", padding: "6px 0" }}>{col.title}</span>
+                <span style={{ display: "inline-block", padding: "6px 0", whiteSpace: "nowrap" }}>
+                  {col.title}
+                </span>
               </s-table-header>
             ))}
             {props.rowActions ? <s-table-header /> : null}
@@ -308,20 +316,20 @@ export function DataTable<Row extends { id: string }>(props: {
               // nothing double-fires.
               <s-table-row
                 key={row.id}
-                clickDelegate={props.onRowClick ? `dtrow-${row.id}` : undefined}
+                clickDelegate={onRowClick ? `dtrow-${row.id}` : undefined}
                 ref={
-                  props.onRowClick
+                  onRowClick
                     ? (el: HTMLElement | null) => {
                         if (!el) return;
                         el.onclick = (e) => {
                           const target = e.target as HTMLElement;
                           if (
                             target.closest(
-                              "button, a, input, label, s-button, s-checkbox, s-clickable, s-link, .dt-row-actions",
+                              "button, a, input, label, s-button, s-checkbox, s-clickable, s-link, s-switch, .dt-row-actions",
                             )
                           )
                             return;
-                          props.onRowClick!(row);
+                          onRowClick(row);
                         };
                       }
                     : undefined
@@ -339,8 +347,8 @@ export function DataTable<Row extends { id: string }>(props: {
                 ) : null}
                 {props.columns.map((col, i) => (
                   <s-table-cell key={col.key}>
-                    {i === 0 && props.onRowClick ? (
-                      <s-clickable id={`dtrow-${row.id}`} onClick={() => props.onRowClick!(row)}>
+                    {i === 0 && onRowClick ? (
+                      <s-clickable id={`dtrow-${row.id}`} onClick={() => onRowClick(row)}>
                         {col.render(row)}
                       </s-clickable>
                     ) : (

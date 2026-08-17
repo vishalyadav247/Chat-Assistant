@@ -3,13 +3,18 @@ import { getLlmProvider, type ChatMessage } from "../llm/index.server";
 import { requireShopId } from "../tenancy.server";
 import { SUMMARY_SYSTEM } from "./prompts";
 
-// Conversation history (spec 03): rolling summary + recent-verbatim windows —
-// 10 messages for the router, 6 for generation. Summary refreshed when the
+// Conversation history (spec 03): rolling summary + recent-verbatim window —
+// the last 10 messages for BOTH the router and generation (the validated demo
+// sends the same window to every call). Summary refreshed when the
 // older-than-window count has grown by ~4 since the last refresh; cached on
 // the conversation row. Retrieval never uses history (current message only).
+//
+// The current shopper message is persisted BEFORE history is loaded (handover's
+// repeat detector needs it in the DB), so callers pass its id to keep it out of
+// the window — otherwise every LLM call would see the message twice.
 
 export const ROUTER_WINDOW = 10;
-export const GENERATION_WINDOW = 6;
+export const GENERATION_WINDOW = 10;
 const SUMMARY_REFRESH_EVERY = 4;
 
 export interface HistoryBundle {
@@ -17,7 +22,11 @@ export interface HistoryBundle {
   generationHistory: ChatMessage[];
 }
 
-export async function loadHistory(shopId: string, conversationId: string): Promise<HistoryBundle> {
+export async function loadHistory(
+  shopId: string,
+  conversationId: string,
+  opts: { excludeMessageId?: string } = {},
+): Promise<HistoryBundle> {
   requireShopId(shopId);
   const convo = await db.conversation.findFirst({
     where: { id: conversationId, shopId },
@@ -25,13 +34,18 @@ export async function loadHistory(shopId: string, conversationId: string): Promi
   });
   if (!convo) return { routerHistory: [], generationHistory: [] };
 
-  const rows = await db.message.findMany({
-    where: { conversationId, shopId, role: { in: ["in", "out"] } },
+  const fetched = await db.message.findMany({
+    where: {
+      conversationId,
+      shopId,
+      role: { in: ["in", "out"] },
+      ...(opts.excludeMessageId ? { id: { not: opts.excludeMessageId } } : {}),
+    },
     orderBy: { createdAt: "desc" },
     take: ROUTER_WINDOW + 40, // window + summarization lookback
     select: { role: true, content: true },
   });
-  rows.reverse();
+  const rows = fetched.reverse();
 
   const recent = rows.slice(-ROUTER_WINDOW);
   const olderCount = Math.max(0, rows.length - ROUTER_WINDOW);

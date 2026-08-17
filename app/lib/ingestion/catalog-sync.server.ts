@@ -4,12 +4,13 @@ import db from "../../db.server";
 import { unauthenticated } from "../../shopify.server";
 import { recordEvent } from "../analytics/events.server";
 import { getQuota } from "../billing/plans.server";
-import { embedTexts, toSqlVector } from "../embeddings/embedding.server";
+import { embedTexts, productEmbeddingText, toSqlVector } from "../embeddings/embedding.server";
 import { env } from "../env.server";
 import { requireShopId, resolveShopId } from "../tenancy.server";
 
 // Catalog sync (spec 02). Full paged sync + webhook-driven single upserts.
-// Re-embeds ONLY when title/description changed (contentHash).
+// Re-embeds ONLY when the embedding text (title/type/vendor/tags/description)
+// changed — contentHash over productEmbeddingText().
 
 const PRODUCTS_QUERY = `#graphql
   query CatalogSyncProducts($cursor: String) {
@@ -143,6 +144,24 @@ export async function fullCatalogSync(shopDomain: string): Promise<void> {
   }
 }
 
+/**
+ * Catalog auto sync gate (Products / Collections tabs toggle, 2026-08-17):
+ * plan feature `catalog_auto_sync` AND the merchant's ShopSettings toggle.
+ * Governs ONLY the daily full reconcile (user decision 2026-08-17): Shopify
+ * webhooks (create/update/delete) always apply immediately, and the manual
+ * "Sync now" button always works.
+ */
+export async function catalogAutoSyncAllowed(
+  shopId: string,
+  type: "products" | "collections",
+): Promise<boolean> {
+  const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
+  const { hasFeature } = await import("../billing/plans.server");
+  if (!hasFeature(shop?.plan ?? "free", "catalog_auto_sync")) return false;
+  const { loadShopSettings } = await import("../settings/save.server");
+  return (await loadShopSettings(shopId)).catalogAutoSync[type];
+}
+
 export async function upsertProductFromWebhook(shopDomain: string, payload: unknown): Promise<void> {
   const shopId = requireShopId(await resolveShopId(shopDomain));
   const p = payload as {
@@ -208,13 +227,14 @@ export async function deleteProductFromWebhook(shopDomain: string, payload: unkn
   await db.product.deleteMany({ where: { shopId, shopifyProductId } });
 }
 
-/** Upsert rows, then (re-)embed only those whose title+description changed. */
+/** Upsert rows, then (re-)embed only those whose embedding text changed. */
 async function upsertProducts(shopId: string, products: SyncedProduct[]): Promise<void> {
   if (products.length === 0) return;
   const toEmbed: { id: string; text: string }[] = [];
 
   for (const product of products) {
-    const contentHash = hash(`${product.title}\n${product.description}`);
+    const embeddingText = productEmbeddingText(product);
+    const contentHash = hash(embeddingText);
     const { variants, ...fields } = product;
     const variantsJson = (variants ?? []) as unknown as Prisma.InputJsonValue;
     const existing = await db.product.findUnique({
@@ -227,11 +247,17 @@ async function upsertProducts(shopId: string, products: SyncedProduct[]): Promis
       create: { ...fields, variants: variantsJson, shopId, contentHash },
     });
     if (!existing || existing.contentHash !== contentHash) {
-      toEmbed.push({ id: row.id, text: `${product.title}. ${product.description}` });
+      toEmbed.push({ id: row.id, text: embeddingText });
     }
   }
 
-  if (toEmbed.length === 0 || !env().OPENAI_API_KEY) return;
+  if (toEmbed.length === 0) return;
+  if (!env().OPENAI_API_KEY) {
+    // Never silent: rows keep embedding NULL and are invisible to vector search.
+    console.warn(`embedding_skipped shop=${shopId} products=${toEmbed.length} (no OPENAI_API_KEY)`);
+    await recordEvent(shopId, "embedding_skipped", { products: toEmbed.length });
+    return;
+  }
   const vectors = await embedTexts(toEmbed.map((e) => e.text));
   for (let i = 0; i < toEmbed.length; i++) {
     await db.$executeRaw(Prisma.sql`

@@ -323,6 +323,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       realtime: hasFeature(plan, "discount_realtime_sync"),
       realtimeEnabled: shopSettings.discountRealtime,
     },
+    // Catalog auto sync (Products / Collections tabs, 2026-08-17): same shape —
+    // plan feature availability + the merchant's per-type toggle.
+    catalogGate: {
+      available: hasFeature(plan, "catalog_auto_sync"),
+      products: shopSettings.catalogAutoSync.products,
+      collections: shopSettings.catalogAutoSync.collections,
+    },
     // Master training permissions (spec 07) — the Learn card switches.
     learnMaster: shopSettings.learn,
   };
@@ -413,6 +420,34 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
           intent,
           ok: true,
           message: enabled ? "Real-time discount sync on" : "Real-time discount sync off",
+        };
+      }
+      case "catalog-autosync": {
+        // Auto sync toggle per data type (daily full re-sync only; webhooks unaffected).
+        const type = str("type");
+        if (type !== "products" && type !== "collections")
+          return { intent, ok: false, error: "Unknown sync type" };
+        const enabled = str("enabled") === "true";
+        requirePlan(
+          (await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } }))?.plan ??
+            "free",
+          "catalog_auto_sync",
+        );
+        const current = await loadShopSettings(shopId);
+        const validated = shopSettingsSchema.parse({
+          ...current,
+          catalogAutoSync: { ...current.catalogAutoSync, [type]: enabled },
+        });
+        await db.shopSettings.upsert({
+          where: { shopId },
+          update: { settings: validated as unknown as Prisma.InputJsonObject },
+          create: { shopId, settings: validated as unknown as Prisma.InputJsonObject },
+        });
+        invalidateShopConfig(shopId);
+        return {
+          intent,
+          ok: true,
+          message: enabled ? `Auto sync for ${type} on` : `Auto sync for ${type} off`,
         };
       }
       case "learn-master": {
@@ -895,11 +930,7 @@ export default function TrainingDataPage() {
           tabs={TABS}
           activeTab={tab}
           onTabChange={setTab}
-          toolbar={
-            <s-button variant="tertiary" onClick={() => navigate("/app/ai-agent/test")}>
-              Test AI
-            </s-button>
-          }
+          toolbar={<s-button onClick={() => navigate("/app/ai-agent/test")}>Test AI</s-button>}
         />
 
         {tab === "products" ? (
@@ -911,6 +942,8 @@ export default function TrainingDataPage() {
             syncStatus={data.sync.status}
             currency={data.shop.currency}
             masterEnabled={data.learnMaster.products}
+            autoSyncAvailable={data.catalogGate.available}
+            autoSyncEnabled={data.catalogGate.products}
           />
         ) : null}
         {tab === "collections" ? (
@@ -918,6 +951,8 @@ export default function TrainingDataPage() {
             rows={data.collections}
             lastSyncedAt={data.sync.collectionSyncAt}
             masterEnabled={data.learnMaster.collections}
+            autoSyncAvailable={data.catalogGate.available}
+            autoSyncEnabled={data.catalogGate.collections}
           />
         ) : null}
         {tab === "discounts" ? (

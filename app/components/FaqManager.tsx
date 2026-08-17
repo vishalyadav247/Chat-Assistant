@@ -4,6 +4,7 @@ import type { TrainingActionResult } from "../routes/app.ai-agent.training";
 import { BrowseModalShell } from "./BrowseProductsModal";
 import { downloadText, useTrainingFetcher } from "./TrainingShared";
 import { ConfirmDeleteModal } from "./ui/ConfirmDeleteModal";
+import { htmlTextLength, RichTextEditor } from "./ui/RichTextEditor";
 
 // FAQs tab (spec 07, design #viewTraining → FAQs): toolbar (import / export /
 // add FAQ / add category), search + Status/Featured filters, category tree
@@ -467,9 +468,6 @@ export function FaqManager(props: {
                 status={category.status}
                 featured={category.featured}
                 onOpen={() => openEditCategory(category)}
-                onFeature={(next) =>
-                  submit("category-feature", { id: category.id, featured: String(next) })
-                }
                 onKeyMove={(direction) =>
                   submit("category-move", { id: category.id, direction })
                 }
@@ -524,9 +522,6 @@ export function FaqManager(props: {
                       status={faq.status}
                       featured={faq.featured}
                       onOpen={() => openEditFaq(faq, category.id)}
-                      onFeature={(next) =>
-                        submit("faq-feature", { id: faq.id, featured: String(next) })
-                      }
                       onKeyMove={(direction) => submit("faq-move", { id: faq.id, direction })}
                       busy={busy}
                       drag={{
@@ -595,7 +590,7 @@ export function FaqManager(props: {
                 <s-button onClick={() => setFaqDraft(null)}>Cancel</s-button>
                 <s-button
                   variant="primary"
-                  disabled={busy || !faqDraft.question.trim()}
+                  disabled={busy || !faqDraft.question.trim() || faqDraft.answerHtml.length > 20_000}
                   loading={pendingIntent === "faq-save"}
                   onClick={() =>
                     submit("faq-save", {
@@ -618,12 +613,19 @@ export function FaqManager(props: {
               maxLength={500}
               onInput={(e) => setFaqDraft({ ...faqDraft, question: e.currentTarget.value })}
             />
-            <s-text-area
+            {/* Same rich-text editor as conversation-starter answers (2026-08-17);
+                HTML is sanitized server-side on save (faq.server.ts). */}
+            <RichTextEditor
               label="Answer"
-              details="Basic HTML formatting is kept (bold, lists, links) — a rich-text editor is coming."
               rows={7}
               value={faqDraft.answerHtml}
-              onInput={(e) => setFaqDraft({ ...faqDraft, answerHtml: e.currentTarget.value })}
+              placeholder="Write the answer shoppers see when they open this question…"
+              onChange={(answerHtml) => setFaqDraft({ ...faqDraft, answerHtml })}
+              details={
+                faqDraft.answerHtml.length > 20_000
+                  ? "Answer is too long — shorten it to save."
+                  : `${htmlTextLength(faqDraft.answerHtml)} characters`
+              }
             />
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
               <s-select
@@ -953,7 +955,6 @@ function TreeRow(props: {
   busy: boolean;
   /** Open the edit modal — fires on a click anywhere on the row. */
   onOpen: () => void;
-  onFeature: (next: boolean) => void;
   /** Keyboard fallback for drag reorder (ArrowUp/ArrowDown on the handle). */
   onKeyMove: (direction: "up" | "down") => void;
   drag: TreeRowDrag;
@@ -1043,16 +1044,14 @@ function TreeRow(props: {
         </s-badge>
       </span>
       <span style={{ textAlign: "center" }}>
-        <button
-          type="button"
-          aria-label={props.featured ? "Remove from featured" : "Mark as featured"}
-          aria-pressed={props.featured}
-          disabled={props.busy}
-          onClick={() => props.onFeature(!props.featured)}
+        {/* Display-only indicator (user decision 2026-08-17): featured is
+            changed in the edit modal's checkbox, not by clicking the row.
+            Clicking the star falls through to the row → opens that modal. */}
+        <span
+          role="img"
+          aria-label={props.featured ? "Featured" : "Not featured"}
+          title={props.featured ? "Featured — edit to change" : "Not featured — edit to change"}
           style={{
-            border: "none",
-            background: "none",
-            cursor: "pointer",
             display: "inline-flex",
             alignItems: "center",
             padding: 4,
@@ -1061,8 +1060,8 @@ function TreeRow(props: {
           }}
         >
           {/* Inline SVG star: s-icon paints its own palette and ignores the
-              button's color (tone="auto" included), so the yellow featured
-              state needs a glyph we control. Shape mirrors Polaris star. */}
+              parent's color, so the yellow featured state needs a glyph we
+              control. Shape mirrors Polaris star. */}
           <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true">
             <path
               d="M10 2 L12 7.25 L17.61 7.53 L13.23 11.05 L14.7 16.47 L10 13.4 L5.3 16.47 L6.77 11.05 L2.39 7.53 L8 7.25 Z"
@@ -1072,7 +1071,7 @@ function TreeRow(props: {
               strokeLinejoin="round"
             />
           </svg>
-        </button>
+        </span>
       </span>
     </div>
   );

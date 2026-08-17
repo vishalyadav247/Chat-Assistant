@@ -22,49 +22,11 @@ const REPLY_TIMES: { value: LeaveMessageData["replyTime"]; label: string }[] = [
 
 function Counter(props: { value: string; max: number }) {
   return (
-    <div style={{ textAlign: "right" }}>
-      <s-text tone="neutral">
+    <s-stack direction="inline" justifyContent="end">
+      <s-text color="subdued" fontVariantNumeric="tabular-nums">
         {props.value.length}/{props.max}
       </s-text>
-    </div>
-  );
-}
-
-function RadioRow(props: {
-  name: string;
-  checked: boolean;
-  title: React.ReactNode;
-  description?: React.ReactNode;
-  onSelect: () => void;
-  children?: React.ReactNode;
-}) {
-  return (
-    <div
-      style={{
-        border: "1px solid var(--s-color-border, #e3e3e3)",
-        borderRadius: 12,
-        padding: "12px 14px",
-      }}
-    >
-      <label style={{ display: "flex", gap: 10, cursor: "pointer", alignItems: "flex-start" }}>
-        <input
-          type="radio"
-          name={props.name}
-          checked={props.checked}
-          onChange={props.onSelect}
-          style={{ marginTop: 3 }}
-        />
-        <span style={{ flex: 1, minWidth: 0 }}>
-          <span style={{ display: "block", fontWeight: 600, fontSize: 13.5 }}>{props.title}</span>
-          {props.description ? (
-            <s-text tone="neutral">{props.description}</s-text>
-          ) : null}
-        </span>
-      </label>
-      {props.checked && props.children ? (
-        <div style={{ marginTop: 12, paddingLeft: 24 }}>{props.children}</div>
-      ) : null}
-    </div>
+    </s-stack>
   );
 }
 
@@ -75,7 +37,7 @@ function LeaveMessageForm(props: {
   const { value, onChange } = props;
   const collect = value.collect;
   return (
-    <s-stack gap="small">
+    <s-stack gap="base">
       <s-select
         label="When customers can expect a reply"
         value={value.replyTime}
@@ -90,8 +52,9 @@ function LeaveMessageForm(props: {
         ))}
       </s-select>
 
-      <s-text>Information collected from customer</s-text>
-      <s-checkbox label="Email" checked disabled />
+      <s-stack gap="small-300">
+        <s-text type="strong">Information collected from customer</s-text>
+        <s-checkbox label="Email" checked disabled />
       <s-checkbox label="Issue description" checked disabled />
       <s-checkbox
         label="Order number"
@@ -114,17 +77,18 @@ function LeaveMessageForm(props: {
           onChange({ ...value, collect: { ...collect, photoUpload: e.currentTarget.checked } })
         }
       />
-      <s-text tone="neutral">Email and issue description are required and always collected.</s-text>
+        <s-text color="subdued">Email and issue description are required and always collected.</s-text>
+      </s-stack>
 
       <s-text-area
         label="Message shown with the form"
         rows={3}
         maxLength={300}
         value={value.formMessage}
+        details="The expected reply time above is appended automatically."
         onInput={(e) => onChange({ ...value, formMessage: e.currentTarget.value })}
       />
       <Counter value={value.formMessage} max={300} />
-      <s-text tone="neutral">The expected reply time above is appended automatically.</s-text>
 
       <s-text-area
         label="Message shown after the form is submitted"
@@ -187,321 +151,381 @@ export function InstructionsHandoverTab(props: { initial: HandoverConfigData }) 
     <s-stack gap="base">
       <SaveBar dirty={dirty} saving={saving} onSave={save} onDiscard={discard} />
 
-      <s-heading>When should AI hand off to your team?</s-heading>
-
       <s-section heading="Auto triggers">
-        <s-paragraph>AI detects customer behavior and transfers automatically</s-paragraph>
+        <s-stack gap="base">
+          <s-paragraph color="subdued">
+            When should the AI hand off to your team? It detects these signals and transfers
+            automatically.
+          </s-paragraph>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0" }}>
-          <span style={{ flex: 1, minWidth: 0 }}>
-            <span style={{ fontWeight: 600, fontSize: 13.5 }}>
-              Customer asks to talk to a person{" "}
-            </span>
-            <s-badge tone="success">Always on</s-badge>
-            <span style={{ display: "block" }}>
-              <s-text tone="neutral">
-                AI detects intent: &quot;talk to human&quot;, &quot;speak to agent&quot;, &quot;real person&quot;
-              </s-text>
-            </span>
-          </span>
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0" }}>
-          <span style={{ flex: 1, minWidth: 0 }}>
-            <s-switch
-              label="AI cannot answer"
-              details={`Auto hand-off after ${triggers.cannotAnswer.threshold} consecutive low-confidence responses`}
-              checked={triggers.cannotAnswer.enabled}
-              onChange={(e) =>
-                setTriggers({
-                  ...triggers,
-                  cannotAnswer: { ...triggers.cannotAnswer, enabled: e.currentTarget.checked },
-                })
-              }
-            />
-          </span>
-          {triggers.cannotAnswer.enabled ? (
-            <s-select
-              label="Low-confidence threshold"
-              labelAccessibilityVisibility="exclusive"
-              value={String(triggers.cannotAnswer.threshold)}
-              onChange={(e) =>
-                setTriggers({
-                  ...triggers,
-                  cannotAnswer: {
-                    ...triggers.cannotAnswer,
-                    threshold: Number(e.currentTarget.value),
-                  },
-                })
-              }
-            >
-              {[1, 2, 3, 4, 5].map((n) => (
-                <s-option key={n} value={String(n)}>
-                  {n} in a row
-                </s-option>
-              ))}
-            </s-select>
-          ) : null}
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0" }}>
-          <span style={{ flex: 1, minWidth: 0 }}>
-            <s-switch
-              label="Customer repeats question"
-              details={`Auto hand-off when the same question is asked ${triggers.repeatedQuestion.threshold}+ times`}
-              checked={triggers.repeatedQuestion.enabled}
-              onChange={(e) =>
-                setTriggers({
-                  ...triggers,
-                  repeatedQuestion: {
-                    ...triggers.repeatedQuestion,
-                    enabled: e.currentTarget.checked,
-                  },
-                })
-              }
-            />
-          </span>
-          {triggers.repeatedQuestion.enabled ? (
-            <s-select
-              label="Repeat threshold"
-              labelAccessibilityVisibility="exclusive"
-              value={String(triggers.repeatedQuestion.threshold)}
-              onChange={(e) =>
-                setTriggers({
-                  ...triggers,
-                  repeatedQuestion: {
-                    ...triggers.repeatedQuestion,
-                    threshold: Number(e.currentTarget.value),
-                  },
-                })
-              }
-            >
-              {[2, 3, 4, 5].map((n) => (
-                <s-option key={n} value={String(n)}>
-                  {n}+ times
-                </s-option>
-              ))}
-            </s-select>
-          ) : null}
-        </div>
-
-        <s-switch
-          label="Negative sentiment"
-          details="Auto hand-off on frustration or anger — wording, ALL CAPS, repeated punctuation, negative emojis (👎 😠 💩), or 2+ thumb-down reactions on AI replies"
-          checked={triggers.negativeSentiment.enabled}
-          onChange={(e) =>
-            setTriggers({ ...triggers, negativeSentiment: { enabled: e.currentTarget.checked } })
-          }
-        />
+          <TriggerRow
+            title="Customer asks to talk to a person"
+            badge={<s-badge tone="success">Always on</s-badge>}
+            description='AI detects intent: "talk to a human", "speak to an agent", "real person".'
+          />
+          <s-divider />
+          <TriggerRow
+            control={
+              <s-switch
+                label="AI cannot answer"
+                details={`Auto hand-off after ${triggers.cannotAnswer.threshold} consecutive low-confidence responses`}
+                checked={triggers.cannotAnswer.enabled}
+                onChange={(e) =>
+                  setTriggers({
+                    ...triggers,
+                    cannotAnswer: { ...triggers.cannotAnswer, enabled: e.currentTarget.checked },
+                  })
+                }
+              />
+            }
+            accessory={
+              triggers.cannotAnswer.enabled ? (
+                <s-select
+                  label="Low-confidence threshold"
+                  labelAccessibilityVisibility="exclusive"
+                  value={String(triggers.cannotAnswer.threshold)}
+                  onChange={(e) =>
+                    setTriggers({
+                      ...triggers,
+                      cannotAnswer: {
+                        ...triggers.cannotAnswer,
+                        threshold: Number(e.currentTarget.value),
+                      },
+                    })
+                  }
+                >
+                  {[1, 2, 3, 4, 5].map((n) => (
+                    <s-option key={n} value={String(n)}>
+                      {n} in a row
+                    </s-option>
+                  ))}
+                </s-select>
+              ) : null
+            }
+          />
+          <s-divider />
+          <TriggerRow
+            control={
+              <s-switch
+                label="Customer repeats question"
+                details={`Auto hand-off when the same question is asked ${triggers.repeatedQuestion.threshold}+ times`}
+                checked={triggers.repeatedQuestion.enabled}
+                onChange={(e) =>
+                  setTriggers({
+                    ...triggers,
+                    repeatedQuestion: {
+                      ...triggers.repeatedQuestion,
+                      enabled: e.currentTarget.checked,
+                    },
+                  })
+                }
+              />
+            }
+            accessory={
+              triggers.repeatedQuestion.enabled ? (
+                <s-select
+                  label="Repeat threshold"
+                  labelAccessibilityVisibility="exclusive"
+                  value={String(triggers.repeatedQuestion.threshold)}
+                  onChange={(e) =>
+                    setTriggers({
+                      ...triggers,
+                      repeatedQuestion: {
+                        ...triggers.repeatedQuestion,
+                        threshold: Number(e.currentTarget.value),
+                      },
+                    })
+                  }
+                >
+                  {[2, 3, 4, 5].map((n) => (
+                    <s-option key={n} value={String(n)}>
+                      {n}+ times
+                    </s-option>
+                  ))}
+                </s-select>
+              ) : null
+            }
+          />
+          <s-divider />
+          <TriggerRow
+            control={
+              <s-switch
+                label="Negative sentiment"
+                details="Auto hand-off on frustration or anger — wording, ALL CAPS, repeated punctuation, negative emojis (👎 😠 💩), or 2+ thumb-down reactions on AI replies"
+                checked={triggers.negativeSentiment.enabled}
+                onChange={(e) =>
+                  setTriggers({
+                    ...triggers,
+                    negativeSentiment: { enabled: e.currentTarget.checked },
+                  })
+                }
+              />
+            }
+          />
+        </s-stack>
       </s-section>
 
       <s-section heading="Intent rules">
-        <s-paragraph>
-          You define topics — AI semantically matches and transfers immediately, no AI response
-          first
-        </s-paragraph>
-        {config.intentRules.length > 0 ? (
-          <s-stack gap="small">
-            {config.intentRules.map((rule, index) => (
-              <div
+        <s-stack gap="base">
+          <s-paragraph color="subdued">
+            You define topics — the AI semantically matches them and transfers immediately, with no
+            AI response first.
+          </s-paragraph>
+          {config.intentRules.length > 0 ? (
+            <s-stack gap="small-200">
+              {config.intentRules.map((rule, index) => (
                 // eslint-disable-next-line react/no-array-index-key
-                key={`${rule.topic}-${index}`}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: "6px 0",
-                  borderBottom: "1px solid var(--s-color-border-secondary, #f1f1f1)",
-                }}
-              >
-                <span style={{ flex: 1, minWidth: 0, fontSize: 13 }}>{rule.topic}</span>
-                <s-button
-                  variant="tertiary"
-                  tone="critical"
-                  accessibilityLabel={`Delete rule ${rule.topic}`}
-                  onClick={() =>
-                    setConfig((prev) => ({
-                      ...prev,
-                      intentRules: prev.intentRules.filter((_, i) => i !== index),
-                    }))
-                  }
-                >
-                  Delete
-                </s-button>
-              </div>
-            ))}
-          </s-stack>
-        ) : null}
-        {ruleFormOpen ? (
-          <s-box padding="base" borderWidth="base" borderRadius="base">
-            <s-stack gap="small">
-              <s-heading>Add handover rule</s-heading>
-              <s-text-field
-                label="Topic name"
-                value={ruleTopic}
-                maxLength={150}
-                placeholder="e.g. Wholesale inquiry, Custom order, Partnership…"
-                onInput={(e) => setRuleTopic(e.currentTarget.value)}
-              />
-              <Counter value={ruleTopic} max={150} />
-              <s-text tone="neutral">
-                AI semantically matches this topic — covers keyword variations. Avoid after-sales
-                topics, already handled separately.
-              </s-text>
-              <div style={{ display: "flex", gap: 8 }}>
-                <s-button variant="primary" disabled={!ruleTopic.trim()} onClick={addRule}>
-                  Add rule
-                </s-button>
-                <s-button
-                  onClick={() => {
-                    setRuleFormOpen(false);
-                    setRuleTopic("");
-                  }}
-                >
-                  Cancel
-                </s-button>
-              </div>
+                <s-stack key={`${rule.topic}-${index}`} gap="small-200">
+                  <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="center">
+                    <s-stack direction="inline" gap="small-200" alignItems="center">
+                      <s-icon type="target" size="small" tone="neutral" />
+                      <s-text>{rule.topic}</s-text>
+                    </s-stack>
+                    <s-button
+                      variant="tertiary"
+                      tone="critical"
+                      icon="delete"
+                      accessibilityLabel={`Delete rule ${rule.topic}`}
+                      onClick={() =>
+                        setConfig((prev) => ({
+                          ...prev,
+                          intentRules: prev.intentRules.filter((_, i) => i !== index),
+                        }))
+                      }
+                    />
+                  </s-grid>
+                  <s-divider />
+                </s-stack>
+              ))}
             </s-stack>
-          </s-box>
-        ) : (
-          <div>
-            <s-button onClick={() => setRuleFormOpen(true)}>Add rule</s-button>
-          </div>
-        )}
+          ) : (
+            <s-text color="subdued">No rules yet — add topics like &ldquo;wholesale inquiry&rdquo; or &ldquo;partnership&rdquo;.</s-text>
+          )}
+          {ruleFormOpen ? (
+            <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
+              <s-stack gap="base">
+                <s-heading>Add handover rule</s-heading>
+                <s-text-field
+                  label="Topic name"
+                  value={ruleTopic}
+                  maxLength={150}
+                  placeholder="e.g. Wholesale inquiry, Custom order, Partnership…"
+                  details="The AI matches this topic by meaning, so keyword variations are covered. Avoid after-sales topics — those are handled separately."
+                  onInput={(e) => setRuleTopic(e.currentTarget.value)}
+                />
+                <Counter value={ruleTopic} max={150} />
+                <s-stack direction="inline" gap="small-200" alignItems="center">
+                  <s-button variant="primary" disabled={!ruleTopic.trim()} onClick={addRule}>
+                    Add rule
+                  </s-button>
+                  <s-button
+                    onClick={() => {
+                      setRuleFormOpen(false);
+                      setRuleTopic("");
+                    }}
+                  >
+                    Cancel
+                  </s-button>
+                </s-stack>
+              </s-stack>
+            </s-box>
+          ) : (
+            <s-stack direction="inline">
+              <s-button icon="plus" onClick={() => setRuleFormOpen(true)}>
+                Add rule
+              </s-button>
+            </s-stack>
+          )}
+        </s-stack>
       </s-section>
 
-      <s-heading>Where does the customer go?</s-heading>
-
-      <s-section>
-        <s-stack gap="small">
-          <RadioRow
+      <s-section heading="Where does the customer go?">
+        <s-stack gap="base">
+          <s-choice-list
+            label="Handover destination"
+            labelAccessibilityVisibility="exclusive"
             name="handover-destination"
-            checked={config.destination === "inbox"}
-            title={
-              <>
-                Transfer to human in ChatConvert inbox <s-badge tone="info">Recommended</s-badge>
-              </>
-            }
-            description="Agent joins the chat directly — the customer stays in the same window, no friction."
-            onSelect={() => setConfig((prev) => ({ ...prev, destination: "inbox" }))}
+            values={[config.destination]}
+            onChange={(e) => {
+              const destination = (e.currentTarget.values[0] ??
+                "inbox") as HandoverConfigData["destination"];
+              setConfig((prev) => ({ ...prev, destination }));
+            }}
           >
-            <s-stack gap="small">
-              <s-text tone="neutral">
-                Working hours are configured in Settings → Chat availability.
+            <s-choice value="inbox">
+              Transfer to a human in the ChatConvert inbox
+              <s-text slot="details">
+                Recommended — an agent joins the chat directly; the customer stays in the same
+                window, no friction.
               </s-text>
+            </s-choice>
+            <s-choice value="collect_email">
+              Collect info &amp; follow up by email
+              <s-text slot="details">
+                No live agents needed — the AI collects customer details and sends a summary to your
+                team email.
+              </s-text>
+            </s-choice>
+            <s-choice value="contact_methods">
+              Show contact methods
+              <s-text slot="details">
+                The AI shows the contact methods configured in your Chatbox settings (phone,
+                WhatsApp, email) and lets the customer pick how to reach out.
+              </s-text>
+            </s-choice>
+          </s-choice-list>
 
-              <s-heading>Messages while your team is online</s-heading>
-              <s-text-area
-                label="Ask before connecting"
-                rows={3}
-                maxLength={300}
-                value={inbox.onlineAskMessage}
-                onInput={(e) => setInbox({ ...inbox, onlineAskMessage: e.currentTarget.value })}
-              />
-              <Counter value={inbox.onlineAskMessage} max={300} />
-              <s-text tone="neutral">
-                AI asks the customer to confirm before handing the chat to your team.
-              </s-text>
-              <s-text-area
-                label="After the chat is handed over"
-                rows={3}
-                maxLength={300}
-                value={inbox.afterHandoverMessage}
-                onInput={(e) => setInbox({ ...inbox, afterHandoverMessage: e.currentTarget.value })}
-              />
-              <Counter value={inbox.afterHandoverMessage} max={300} />
-              <s-text tone="neutral">
-                Sent once the customer confirms and the chat moves to your inbox.
-              </s-text>
-
-              <s-heading>When your team is offline, show customers</s-heading>
-              <RadioRow
-                name="inbox-offline-mode"
-                checked={inbox.offlineMode === "leave_message"}
-                title="Leave a message — we'll follow up"
-                onSelect={() => setInbox({ ...inbox, offlineMode: "leave_message" })}
-              >
-                <LeaveMessageForm
-                  value={inbox.leaveMessage}
-                  onChange={(leaveMessage) => setInbox({ ...inbox, leaveMessage })}
+          {config.destination === "inbox" ? (
+            <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
+              <s-stack gap="base">
+                <s-stack gap="small-200">
+                  <s-heading>Messages while your team is online</s-heading>
+                  <s-text color="subdued">
+                    Working hours are configured in Settings → Chat availability.
+                  </s-text>
+                </s-stack>
+                <s-text-area
+                  label="Ask before connecting"
+                  rows={3}
+                  maxLength={300}
+                  value={inbox.onlineAskMessage}
+                  details="The AI asks the customer to confirm before handing the chat to your team."
+                  onInput={(e) => setInbox({ ...inbox, onlineAskMessage: e.currentTarget.value })}
                 />
-              </RadioRow>
-              <RadioRow
-                name="inbox-offline-mode"
-                checked={inbox.offlineMode === "contact_methods"}
-                title="Show contact methods"
-                description="AI shows the contact methods configured in your Chatbox settings so the customer can reach out while your team is back."
-                onSelect={() => setInbox({ ...inbox, offlineMode: "contact_methods" })}
-              />
+                <Counter value={inbox.onlineAskMessage} max={300} />
+                <s-text-area
+                  label="After the chat is handed over"
+                  rows={3}
+                  maxLength={300}
+                  value={inbox.afterHandoverMessage}
+                  details="Sent once the customer confirms and the chat moves to your inbox."
+                  onInput={(e) => setInbox({ ...inbox, afterHandoverMessage: e.currentTarget.value })}
+                />
+                <Counter value={inbox.afterHandoverMessage} max={300} />
 
-              <s-heading>While the customer waits for your team, let AI keep replying</s-heading>
-              <RadioRow
-                name="inbox-ai-waiting"
-                checked={inbox.aiWhileWaiting === "never"}
-                title="Don't allow"
-                description="AI stops replying once the customer is waiting for an agent."
-                onSelect={() => setInbox({ ...inbox, aiWhileWaiting: "never" })}
-              />
-              <RadioRow
-                name="inbox-ai-waiting"
-                checked={inbox.aiWhileWaiting === "outside_hours"}
-                title="Allow only outside business hours"
-                description="AI keeps handling the conversation instead of handing off."
-                onSelect={() => setInbox({ ...inbox, aiWhileWaiting: "outside_hours" })}
-              />
-              <RadioRow
-                name="inbox-ai-waiting"
-                checked={inbox.aiWhileWaiting === "always"}
-                title="Allow all the time"
-                description="AI keeps replying while the customer waits — even during business hours."
-                onSelect={() => setInbox({ ...inbox, aiWhileWaiting: "always" })}
-              />
-            </s-stack>
-          </RadioRow>
+                <s-divider />
 
-          <RadioRow
-            name="handover-destination"
-            checked={config.destination === "collect_email"}
-            title="Collect info & follow up by email"
-            description="No live agents needed — AI collects customer details and sends a summary to your team email"
-            onSelect={() => setConfig((prev) => ({ ...prev, destination: "collect_email" }))}
-          >
-            <LeaveMessageForm
-              value={config.collectEmail}
-              onChange={(collectEmail) => setConfig((prev) => ({ ...prev, collectEmail }))}
-            />
-          </RadioRow>
+                <s-choice-list
+                  label="When your team is offline, show customers"
+                  name="inbox-offline-mode"
+                  values={[inbox.offlineMode]}
+                  onChange={(e) => {
+                    const offlineMode = (e.currentTarget.values[0] ??
+                      "leave_message") as HandoverConfigData["inbox"]["offlineMode"];
+                    setInbox({ ...inbox, offlineMode });
+                  }}
+                >
+                  <s-choice value="leave_message">Leave a message — we&apos;ll follow up</s-choice>
+                  <s-choice value="contact_methods">
+                    Show contact methods
+                    <s-text slot="details">
+                      The contact methods configured in your Chatbox settings, so the customer can
+                      reach out until your team is back.
+                    </s-text>
+                  </s-choice>
+                </s-choice-list>
+                {inbox.offlineMode === "leave_message" ? (
+                  <s-box padding="base" borderWidth="base" borderRadius="base" background="base">
+                    <LeaveMessageForm
+                      value={inbox.leaveMessage}
+                      onChange={(leaveMessage) => setInbox({ ...inbox, leaveMessage })}
+                    />
+                  </s-box>
+                ) : null}
 
-          <RadioRow
-            name="handover-destination"
-            checked={config.destination === "contact_methods"}
-            title="Show contact methods"
-            description="AI shows the contact methods configured in your Chatbox settings (phone, WhatsApp, email) and lets the customer pick how to reach out."
-            onSelect={() => setConfig((prev) => ({ ...prev, destination: "contact_methods" }))}
-          >
-            <s-stack gap="small">
-              <s-text-area
-                label="Message shown with the contact methods"
-                rows={4}
-                maxLength={300}
-                value={config.contactMethods.message}
-                onInput={(e) => {
-                  const message = e.currentTarget.value;
-                  setConfig((prev) => ({
-                    ...prev,
-                    contactMethods: { message },
-                  }));
-                }}
+                <s-divider />
+
+                <s-choice-list
+                  label="While the customer waits for your team, let the AI keep replying"
+                  name="inbox-ai-waiting"
+                  values={[inbox.aiWhileWaiting]}
+                  onChange={(e) => {
+                    const aiWhileWaiting = (e.currentTarget.values[0] ??
+                      "always") as HandoverConfigData["inbox"]["aiWhileWaiting"];
+                    setInbox({ ...inbox, aiWhileWaiting });
+                  }}
+                >
+                  <s-choice value="always">
+                    Allow all the time
+                    <s-text slot="details">
+                      The AI keeps replying while the customer waits — even during business hours.
+                      A reply from your team takes over the conversation.
+                    </s-text>
+                  </s-choice>
+                  <s-choice value="outside_hours">
+                    Allow only outside business hours
+                    <s-text slot="details">
+                      During business hours the AI stays quiet once the customer is waiting for an
+                      agent.
+                    </s-text>
+                  </s-choice>
+                  <s-choice value="never">
+                    Don&apos;t allow
+                    <s-text slot="details">
+                      The AI stops replying as soon as the customer is waiting for an agent.
+                    </s-text>
+                  </s-choice>
+                </s-choice-list>
+              </s-stack>
+            </s-box>
+          ) : null}
+
+          {config.destination === "collect_email" ? (
+            <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
+              <LeaveMessageForm
+                value={config.collectEmail}
+                onChange={(collectEmail) => setConfig((prev) => ({ ...prev, collectEmail }))}
               />
-              <Counter value={config.contactMethods.message} max={300} />
-              <s-text tone="neutral">
-                You can include a link, for example to your contact page. The same message is used
-                when your team is offline and the fallback is Show contact methods.
-              </s-text>
-            </s-stack>
-          </RadioRow>
+            </s-box>
+          ) : null}
+
+          {config.destination === "contact_methods" ? (
+            <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
+              <s-stack gap="small-200">
+                <s-text-area
+                  label="Message shown with the contact methods"
+                  rows={4}
+                  maxLength={300}
+                  value={config.contactMethods.message}
+                  details="You can include a link, for example to your contact page. The same message is used when your team is offline and the fallback is Show contact methods."
+                  onInput={(e) => {
+                    const message = e.currentTarget.value;
+                    setConfig((prev) => ({
+                      ...prev,
+                      contactMethods: { message },
+                    }));
+                  }}
+                />
+                <Counter value={config.contactMethods.message} max={300} />
+              </s-stack>
+            </s-box>
+          ) : null}
         </s-stack>
       </s-section>
     </s-stack>
+  );
+}
+
+/** One auto-trigger row: [switch or title+badge+description] … [optional accessory control]. */
+function TriggerRow(props: {
+  control?: React.ReactNode;
+  title?: string;
+  badge?: React.ReactNode;
+  description?: string;
+  accessory?: React.ReactNode;
+}) {
+  return (
+    <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="center">
+      {props.control ?? (
+        <s-stack gap="small-500">
+          <s-stack direction="inline" gap="small-200" alignItems="center">
+            <s-text type="strong">{props.title}</s-text>
+            {props.badge}
+          </s-stack>
+          {props.description ? <s-text color="subdued">{props.description}</s-text> : null}
+        </s-stack>
+      )}
+      {props.accessory ?? <span />}
+    </s-grid>
   );
 }

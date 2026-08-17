@@ -19,7 +19,11 @@ Spec: `.claude/specs/03-ai-pipeline.md`. Reference implementation: `.claude/reso
 - Prompts live ONLY in `app/lib/pipeline/prompts.ts` — never inline in handlers. Changing one is a tuning event: run the golden-set eval first, note it in PROGRESS.md.
 - Thresholds come from the shop's `guardrails` row (defaults: minMeaningScore 0.30, curatedMatchThreshold 0.80, curatedBorderline 0.65, bannedMatchThreshold 0.35) — never hard-code in logic.
 - Router: temp 0, `response_format: json_object`, ~160 max tokens. Parse failure → retry once → chat-lane clarify (never default to buy — known demo bug).
-- Generation temps: chat 0.5 (60 tok), RAG 0.3 (220 tok), recommend per prompts file.
+- Generation temps (demo-validated, chatconvert_ui.py chat_call): chat 0.5 (60 tok), RAG 0.3 (220 tok), recommend 0.3 (220 tok).
+- History: last 10 messages verbatim for BOTH router and generation + rolling summary; the current shopper message is excluded from the window by id and appended once (`loadHistory(..., { excludeMessageId })`).
+- Router prompt: BANNED TOPICS / STORE SCOPE lines only when configured (never a generic default scope — it over-triggers off_topic).
+- Product search (accuracy batch 2026-08-17): keyword = OR of router keywords (ANY qualifies, weighted title>type/tags>description) + lower tier of the shopper's own words; vector = full-text product embedding (`productEmbeddingText`); fused by reciprocal rank; the model gets `{title, price, snippet}` per candidate (snippet = type · tags · `ts_headline` fragment). Cards = top-4 fused. Descriptions are never truncated in the index/embedding.
+- Handover defaults (schemas.ts): repeatedQuestion 3, cannotAnswer 3, aiWhileWaiting "always"; explicit-ask patterns need an intent verb (a bare "customer service" is a question).
 
 ## Cost budget (enforced in tests)
 
@@ -27,7 +31,7 @@ Normal turn ≈ **2 chat calls + 1–2 embedding calls**. One `embed(message)` p
 
 ## Golden-set evals
 
-Before merging any prompt/threshold/model change, run the eval script over the seeded demo shop:
+Before merging any prompt/threshold/model/search change, run the eval script over the seeded demo shop (`npm run eval:golden`; needs OPENAI_API_KEY + dummy SHOPIFY_API_KEY/SHOPIFY_API_SECRET/SHOPIFY_APP_URL/SCOPES env because `contacts.server` transitively imports `shopify.server`; run it from PowerShell — the Git-Bash sandbox blocks Prisma's binary engine):
 
 | Input | Expected path |
 |---|---|
@@ -38,6 +42,14 @@ Before merging any prompt/threshold/model change, run the eval script over the s
 | "a fancy diamond necklace" | buy → clarify (no guess) |
 | "hi" | chat, one short sentence |
 | "product under 20 dollar" | buy → browse-cheapest fallback |
+| "what's new?" | app recommendation (ranked below merchant curated) |
+| "gloves I can use with my phone" | buy → description-level match, card = Merino Wool Gloves |
+| "something that blocks rfid" | buy → description-level match, card = Slim Leather Wallet |
+| "a bottle that keeps drinks hot" | buy → card = Insulated Water Bottle / Travel Tumbler |
+| "what is your customer service email?" | question (NOT handover) |
+| "show me some jackets" → "under $100" → "the waterproof one?" | 3-turn buy, cards ≤ $100 incl. a waterproof item |
+| "do you ship to Canada?" ×2 in one conversation | question both times (no repeated-question handover at default 3) |
+| history window | current message excluded, ends with assistant turn, router == generation window |
 
 Assert path via logged `sourceLayer`/intent, not reply text. Add a case whenever a real-world miss is fixed.
 

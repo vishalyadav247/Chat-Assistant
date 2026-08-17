@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useFetcher, useRevalidator } from "react-router";
+import { useFetcher, useNavigate, useRevalidator } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import type { TrainingActionResult } from "../routes/app.ai-agent.training";
 import { TabPills } from "./ui/TabPills";
@@ -94,25 +94,97 @@ export function LearnCard(props: {
 }) {
   return (
     <s-section>
-      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+      <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="center">
+        <s-stack gap="small-200">
+          <s-stack direction="inline" gap="small-200" alignItems="center">
             <s-heading>{props.title}</s-heading>
-            <s-badge tone="neutral">{props.chip}</s-badge>
-          </div>
-          <s-paragraph>{props.description}</s-paragraph>
-        </div>
+            <s-badge tone={props.switchChecked === false ? "neutral" : "info"}>{props.chip}</s-badge>
+          </s-stack>
+          <s-paragraph color="subdued">{props.description}</s-paragraph>
+        </s-stack>
         {props.onSwitch ? (
           <s-switch
             label={props.switchLabel ?? `Learn ${props.title.toLowerCase()}`}
-            labelAccessibilityVisibility="exclusive"
             checked={props.switchChecked}
             disabled={props.switchDisabled}
             onChange={(e) => props.onSwitch?.(e.currentTarget.checked)}
           />
         ) : null}
-      </div>
+      </s-grid>
     </s-section>
+  );
+}
+
+/**
+ * Auto-sync toggle for the Products / Collections "Manage data" rows
+ * (2026-08-17, mirrors the Discounts real-time switch): controls the DAILY
+ * full re-sync only (webhooks always apply); switch + plan lock, with the
+ * last-updated line directly underneath.
+ */
+export function AutoSyncControl(props: {
+  type: "products" | "collections";
+  available: boolean;
+  enabled: boolean;
+  busy: boolean;
+  lastSyncedAt: string | null;
+  running: boolean;
+  onChange: (enabled: boolean) => void;
+}) {
+  return (
+    <SyncControlLayout
+      toggle={
+        <s-switch
+          label="Auto sync"
+          checked={props.available && props.enabled}
+          disabled={!props.available || props.busy}
+          onChange={(e) => props.onChange(e.currentTarget.checked)}
+        />
+      }
+      info={
+        props.available
+          ? `Re-syncs all ${props.type} from Shopify once a day.`
+          : `Available on Pro and Plus plans — re-syncs all ${props.type} once a day. Individual changes still update instantly.`
+      }
+      locked={!props.available}
+      lastSyncedAt={props.lastSyncedAt}
+      running={props.running}
+    />
+  );
+}
+
+/**
+ * Shared layout for the sync switches (Products / Collections auto sync,
+ * Discounts real-time sync): row 1 = [switch] [what it does] [Pro + Upgrade
+ * when locked]; row 2 = last updated (+ "Sync running" badge).
+ */
+export function SyncControlLayout(props: {
+  toggle: React.ReactNode;
+  info: string;
+  locked?: boolean;
+  lastSyncedAt: string | null;
+  running?: boolean;
+}) {
+  const navigate = useNavigate();
+  return (
+    <s-stack gap="none">
+      <s-stack direction="inline" gap="small-200" alignItems="center">
+        {props.toggle}
+        <s-text color="subdued">{props.info}</s-text>
+        {props.locked ? (
+          <>
+            <s-badge tone="info">Pro</s-badge>
+            <s-button variant="tertiary" onClick={() => navigate("/app/plan-usage")}>
+              Upgrade
+            </s-button>
+          </>
+        ) : null}
+      </s-stack>
+      <s-stack direction="inline" gap="small-200" alignItems="center">
+        <s-icon type="clock" tone="neutral" size="small" />
+        <s-text color="subdued">Last updated {formatDateTime(props.lastSyncedAt)}</s-text>
+        {props.running ? <s-badge tone="info">Sync running</s-badge> : null}
+      </s-stack>
+    </s-stack>
   );
 }
 

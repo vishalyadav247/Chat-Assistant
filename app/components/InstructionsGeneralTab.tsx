@@ -38,11 +38,11 @@ const LANGUAGE_OPTIONS = [
 
 function Counter(props: { value: string; max: number }) {
   return (
-    <div style={{ textAlign: "right" }}>
-      <s-text tone="neutral">
+    <s-stack direction="inline" justifyContent="end">
+      <s-text color="subdued" fontVariantNumeric="tabular-nums">
         {props.value.length}/{props.max}
       </s-text>
-    </div>
+    </s-stack>
   );
 }
 
@@ -122,156 +122,154 @@ export function InstructionsGeneralTab(props: { initial: GeneralData; autoDetect
       <SaveBar dirty={dirty} saving={saving} onSave={save} onDiscard={discard} />
 
       <s-section heading="Role">
-        <s-paragraph>Define who your assistant is and what they help customers with</s-paragraph>
-        <s-text-area
-          label="Role"
-          labelAccessibilityVisibility="exclusive"
-          rows={3}
-          maxLength={250}
-          value={form.role}
-          placeholder="e.g., You are a friendly customer support assistant for an online accessories store. Your goal is to help customers find products, answer questions and provide excellent service."
-          onInput={(e) => set("role", e.currentTarget.value)}
-        />
-        <Counter value={form.role} max={250} />
+        <s-stack gap="small-200">
+          <s-paragraph color="subdued">
+            Define who your assistant is and what they help customers with.
+          </s-paragraph>
+          <s-text-area
+            label="Role"
+            labelAccessibilityVisibility="exclusive"
+            rows={3}
+            maxLength={250}
+            value={form.role}
+            placeholder="e.g., You are a friendly customer support assistant for an online accessories store. Your goal is to help customers find products, answer questions and provide excellent service."
+            onInput={(e) => set("role", e.currentTarget.value)}
+          />
+          <Counter value={form.role} max={250} />
+        </s-stack>
       </s-section>
 
       <s-section heading="Communication style">
-        <s-paragraph>Define the personality and speaking style of your assistant</s-paragraph>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {STYLE_PRESETS.map((preset) => {
-            const active = form.communicationStyle === preset.id;
-            return (
-              <button
-                key={preset.id}
-                type="button"
-                aria-pressed={active}
-                onClick={() =>
-                  setForm((prev) => ({
-                    ...prev,
-                    communicationStyle: preset.id,
-                    brandVoice: preset.id === "custom" ? prev.brandVoice : preset.text,
-                  }))
-                }
-                style={{
-                  cursor: "pointer",
-                  font: "inherit",
-                  fontWeight: 600,
-                  fontSize: 13,
-                  padding: "6px 14px",
-                  borderRadius: 999,
-                  border: active
-                    ? "1.5px solid var(--s-color-border-emphasis, #303030)"
-                    : "1px solid var(--s-color-border, #d4d4d4)",
-                  background: active ? "var(--s-color-bg-fill-secondary, #f1f1f1)" : "transparent",
-                }}
-              >
-                {preset.label}
-              </button>
-            );
-          })}
-        </div>
-        <s-text-area
-          label="Tone"
-          labelAccessibilityVisibility="exclusive"
-          rows={3}
-          maxLength={500}
-          value={form.brandVoice}
-          placeholder="Describe the tone your assistant should use"
-          onInput={(e) => {
-            const brandVoice = e.currentTarget.value;
-            setForm((prev) => ({
-              ...prev,
-              brandVoice,
-              communicationStyle: "custom",
-            }));
-          }}
-        />
+        <s-stack gap="base">
+          <s-paragraph color="subdued">
+            Pick a preset or describe the personality and speaking style yourself.
+          </s-paragraph>
+          <s-stack direction="inline" gap="small-200">
+            {STYLE_PRESETS.map((preset) => {
+              const active = form.communicationStyle === preset.id;
+              return (
+                <s-clickable-chip
+                  key={preset.id}
+                  color={active ? "strong" : "base"}
+                  accessibilityLabel={`${preset.label} style${active ? " (selected)" : ""}`}
+                  onClick={() =>
+                    setForm((prev) => ({
+                      ...prev,
+                      communicationStyle: preset.id,
+                      brandVoice: preset.id === "custom" ? prev.brandVoice : preset.text,
+                    }))
+                  }
+                >
+                  {active ? <s-icon slot="graphic" type="check" size="small" /> : null}
+                  {preset.label}
+                </s-clickable-chip>
+              );
+            })}
+          </s-stack>
+          <s-text-area
+            label="Tone"
+            labelAccessibilityVisibility="exclusive"
+            rows={3}
+            maxLength={500}
+            value={form.brandVoice}
+            placeholder="Describe the tone your assistant should use"
+            onInput={(e) => {
+              const brandVoice = e.currentTarget.value;
+              setForm((prev) => ({
+                ...prev,
+                brandVoice,
+                communicationStyle: "custom",
+              }));
+            }}
+          />
+        </s-stack>
       </s-section>
 
       <s-section heading="Behaviours">
-        <s-paragraph>
-          Define how your assistant should respond to customers and handle conversations
-        </s-paragraph>
-        <s-text-area
-          label="Behaviours"
-          labelAccessibilityVisibility="exclusive"
-          rows={14}
-          maxLength={1000}
-          value={form.behaviours}
-          placeholder={"ROLE:\n- …\n\nKNOWLEDGE:\n- …\n\nCOMMUNICATION STYLE:\n- …\n\nGUIDELINES:\n- …\n\nAVOID:\n- …"}
-          onInput={(e) => set("behaviours", e.currentTarget.value)}
-        />
-        <Counter value={form.behaviours} max={1000} />
-      </s-section>
-
-      <s-section heading="Default language">
-        <s-select
-          label="Default language"
-          labelAccessibilityVisibility="exclusive"
-          value={form.defaultLanguage}
-          onChange={(e) => set("defaultLanguage", e.currentTarget.value)}
-        >
-          {LANGUAGE_OPTIONS.map((lang) => (
-            <s-option key={lang.value} value={lang.value}>
-              {lang.label}
-            </s-option>
-          ))}
-        </s-select>
-      </s-section>
-
-      <s-section heading="Auto-detect shopper's language">
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <s-switch
-            label="Auto-detect shopper's language"
+        <s-stack gap="small-200">
+          <s-paragraph color="subdued">
+            Define how your assistant should respond to customers and handle conversations.
+          </s-paragraph>
+          <s-text-area
+            label="Behaviours"
             labelAccessibilityVisibility="exclusive"
-            details="When enabled, the assistant answers in the shopper's detected language"
-            checked={form.autoDetectLanguage}
-            disabled={props.autoDetectLocked}
-            onChange={(e) => set("autoDetectLanguage", e.currentTarget.checked)}
+            rows={14}
+            maxLength={1000}
+            placeholder={"ROLE:\n- …\n\nKNOWLEDGE:\n- …\n\nCOMMUNICATION STYLE:\n- …\n\nGUIDELINES:\n- …\n\nAVOID:\n- …"}
+            value={form.behaviours}
+            onInput={(e) => set("behaviours", e.currentTarget.value)}
           />
-          {props.autoDetectLocked ? (
-            <>
-              <s-badge tone="info">Plus</s-badge>
-              <s-button variant="tertiary" onClick={() => navigate("/app/plan-usage")}>
-                Upgrade to unlock
-              </s-button>
-            </>
-          ) : null}
-        </div>
+          <Counter value={form.behaviours} max={1000} />
+        </s-stack>
+      </s-section>
+
+      <s-section heading="Language">
+        <s-stack gap="base">
+          <s-select
+            label="Default language"
+            details="Used when the shopper's language can't be detected."
+            value={form.defaultLanguage}
+            onChange={(e) => set("defaultLanguage", e.currentTarget.value)}
+          >
+            {LANGUAGE_OPTIONS.map((lang) => (
+              <s-option key={lang.value} value={lang.value}>
+                {lang.label}
+              </s-option>
+            ))}
+          </s-select>
+          <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="center">
+            <s-switch
+              label="Auto-detect shopper's language"
+              details="When enabled, the assistant answers in the shopper's detected language."
+              checked={form.autoDetectLanguage}
+              disabled={props.autoDetectLocked}
+              onChange={(e) => set("autoDetectLanguage", e.currentTarget.checked)}
+            />
+            {props.autoDetectLocked ? (
+              <s-stack direction="inline" gap="small-200" alignItems="center">
+                <s-badge tone="info">Plus</s-badge>
+                <s-button variant="tertiary" onClick={() => navigate("/app/plan-usage")}>
+                  Upgrade to unlock
+                </s-button>
+              </s-stack>
+            ) : null}
+          </s-grid>
+        </s-stack>
       </s-section>
 
       <s-section heading="Banned topics & phrases">
-        <s-paragraph>One topic or phrase per line</s-paragraph>
-        <s-text-area
-          label="Banned topics"
-          labelAccessibilityVisibility="exclusive"
-          rows={4}
-          value={form.bannedTopicsText}
-          placeholder={"medical advice\ncompetitor pricing"}
-          onInput={(e) => set("bannedTopicsText", e.currentTarget.value)}
-        />
-        <s-text tone="neutral">
-          If a shopper&apos;s message contains one of these, the assistant declines and shows the
-          fallback message. Changes take effect within about a minute — banned-topic vectors
-          re-embed automatically on the next message.
-        </s-text>
+        <s-stack gap="small-200">
+          <s-paragraph color="subdued">
+            One topic or phrase per line. If a shopper&apos;s message is about one of these, the
+            assistant declines and shows the fallback message.
+          </s-paragraph>
+          <s-text-area
+            label="Banned topics"
+            labelAccessibilityVisibility="exclusive"
+            rows={4}
+            value={form.bannedTopicsText}
+            placeholder={"medical advice\ncompetitor pricing"}
+            details="Changes take effect within about a minute — banned-topic vectors re-embed automatically on the next message."
+            onInput={(e) => set("bannedTopicsText", e.currentTarget.value)}
+          />
+        </s-stack>
       </s-section>
 
       <s-section heading="Fallback message">
-        <s-paragraph>Shown when the assistant can&apos;t confidently help</s-paragraph>
-        <s-text-area
-          label="Fallback message"
-          labelAccessibilityVisibility="exclusive"
-          rows={3}
-          maxLength={500}
-          value={form.fallbackMessage}
-          placeholder="I'm not sure about that one — leave your email and our team will get back to you."
-          onInput={(e) => set("fallbackMessage", e.currentTarget.value)}
-        />
-        <s-text tone="neutral">
-          Leave blank to use the built-in default. The assistant captures the shopper&apos;s email as a
-          lead after showing this.
-        </s-text>
+        <s-stack gap="small-200">
+          <s-paragraph color="subdued">Shown when the assistant can&apos;t confidently help.</s-paragraph>
+          <s-text-area
+            label="Fallback message"
+            labelAccessibilityVisibility="exclusive"
+            rows={3}
+            maxLength={500}
+            value={form.fallbackMessage}
+            placeholder="I'm not sure about that one — leave your email and our team will get back to you."
+            details="Leave blank to use the built-in default. The assistant captures the shopper's email as a lead after showing this."
+            onInput={(e) => set("fallbackMessage", e.currentTarget.value)}
+          />
+          <Counter value={form.fallbackMessage} max={500} />
+        </s-stack>
       </s-section>
     </s-stack>
   );

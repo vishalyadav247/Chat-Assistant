@@ -6,6 +6,7 @@ import db from "../db.server";
 import { resolveShopId } from "../lib/tenancy.server";
 import { recordEvent } from "../lib/analytics/events.server";
 import { TestAiConsole } from "../components/TestAiConsole";
+import { PageHeader } from "../components/ui/PageHeader";
 
 // Test AI (spec 08, design ai-agent.html #viewTest): merchant chat console
 // that streams the REAL pipeline via /api/test-chat (isTest: true → no usage
@@ -102,21 +103,19 @@ export default function TestAiPage() {
   return (
     <s-page heading="Test AI">
       <s-stack gap="base">
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <s-button
-            icon="arrow-left"
-            variant="tertiary"
-            accessibilityLabel="Back to AI Agent"
-            onClick={() => navigate("/app/ai-agent")}
-          >
-            AI Agent
-          </s-button>
-          <span style={{ marginLeft: "auto" }}>
-            <s-button variant="tertiary" onClick={() => navigate("/app/ai-agent/instructions")}>
-              Edit instructions
-            </s-button>
-          </span>
-        </div>
+        <PageHeader
+          backTo="/app/ai-agent"
+          backLabel="AI Agent"
+          description="Chat with your AI exactly as a shopper would. Replies use your live training data and instructions; test chats never appear in the inbox."
+          toolbar={
+            <s-stack direction="inline" gap="small-200" alignItems="center">
+              <s-button onClick={() => navigate("/app/ai-agent/training")}>Training data</s-button>
+              <s-button onClick={() => navigate("/app/ai-agent/instructions")}>
+                Edit instructions
+              </s-button>
+            </s-stack>
+          }
+        />
         <TestAiConsole welcome={data.welcome} faqChips={data.faqChips} currency={data.currency} />
       </s-stack>
     </s-page>

@@ -80,30 +80,14 @@ export function InstructionsRecommendationsTab(props: {
       key: "title",
       title: "Title",
       render: (row) => (
-        <span>
-          <button
-            type="button"
-            onClick={() => props.onOpenRec(row.id)}
-            style={{
-              border: "none",
-              background: "none",
-              padding: 0,
-              cursor: "pointer",
-              font: "inherit",
-              fontWeight: 600,
-              textAlign: "left",
-            }}
-          >
-            {row.title}
-          </button>
-          <span style={{ display: "block" }}>
-            <s-text tone="neutral">
-              {row.triggerQuestions[0]
-                ? `Product recommendations for "${row.triggerQuestions[0]}"`
-                : "No trigger questions yet"}
-            </s-text>
-          </span>
-        </span>
+        <s-stack gap="small-500">
+          <s-text type="strong">{row.title}</s-text>
+          <s-text color="subdued">
+            {row.triggerQuestions[0]
+              ? `Product recommendations for "${row.triggerQuestions[0]}"`
+              : "No trigger questions yet"}
+          </s-text>
+        </s-stack>
       ),
     },
     { key: "products", title: "Products", render: (row) => String(row.productIds.length) },
@@ -131,8 +115,8 @@ export function InstructionsRecommendationsTab(props: {
       title: "Actions",
       align: "end",
       render: (row) => (
-        <span style={{ display: "inline-flex", gap: 6 }}>
-          <s-button variant="tertiary" accessibilityLabel={`Edit ${row.title}`} onClick={() => props.onOpenRec(row.id)}>
+        <s-stack direction="inline" gap="small-300" justifyContent="end">
+          <s-button variant="tertiary" icon="edit" accessibilityLabel={`Edit ${row.title}`} onClick={() => props.onOpenRec(row.id)}>
             Edit
           </s-button>
           <s-button
@@ -148,7 +132,7 @@ export function InstructionsRecommendationsTab(props: {
           >
             Delete
           </s-button>
-        </span>
+        </s-stack>
       ),
     },
   ];
@@ -158,30 +142,14 @@ export function InstructionsRecommendationsTab(props: {
       key: "title",
       title: "Title",
       render: (row) => (
-        <span>
-          <button
-            type="button"
-            onClick={() => props.onOpenCustom(row.id)}
-            style={{
-              border: "none",
-              background: "none",
-              padding: 0,
-              cursor: "pointer",
-              font: "inherit",
-              fontWeight: 600,
-              textAlign: "left",
-            }}
-          >
-            {row.name}
-          </button>
-          <span style={{ display: "block" }}>
-            <s-text tone="neutral">
-              {row.searchTerms.length
-                ? `Triggers on: ${row.searchTerms.slice(0, 3).join(", ")}${row.searchTerms.length > 3 ? "…" : ""}`
-                : "No search terms yet"}
-            </s-text>
-          </span>
-        </span>
+        <s-stack gap="small-500">
+          <s-text type="strong">{row.name}</s-text>
+          <s-text color="subdued">
+            {row.searchTerms.length
+              ? `Triggers on: ${row.searchTerms.slice(0, 3).join(", ")}${row.searchTerms.length > 3 ? "…" : ""}`
+              : "No search terms yet"}
+          </s-text>
+        </s-stack>
       ),
     },
     {
@@ -216,8 +184,8 @@ export function InstructionsRecommendationsTab(props: {
       title: "Actions",
       align: "end",
       render: (row) => (
-        <span style={{ display: "inline-flex", gap: 6 }}>
-          <s-button variant="tertiary" accessibilityLabel={`Edit ${row.name}`} onClick={() => props.onOpenCustom(row.id)}>
+        <s-stack direction="inline" gap="small-300" justifyContent="end">
+          <s-button variant="tertiary" icon="edit" accessibilityLabel={`Edit ${row.name}`} onClick={() => props.onOpenCustom(row.id)}>
             Edit
           </s-button>
           <s-button
@@ -233,7 +201,7 @@ export function InstructionsRecommendationsTab(props: {
           >
             Delete
           </s-button>
-        </span>
+        </s-stack>
       ),
     },
   ];
@@ -243,132 +211,131 @@ export function InstructionsRecommendationsTab(props: {
   return (
     <s-stack gap="base">
       <s-section heading="Rules">
-        <s-paragraph>How the AI recommends by default.</s-paragraph>
-        <s-switch
-          label="Never recommend out-of-stock items"
-          details="When off, unavailable products can appear in recommendations."
-          checked={props.rules.excludeOutOfStock}
-          disabled={busy}
-          onChange={(e) => submit("save-rules", { excludeOutOfStock: e.currentTarget.checked })}
-        />
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <s-stack gap="base">
+          <s-paragraph color="subdued">How the AI recommends by default.</s-paragraph>
           <s-switch
-            label="Push overstock"
-            details="Favor the products you're holding the most stock of, so high-inventory items sell through first."
-            checked={false}
-            disabled
+            label="Never recommend out-of-stock items"
+            details="When off, unavailable products can appear in recommendations."
+            checked={props.rules.excludeOutOfStock}
+            disabled={busy}
+            onChange={(e) => submit("save-rules", { excludeOutOfStock: e.currentTarget.checked })}
           />
-          <s-badge tone="neutral">Coming soon</s-badge>
-        </div>
+          <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="center">
+            <s-switch
+              label="Push overstock"
+              details="Favor the products you're holding the most stock of, so high-inventory items sell through first."
+              checked={false}
+              disabled
+            />
+            <s-badge tone="neutral">Coming soon</s-badge>
+          </s-grid>
+        </s-stack>
       </s-section>
 
       <s-section heading="App recommendations">
-        <s-paragraph>
-          Pre-configured recommendations that automatically respond to common customer intents
-        </s-paragraph>
-        <DataTable
-          columns={recColumns}
-          rows={props.recommendations}
-          emptyMessage="No app recommendations yet. Add one to answer common intents deterministically."
-          toolbar={
-            <s-button variant="primary" onClick={() => props.onOpenRec("new")}>
-              Add new
-            </s-button>
-          }
-        />
+        <s-stack gap="base">
+          <s-paragraph color="subdued">
+            Pre-configured recommendations that automatically respond to common customer intents.
+          </s-paragraph>
+          <DataTable
+            columns={recColumns}
+            rows={props.recommendations}
+            onRowClick={(row) => props.onOpenRec(row.id)}
+            emptyMessage="No app recommendations yet. Add one to answer common intents deterministically."
+            toolbar={
+              <s-button variant="primary" icon="plus" onClick={() => props.onOpenRec("new")}>
+                Add new
+              </s-button>
+            }
+          />
+        </s-stack>
       </s-section>
 
       <s-section heading="Custom recommendations">
-        <s-paragraph>
-          Create custom recommendation rules for specific use cases like gifts, occasions, or
-          seasonal campaigns
-        </s-paragraph>
-        <DataTable
-          columns={customColumns}
-          rows={props.customRecs}
-          emptyMessage="No custom recommendations yet. Add one for occasions like gifts or seasonal campaigns."
-          toolbar={
-            <s-button variant="primary" onClick={() => props.onOpenCustom("new")}>
-              Add new
-            </s-button>
-          }
-        />
+        <s-stack gap="base">
+          <s-paragraph color="subdued">
+            Create custom recommendation rules for specific use cases like gifts, occasions, or
+            seasonal campaigns.
+          </s-paragraph>
+          <DataTable
+            columns={customColumns}
+            rows={props.customRecs}
+            onRowClick={(row) => props.onOpenCustom(row.id)}
+            emptyMessage="No custom recommendations yet. Add one for occasions like gifts or seasonal campaigns."
+            toolbar={
+              <s-button variant="primary" icon="plus" onClick={() => props.onOpenCustom("new")}>
+                Add new
+              </s-button>
+            }
+          />
+        </s-stack>
       </s-section>
 
       <s-section heading="Cross-sell pairs">
-        <s-paragraph>
-          When recommending a specific product, also suggest its companions — e.g. a tent → sleeping
-          bag.
-        </s-paragraph>
-        <div>
-          <s-button onClick={() => setPairStage({ stage: "anchor" })}>Add pair</s-button>
-        </div>
-        {props.pairs.length === 0 ? (
-          <s-text tone="neutral">No pairs yet. Add one to attach companions to a product.</s-text>
-        ) : (
-          <s-stack gap="small">
-            {props.pairs.map((pair) => (
-              <div
-                key={pair.id}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: "8px 0",
-                  borderBottom: "1px solid var(--s-color-border-secondary, #f1f1f1)",
-                }}
-              >
-                <BrowseThumb
-                  imageUrl={props.productMeta[pair.productId]?.imageUrl ?? null}
-                  title={productTitle(pair.productId)}
-                />
-                <span style={{ flex: 1, minWidth: 0, fontSize: 13 }}>
-                  <strong>{productTitle(pair.productId)}</strong>
-                  <span
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      verticalAlign: "middle",
-                      padding: "0 4px",
-                    }}
-                  >
-                    <s-icon type="arrow-right" size="small" tone="neutral" />
-                  </span>
-                  {pair.companionIds.length} companion{pair.companionIds.length === 1 ? "" : "s"}
-                  <span style={{ display: "block" }}>
-                    <s-text tone="neutral">
-                      {pair.companionIds.map((id) => productTitle(id)).join(", ")}
-                    </s-text>
-                  </span>
-                </span>
-                <s-button
-                  variant="tertiary"
-                  tone="critical"
-                  accessibilityLabel={`Remove pair for ${productTitle(pair.productId)}`}
-                  disabled={busy}
-                  onClick={() => {
-                    if (window.confirm("Remove this cross-sell pair?")) {
-                      submit("delete-pair", { id: pair.id });
-                    }
-                  }}
-                >
-                  Delete
-                </s-button>
-              </div>
-            ))}
-          </s-stack>
-        )}
-        {pairStage.stage === "anchor" ? (
-          <s-text tone="neutral">
-            Step 1 of 2 — pick the anchor product (the first selected product is used).
-          </s-text>
-        ) : null}
-        {pairStage.stage === "companions" ? (
-          <s-text tone="neutral">
-            Step 2 of 2 — pick companion products for{" "}
-            {pairStage.anchorMeta?.title ?? productTitle(pairStage.anchorId)}.
-          </s-text>
-        ) : null}
+        <s-stack gap="base">
+          <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="center">
+            <s-paragraph color="subdued">
+              When recommending a specific product, also suggest its companions — e.g. a tent →
+              sleeping bag.
+            </s-paragraph>
+            <s-button icon="plus" onClick={() => setPairStage({ stage: "anchor" })}>
+              Add pair
+            </s-button>
+          </s-grid>
+          {props.pairs.length === 0 ? (
+            <s-text color="subdued">No pairs yet. Add one to attach companions to a product.</s-text>
+          ) : (
+            <s-stack gap="small-200">
+              {props.pairs.map((pair) => (
+                <s-stack key={pair.id} gap="small-200">
+                  <s-grid gridTemplateColumns="auto 1fr auto" gap="small-200" alignItems="center">
+                    <BrowseThumb
+                      imageUrl={props.productMeta[pair.productId]?.imageUrl ?? null}
+                      title={productTitle(pair.productId)}
+                    />
+                    <s-stack gap="small-500">
+                      <s-stack direction="inline" gap="small-300" alignItems="center">
+                        <s-text type="strong">{productTitle(pair.productId)}</s-text>
+                        <s-icon type="arrow-right" size="small" tone="neutral" />
+                        <s-text>
+                          {pair.companionIds.length} companion
+                          {pair.companionIds.length === 1 ? "" : "s"}
+                        </s-text>
+                      </s-stack>
+                      <s-text color="subdued">
+                        {pair.companionIds.map((id) => productTitle(id)).join(", ")}
+                      </s-text>
+                    </s-stack>
+                    <s-button
+                      variant="tertiary"
+                      tone="critical"
+                      icon="delete"
+                      accessibilityLabel={`Remove pair for ${productTitle(pair.productId)}`}
+                      disabled={busy}
+                      onClick={() => {
+                        if (window.confirm("Remove this cross-sell pair?")) {
+                          submit("delete-pair", { id: pair.id });
+                        }
+                      }}
+                    />
+                  </s-grid>
+                  <s-divider />
+                </s-stack>
+              ))}
+            </s-stack>
+          )}
+          {pairStage.stage === "anchor" ? (
+            <s-banner tone="info">
+              Step 1 of 2 — pick the anchor product (the first selected product is used).
+            </s-banner>
+          ) : null}
+          {pairStage.stage === "companions" ? (
+            <s-banner tone="info">
+              Step 2 of 2 — pick companion products for{" "}
+              {pairStage.anchorMeta?.title ?? productTitle(pairStage.anchorId)}.
+            </s-banner>
+          ) : null}
+        </s-stack>
       </s-section>
 
       <BrowseProductsModal

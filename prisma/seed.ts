@@ -81,7 +81,11 @@ async function main() {
   // ── products ──────────────────────────────────────────────────────────────
   interface DemoProduct { title: string; type: string; price: number; stock: number; description: string }
   const products = load<DemoProduct[]>("products.json");
-  const productVectors = await embed(products.map((p) => `${p.title}. ${p.description}`));
+  // Same text formula as catalog sync (productEmbeddingText) so seed == production.
+  const { productEmbeddingText } = await import("../app/lib/embeddings/embedding.server");
+  const productVectors = await embed(
+    products.map((p) => productEmbeddingText({ title: p.title, productType: p.type, description: p.description })),
+  );
   for (let i = 0; i < products.length; i++) {
     const p = products[i];
     const row = await db.product.upsert({

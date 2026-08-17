@@ -8,6 +8,7 @@ import { getLlmProvider, type ChatMessage } from "../llm/index.server";
 import {
   hybridProductSearch,
   browseCheapestInBudget,
+  candidateSnippet,
   type ProductCandidate,
 } from "../search/product-search.server";
 import { knowledgeSearch } from "../search/knowledge-search.server";
@@ -91,7 +92,9 @@ export async function* runPipeline(input: PipelineInput): AsyncIterable<Pipeline
 
   const config = await getShopConfig(shopId);
   const convo = await ensureConversation(shopId, input);
-  await saveMessage(shopId, convo.id, { role: "in", author: "shopper", content: message });
+  const shopperMessageId = await saveMessage(shopId, convo.id, {
+    role: "in", author: "shopper", content: message,
+  });
 
   // Human mode: AI stays dormant (spec 10 wires aiWhileWaiting refinements).
   if (convo.mode === "human") {
@@ -238,7 +241,9 @@ export async function* runPipeline(input: PipelineInput): AsyncIterable<Pipeline
   }
 
   // ── Router (moderation racing in parallel — layer b) ──────────────────────
-  const { routerHistory, generationHistory } = await loadHistory(shopId, convo.id);
+  const { routerHistory, generationHistory } = await loadHistory(shopId, convo.id, {
+    excludeMessageId: shopperMessageId, // appended once below, never twice
+  });
   const moderationPromise = moderationCheck(shopId, message);
   const routed = await route({
     message,
@@ -356,6 +361,7 @@ async function* buyLane(args: {
         shopId: args.shopId,
         queryEmbedding: args.queryEmbedding,
         keywords: args.keywords,
+        message: args.message,
         priceMax: args.priceMax,
         minMeaningScore,
         excludeOutOfStock,
@@ -385,8 +391,16 @@ async function* buyLane(args: {
     return;
   }
 
-  // Allow-list for grounding + card assembly from DB rows.
-  const allowList = candidates.map((c) => ({ title: c.title, price: c.price }));
+  // Allow-list for grounding + card assembly from DB rows. Candidates arrive
+  // sorted by fused relevance (keyword ⊕ vector), so the first 4 cards are the
+  // best matches. The snippet (type · tags · matching description fragment)
+  // lets the model judge description-level asks ("touchscreen", "rfid") —
+  // titles/prices still come only from DB rows (grounding is mechanical).
+  const allowList = candidates.map((c) => ({
+    title: c.title,
+    price: c.price,
+    snippet: candidateSnippet(c),
+  }));
   let cards = candidates.slice(0, 4).map(toCard);
   // Cross-sell (spec 08): append companions of any anchored card (cap 6 total).
   cards = await appendCrossSell(args.shopId, cards, excludeOutOfStock);
@@ -400,7 +414,8 @@ async function* buyLane(args: {
         content: `Candidate products: ${JSON.stringify(allowList)}\n\nShopper: ${args.message}`,
       },
     ],
-    { temperature: 0.4, maxTokens: 160 },
+    // Demo-validated generation params (chatconvert_ui.py chat_call defaults).
+    { temperature: 0.3, maxTokens: 220 },
   );
 
   await recordEvent(args.shopId, "recommendation_shown", {
@@ -699,8 +714,8 @@ async function saveMessage(
     intent?: unknown;
     productCards?: ProductCard[];
   },
-): Promise<void> {
-  await db.message.create({
+): Promise<string> {
+  const row = await db.message.create({
     data: {
       shopId,
       conversationId,
@@ -711,7 +726,9 @@ async function saveMessage(
       intent: data.intent ? (data.intent as Prisma.InputJsonValue) : undefined,
       productCards: data.productCards ? (data.productCards as unknown as Prisma.InputJsonValue) : undefined,
     },
+    select: { id: true },
   });
+  return row.id;
 }
 
 /**
@@ -748,11 +765,12 @@ async function customRecommendationPool(
       select: {
         id: true, shopifyProductId: true, title: true, price: true, stock: true,
         imageUrl: true, handle: true, variants: true,
+        productType: true, tags: true, description: true,
       },
       take: 8,
     });
     if (products.length === 0) return null;
-    return products.map((p) => ({
+    return products.map((p, i) => ({
       id: p.id,
       shopifyProductId: p.shopifyProductId,
       title: p.title,
@@ -761,7 +779,12 @@ async function customRecommendationPool(
       imageUrl: p.imageUrl,
       handle: p.handle,
       variants: p.variants as ProductCandidate["variants"],
+      productType: p.productType,
+      tags: p.tags,
+      description: p.description,
       score: null,
+      headline: null,
+      fused: 1 / (60 + i),
     }));
   } catch (error) {
     console.error("custom_recommendation_error", error);

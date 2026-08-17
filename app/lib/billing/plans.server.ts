@@ -10,6 +10,7 @@ export type GatedFeature =
   | "remove_branding"
   | "unanswered_analytics"
   | "discount_realtime_sync"
+  | "catalog_auto_sync"
   | "premium_campaign_templates"
   | "inbox_cart_view"
   | "auto_detect_language"
@@ -97,6 +98,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       "remove_branding",
       "unanswered_analytics",
       "discount_realtime_sync",
+      "catalog_auto_sync",
       "premium_campaign_templates",
       "inbox_cart_view",
     ],
@@ -121,6 +123,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       "remove_branding",
       "unanswered_analytics",
       "discount_realtime_sync",
+      "catalog_auto_sync",
       "premium_campaign_templates",
       "inbox_cart_view",
       "auto_detect_language",

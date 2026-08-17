@@ -1,8 +1,10 @@
-/* Golden-set eval (spec 03 / ai-pipeline skill): runs the 7 canonical inputs
+/* Golden-set eval (spec 03 / ai-pipeline skill): runs the canonical inputs
  * through the REAL pipeline against the seeded dev shop and asserts the PATH
  * each takes (outcome/sourceLayer), plus semantic expectations when a real
  * OPENAI_API_KEY is present. Run BEFORE merging any prompt/threshold change:
- *   npx tsx scripts/eval-golden.ts
+ *   npm run eval:golden      (= npx tsx scripts/eval-golden.ts)
+ * Sections: single-turn cases · description-level asks (accuracy batch
+ * 2026-08-17) · multi-turn continuity · no-accidental-handover · history window.
  */
 import { PrismaClient } from "@prisma/client";
 
@@ -14,6 +16,8 @@ interface GoldenCase {
   expectOutcome: string[];
   expectInText?: RegExp;
   expectCards?: boolean;
+  /** At least one returned card title must match (checks ranking, not just recall). */
+  expectCardTitle?: RegExp;
 }
 
 const GOLDEN: GoldenCase[] = [
@@ -32,6 +36,15 @@ const GOLDEN: GoldenCase[] = [
   // recommendation layer deterministically.
   { input: "what's new?", expectOutcome: ["recommendation"], expectCards: true },
   { input: "product under 20 dollar", expectOutcome: ["buy", "buy_browse"], expectCards: true },
+  // ── Description-level asks (accuracy batch 2026-08-17) — the attribute lives
+  // ONLY in the product description; the title never says it. Recall comes from
+  // the OR'd weighted tsvector + message-word tier + fused ranking; the model
+  // sees the matching fragment via the candidate snippet.
+  { input: "gloves I can use with my phone", expectOutcome: ["buy"], expectCards: true, expectInText: /merino|glove/i, expectCardTitle: /Merino Wool Gloves/ },
+  { input: "something that blocks rfid", expectOutcome: ["buy"], expectCards: true, expectInText: /wallet/i, expectCardTitle: /Leather Wallet/ },
+  { input: "a bottle that keeps drinks hot", expectOutcome: ["buy"], expectCards: true, expectInText: /tumbler|bottle/i, expectCardTitle: /Tumbler|Bottle/ },
+  // Bare "customer service" is a question, not a hand-off (handover.server.ts patterns).
+  { input: "what is your customer service email?", expectOutcome: ["question", "fell_back"] },
 ];
 
 async function main() {
@@ -50,7 +63,7 @@ async function main() {
     const sessionId = `golden-${Math.random().toString(36).slice(2, 10)}`;
     let outcome = "";
     let text = "";
-    let cards = 0;
+    let cards: { title: string }[] = [];
     for await (const frame of runPipeline({
       shopId: shop.id,
       sessionId,
@@ -59,7 +72,7 @@ async function main() {
     })) {
       if (frame.type === "token") text += frame.text;
       if (frame.type === "message") text += frame.text;
-      if (frame.type === "cards") cards = frame.cards.length;
+      if (frame.type === "cards") cards = frame.cards;
       if (frame.type === "done") outcome = frame.outcome;
     }
 
@@ -67,15 +80,19 @@ async function main() {
     if (!testCase.expectOutcome.includes(outcome)) {
       problems.push(`outcome "${outcome}" not in [${testCase.expectOutcome.join(", ")}]`);
     }
-    if (testCase.expectCards && cards === 0 && outcome !== "clarify") {
+    if (testCase.expectCards && cards.length === 0 && outcome !== "clarify") {
       problems.push("expected product cards, got none");
     }
     if (testCase.expectInText && !testCase.expectInText.test(text) && outcome !== "clarify") {
       problems.push(`reply text failed ${testCase.expectInText}: "${text.slice(0, 120)}"`);
     }
+    if (testCase.expectCardTitle && !cards.some((c) => testCase.expectCardTitle!.test(c.title))) {
+      problems.push(`no card matched ${testCase.expectCardTitle}: [${cards.map((c) => c.title).join(" | ")}]`);
+    }
 
     if (problems.length === 0) {
-      console.log(`PASS  "${testCase.input}" → ${outcome}${cards ? ` (${cards} cards)` : ""}`);
+      const cardList = cards.length ? ` (${cards.length} cards: ${cards.map((c) => c.title).join(" | ")})` : "";
+      console.log(`PASS  "${testCase.input}" → ${outcome}${cardList}`);
     } else {
       failures++;
       console.log(`FAIL  "${testCase.input}" → ${outcome}\n      ${problems.join("\n      ")}`);
@@ -108,6 +125,82 @@ async function main() {
       failures++;
       console.log(
         `FAIL  multi-turn "under $25" → ${outcome}; over-budget: ${overBudget.map((c) => c.title).join(", ") || "none"}`,
+      );
+    }
+  }
+
+  // ── 3-turn continuity (accuracy batch 2026-08-17) ─────────────────────────
+  // History window is 10 for router AND generation; the follow-ups only make
+  // sense with the earlier turns in context.
+  {
+    const sessionId = `golden-multi3-${Math.random().toString(36).slice(2, 10)}`;
+    let conversationId: string | undefined;
+    const turns = ["show me some jackets", "under $100", "the waterproof one?"];
+    let outcome = "";
+    let cards: { price: number; title: string }[] = [];
+    for (const message of turns) {
+      cards = [];
+      for await (const frame of runPipeline({ shopId: shop.id, sessionId, conversationId, message, isTest: true })) {
+        if (frame.type === "cards") cards = frame.cards;
+        if (frame.type === "done") {
+          outcome = frame.outcome;
+          conversationId = frame.conversationId;
+        }
+      }
+    }
+    const overBudget = cards.filter((c) => c.price > 100);
+    const hasWaterproof = cards.some((c) => /waterproof|rain/i.test(c.title));
+    if (["buy", "buy_browse"].includes(outcome) && overBudget.length === 0 && hasWaterproof) {
+      console.log(`PASS  3-turn "the waterproof one?" → ${outcome} (${cards.map((c) => c.title).join(" | ")})`);
+    } else {
+      failures++;
+      console.log(
+        `FAIL  3-turn "the waterproof one?" → ${outcome}; cards: ${cards.map((c) => `${c.title} $${c.price}`).join(" | ") || "none"}`,
+      );
+    }
+  }
+
+  // ── Repeated message must NOT hand over (default threshold 3) ─────────────
+  {
+    const sessionId = `golden-repeat-${Math.random().toString(36).slice(2, 10)}`;
+    let conversationId: string | undefined;
+    let outcome = "";
+    for (let i = 0; i < 2; i++) {
+      for await (const frame of runPipeline({
+        shopId: shop.id, sessionId, conversationId, message: "do you ship to Canada?", isTest: true,
+      })) {
+        if (frame.type === "done") {
+          outcome = frame.outcome;
+          conversationId = frame.conversationId;
+        }
+      }
+    }
+    if (outcome === "question") {
+      console.log("PASS  repeated question ×2 → question (no handover)");
+    } else {
+      failures++;
+      console.log(`FAIL  repeated question ×2 → ${outcome} (expected question)`);
+    }
+
+    // History window sanity: the just-saved shopper message is excluded when
+    // its id is passed, and the window ends with the assistant's reply.
+    const { loadHistory } = await import("../app/lib/pipeline/history.server");
+    const lastIn = await dbCheck.message.findFirst({
+      where: { shopId: shop.id, conversationId, role: "in" },
+      orderBy: { createdAt: "desc" },
+    });
+    const bundle = await loadHistory(shop.id, conversationId!, { excludeMessageId: lastIn?.id });
+    const dup = bundle.routerHistory.filter((m) => m.role === "user" && m.content === lastIn?.content).length;
+    const last = bundle.routerHistory[bundle.routerHistory.length - 1];
+    // Two identical shopper turns were sent above, so exactly ONE copy (turn 1) may remain.
+    if (dup <= 1 && last?.role === "assistant" && bundle.generationHistory.length === bundle.routerHistory.length) {
+      console.log(
+        `PASS  history window excludes current message (router=${bundle.routerHistory.length}, generation=${bundle.generationHistory.length})`,
+      );
+    } else {
+      failures++;
+      console.log(
+        `FAIL  history window: dup=${dup} last=${last?.role} router=${bundle.routerHistory.length} generation=${bundle.generationHistory.length}`,
       );
     }
   }

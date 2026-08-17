@@ -8,8 +8,7 @@ import db from "../db.server";
 import { resolveShopId } from "../lib/tenancy.server";
 import { invalidateShopConfig } from "../lib/config/shop-config.server";
 import { loadShopSettings } from "../lib/settings/save.server";
-import { BRAND } from "../components/ui/tokens";
-import { StripBanner } from "../components/ui/StripBanner";
+import { ProgressTrack } from "../components/ui/Progress";
 
 // AI Agent home (spec 07, design ai-agent.html #viewAgent): master AI switch,
 // unresolved-questions card, 3-step setup grid, done-for-you promo. This route
@@ -140,14 +139,15 @@ export default function AiAgentPage() {
   return (
     <s-page heading="AI Agent">
       <s-stack gap="base">
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <s-badge tone={home.aiEnabled ? "success" : "neutral"}>
-            {home.aiEnabled ? "On" : "Off"}
-          </s-badge>
-          <s-text tone="neutral">
-            Enhance support and increase sales with an AI agent.
-          </s-text>
-          <span style={{ marginLeft: "auto", display: "inline-flex", gap: 8 }}>
+        {/* Status + page actions stay INSIDE the page (user decision 2026-08-17). */}
+        <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="center">
+          <s-stack direction="inline" gap="small-200" alignItems="center">
+            <s-badge tone={home.aiEnabled ? "success" : "neutral"} icon={home.aiEnabled ? "check-circle" : "circle-dashed"}>
+              {home.aiEnabled ? "AI agent on" : "AI agent off"}
+            </s-badge>
+            <s-text color="subdued">Enhance support and increase sales with an AI agent.</s-text>
+          </s-stack>
+          <s-stack direction="inline" gap="small-200" alignItems="center">
             <s-button onClick={() => navigate("/app/ai-agent/test")}>Test AI</s-button>
             <s-button
               variant="primary"
@@ -162,113 +162,106 @@ export default function AiAgentPage() {
             >
               {home.aiEnabled ? "Deactivate" : "Activate"}
             </s-button>
-          </span>
-        </div>
+          </s-stack>
+        </s-grid>
 
         {home.aiEnabled && !bannerDismissed ? (
-          <StripBanner
+          <s-banner
             tone="info"
-            icon="info"
-            title="Your AI agent is on"
+            heading="Your AI agent is on"
+            dismissible
             onDismiss={dismissBanner}
           >
             AI is now responding to customers. Review and add training data to ensure accurate
             answers.
-          </StripBanner>
+          </s-banner>
         ) : null}
         {!home.aiEnabled ? (
-          <StripBanner tone="warning" icon="alert-triangle" title="Your AI agent is off">
+          <s-banner tone="warning" heading="Your AI agent is off">
             The chat widget falls back to contact and leave-a-message options until you activate
             the AI agent again.
-          </StripBanner>
+          </s-banner>
         ) : null}
 
         <s-section>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="center">
+            <s-stack gap="small-200">
+              <s-stack direction="inline" gap="small-200" alignItems="center">
                 <s-heading>AI unresolved questions</s-heading>
                 {home.pendingUnresolved > 0 ? (
                   <s-badge tone="warning">{home.pendingUnresolved} pending</s-badge>
                 ) : (
                   <s-badge tone="success">All clear</s-badge>
                 )}
-              </div>
-              <s-paragraph>Monitor and improve AI agent responses</s-paragraph>
-            </div>
-            <s-button variant="tertiary" onClick={() => navigate("/app/ai-agent/review")}>
-              Go to review
-            </s-button>
-          </div>
+              </s-stack>
+              <s-paragraph color="subdued">
+                Questions the AI couldn&apos;t answer confidently — turn them into training data.
+              </s-paragraph>
+            </s-stack>
+            <s-button onClick={() => navigate("/app/ai-agent/review")}>Go to review</s-button>
+          </s-grid>
         </s-section>
 
-        <s-section heading="Setup AI agent">
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-              gap: 14,
-            }}
-          >
-            <SetupCard
-              step="STEP 1"
-              title="Training data"
-              description="What AI knows about your business"
-              statusLabel={
-                trainingDone ? `${home.itemsLearned} items learned` : "No items learned yet"
-              }
-              statusTone={trainingDone ? "success" : "warning"}
-              pct={trainingDone ? 100 : 0}
-              button={
-                <s-button onClick={() => navigate("/app/ai-agent/training")}>Manage</s-button>
-              }
-            />
-            <SetupCard
-              step="STEP 2"
-              title="Instructions"
-              description="How AI responds to your customers"
-              statusLabel={
-                home.instructionsPct >= 100
-                  ? "Complete"
-                  : home.instructionsPct > 0
-                    ? "Needs a few tweaks"
-                    : "Not started"
-              }
-              statusTone={home.instructionsPct >= 100 ? "success" : "warning"}
-              pct={home.instructionsPct}
-              button={
-                <s-button onClick={() => navigate("/app/ai-agent/instructions")}>
-                  Manage
-                </s-button>
-              }
-            />
-            <SetupCard
-              step="STEP 3"
-              title="Test AI"
-              description="Chat with your AI to test responses"
-              statusLabel={testReady ? "Ready to test" : "Finish steps 1 & 2"}
-              statusTone={testReady ? "success" : "neutral"}
-              pct={testReady ? 100 : 0}
-              button={
-                <s-button onClick={() => navigate("/app/ai-agent/test")}>
-                  Test now
-                </s-button>
-              }
-            />
-          </div>
+        <s-section heading="Set up your AI agent">
+          <s-stack gap="base">
+            <s-paragraph color="subdued">
+              Three steps: teach it your store, tell it how to behave, then try it out.
+            </s-paragraph>
+            <s-grid gridTemplateColumns="repeat(auto-fit, minmax(220px, 1fr))" gap="base">
+              <SetupCard
+                step="Step 1"
+                title="Training data"
+                description="What the AI knows about your business"
+                statusLabel={
+                  trainingDone ? `${home.itemsLearned} items learned` : "No items learned yet"
+                }
+                statusTone={trainingDone ? "success" : "warning"}
+                pct={trainingDone ? 100 : 0}
+                actionLabel="Manage"
+                onAction={() => navigate("/app/ai-agent/training")}
+              />
+              <SetupCard
+                step="Step 2"
+                title="Instructions"
+                description="How the AI responds to your customers"
+                statusLabel={
+                  home.instructionsPct >= 100
+                    ? "Complete"
+                    : home.instructionsPct > 0
+                      ? "Needs a few tweaks"
+                      : "Not started"
+                }
+                statusTone={home.instructionsPct >= 100 ? "success" : "warning"}
+                pct={home.instructionsPct}
+                actionLabel="Manage"
+                onAction={() => navigate("/app/ai-agent/instructions")}
+              />
+              <SetupCard
+                step="Step 3"
+                title="Test AI"
+                description="Chat with your AI to check its answers"
+                statusLabel={testReady ? "Ready to test" : "Finish steps 1 & 2"}
+                statusTone={testReady ? "success" : "neutral"}
+                pct={testReady ? 100 : 0}
+                actionLabel="Test now"
+                onAction={() => navigate("/app/ai-agent/test")}
+              />
+            </s-grid>
+          </s-stack>
         </s-section>
 
         <s-section>
-          <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
-            <div style={{ flex: 1 }}>
+          <s-grid gridTemplateColumns="1fr auto" gap="large" alignItems="center">
+            <s-stack gap="small-200">
               <s-heading>Want us to set up your AI agent?</s-heading>
-              <s-paragraph>
+              <s-paragraph color="subdued">
                 Our team trains it on your store, writes the instructions, and gets it ready — so
                 you can switch it on with confidence.
               </s-paragraph>
-              <div style={{ marginTop: 10 }}>
+              <s-box paddingBlockStart="small-200">
                 <s-button
                   variant="primary"
+                  icon="email"
                   onClick={() =>
                     window.open(
                       "mailto:support@chatconvert.app?subject=Set%20up%20my%20AI%20agent",
@@ -278,12 +271,17 @@ export default function AiAgentPage() {
                 >
                   Set it up for me
                 </s-button>
-              </div>
-            </div>
-            <div style={{ fontSize: 56 }} aria-hidden="true">
-              🤖
-            </div>
-          </div>
+              </s-box>
+            </s-stack>
+            <s-box
+              padding="base"
+              borderRadius="base"
+              background="subdued"
+              accessibilityVisibility="hidden"
+            >
+              <s-icon type="chat" tone="neutral" />
+            </s-box>
+          </s-grid>
         </s-section>
       </s-stack>
     </s-page>
@@ -297,34 +295,24 @@ function SetupCard(props: {
   statusLabel: string;
   statusTone: "success" | "warning" | "neutral";
   pct: number;
-  button: React.ReactNode;
+  actionLabel: string;
+  onAction: () => void;
 }) {
   return (
-    <s-box padding="base" borderWidth="base" borderRadius="base">
-      <s-stack gap="small">
-        <s-text tone="neutral">{props.step}</s-text>
+    <s-box padding="base" borderWidth="base" borderRadius="base" background="base">
+      <s-stack gap="small-200">
+        <s-text color="subdued" type="strong">
+          {props.step.toUpperCase()}
+        </s-text>
         <s-heading>{props.title}</s-heading>
-        <s-text tone="neutral">{props.description}</s-text>
-        <s-badge tone={props.statusTone}>{props.statusLabel}</s-badge>
-        <div
-          style={{
-            height: 6,
-            borderRadius: 3,
-            background: "var(--s-color-border, #e3e3e3)",
-            overflow: "hidden",
-          }}
-        >
-          <div
-            style={{
-              width: `${Math.min(100, Math.max(0, props.pct))}%`,
-              height: "100%",
-              background: BRAND.progressGradient,
-              borderRadius: 3,
-              transition: "width 300ms ease",
-            }}
-          />
-        </div>
-        {props.button}
+        <s-text color="subdued">{props.description}</s-text>
+        <s-box paddingBlock="small-200">
+          <s-badge tone={props.statusTone}>{props.statusLabel}</s-badge>
+        </s-box>
+        <ProgressTrack value={props.pct} max={100} height={6} label={`${props.title} progress`} />
+        <s-box paddingBlockStart="small-200">
+          <s-button onClick={props.onAction}>{props.actionLabel}</s-button>
+        </s-box>
       </s-stack>
     </s-box>
   );

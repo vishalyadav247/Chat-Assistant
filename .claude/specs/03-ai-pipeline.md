@@ -23,7 +23,7 @@ Implement the validated demo pipeline on production infrastructure. The LLM is t
    ≥ curatedMatchThreshold (0.80) → deterministic reply (talkingPoints + cards), no LLM, DONE
    in [curatedBorderline (0.65), 0.80) → tiny LLM yes/no confirm (temp 0, max_tokens 3); yes → use it
 4. ROUTER: gpt-4o-mini, temp 0, response_format json_object, max_tokens ~160
-   system = prompts.router + "\nBANNED TOPICS: ..." + "\nSTORE SCOPE: " + persona.scope
+   system = prompts.router (+ "\nBANNED TOPICS: ..." ONLY when the list is non-empty; + "\nSTORE SCOPE: ..." ONLY when persona.scope is set — exactly like the demo; a generic default scope over-triggered off_topic — 2026-08-17)
    history included; returns {intent: buy|question|chat, price_max, keywords[1-4], blocked, blocked_reason, off_topic, off_topic_reason}
    parse failure → DO NOT default to buy (demo bug): retry once, then fallback to chat lane with clarify
    blocked → fallbackMessage, DONE.  off_topic → persona.offTopicMessage (polite redirect, distinct from blocked), DONE.
@@ -46,18 +46,19 @@ One embedding call per turn (`embed(message)`), reused for guardrail(c), curated
 
 ## Hybrid product search (accuracy core)
 
-- Two queries in parallel (`Promise.all`, `$queryRaw`):
-  - keyword: `search_text @@ plainto_tsquery($keywords)` + hard filters `shop_id = $shop AND learn_enabled AND stock > 0 AND (price <= $price_max OR $price_max IS NULL)`
-  - vector: same hard filters, `ORDER BY embedding <=> $q::vector LIMIT 8`
-- Merge: `dedupeById([...keyword, ...vector.filter(score >= minMeaningScore 0.30)]).slice(0, 8)` — the allow-list.
+- Two queries in parallel (`Promise.all`, `$queryRaw`) — accuracy batch 2026-08-17:
+  - keyword: weighted generated tsvector `searchText` = title (A) ‖ productType + vendor + tags (B) ‖ **full** description (C) (migration `product_search_weighted`); query = **OR** of `plainto_tsquery` per router keyword (demo's ANY-keyword recall) plus a lower tier of the shopper's own significant words; `searchText @@ q`, ordered router-hit first then `ts_rank_cd`; `ts_headline` returns the matching description fragment; hard filters `shop_id = $shop AND learn_enabled AND purchasable AND (price <= $price_max OR $price_max IS NULL)`
+  - vector: same hard filters, `ORDER BY embedding <=> $q::vector LIMIT 8`; product embedding text = title. productType. vendor. tags. full description (`productEmbeddingText`)
+- Merge: **reciprocal rank fusion** (k=60; message-word-only keyword hits weighted 0.5; vector-only rows still gated by minMeaningScore 0.30) → sorted → `.slice(0, 8)` — the allow-list, in relevance order.
+- LLM payload per candidate: `{ title, price, snippet }` where snippet = type · tags · matching description fragment (headline) or description start (vector-only). Titles/prices still only from DB rows.
 - Fallbacks: empty + price_max present → "browse" cheapest in-budget in-stock top 4 (never "no match" when budget known); truly empty → fixed clarifying question, **no LLM call**.
-- Upgrade path (backlog, not v1): Reciprocal Rank Fusion, cross-encoder reranker.
-- Cards shown capped at 4.
+- Upgrade path (backlog): per-chunk product vectors for very long descriptions, cross-encoder reranker.
+- Cards shown capped at 4 = the top-4 fused candidates.
 
 ## Chat history / session memory
 
 - `Conversation` by `sessionId` (widget-generated UUID, spec 05); messages persisted every turn.
-- Context = rolling summary (system msg: "Earlier conversation summary: ...") + last 10 messages verbatim for the **router**, last 6 for **generation** (guide's tighter generation window — resolve demo's uniform 10 in favor of 10/6).
+- Context = rolling summary (system msg: "Earlier conversation summary: ...") + last 10 messages verbatim for **both** router and generation (demo's uniform 10 restored 2026-08-17 — the 10/6 split cost follow-up accuracy). The current shopper message is persisted before history loads and is excluded from the window by id (it is appended once as the final user turn, never twice).
 - Summary: gpt-4o-mini temp 0.2 max_tokens 130 (prompts.summary_system), refreshed when older-than-window messages exist and count changed by ~4 since last summary; cached on the conversation row.
 - Retrieval uses ONLY the current message embedding (don't over-feed retrieval).
 

@@ -7,6 +7,8 @@ import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { resolveShopId } from "../lib/tenancy.server";
 import { DataTable } from "../components/DataTable";
+import { EmptyState } from "../components/ui/EmptyState";
+import { PageHeader } from "../components/ui/PageHeader";
 
 // AI unresolved questions review queue (spec 07): shopper questions that hit
 // the pipeline fallback (logged by spec 03). Actions prefill the target form —
@@ -67,30 +69,23 @@ export default function ReviewQueuePage() {
   return (
     <s-page heading="AI unresolved questions">
       <s-stack gap="base">
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <s-button
-            icon="arrow-left"
-            variant="tertiary"
-            accessibilityLabel="Back to AI Agent"
-            onClick={() => navigate("/app/ai-agent")}
-          >
-            AI Agent
-          </s-button>
-          <s-text tone="neutral">
-            Questions your AI couldn&apos;t answer confidently. Turn them into training data.
-          </s-text>
-        </div>
+        <PageHeader
+          backTo="/app/ai-agent"
+          backLabel="AI Agent"
+          description="Questions your AI couldn't answer confidently. Turn them into training data."
+          toolbar={
+            <s-button onClick={() => navigate("/app/ai-agent/training")}>Training data</s-button>
+          }
+        />
 
         <s-section>
           {data.questions.length === 0 ? (
-            <s-box padding="large">
-              <s-stack gap="small">
-                <s-heading>No unresolved questions</s-heading>
-                <s-text tone="neutral">
-                  When the AI falls back on a shopper question, it lands here for review.
-                </s-text>
-              </s-stack>
-            </s-box>
+            <EmptyState
+              icon="check-circle"
+              tone="success"
+              title="No unresolved questions"
+              description="When the AI falls back on a shopper question, it lands here for review."
+            />
           ) : (
             <DataTable
               rows={data.questions}
@@ -102,7 +97,7 @@ export default function ReviewQueuePage() {
                 {
                   key: "question",
                   title: "Question",
-                  render: (row) => <span style={{ fontWeight: 600 }}>{row.question}</span>,
+                  render: (row) => <s-text type="strong">{row.question}</s-text>,
                 },
                 {
                   key: "count",
@@ -132,7 +127,7 @@ export default function ReviewQueuePage() {
                   title: "Actions",
                   align: "end",
                   render: (row) => (
-                    <span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    <s-stack direction="inline" gap="small-300" justifyContent="end">
                       <s-button
                         variant="tertiary"
                         onClick={() =>
@@ -171,7 +166,7 @@ export default function ReviewQueuePage() {
                       >
                         Dismiss
                       </s-button>
-                    </span>
+                    </s-stack>
                   ),
                 },
               ]}

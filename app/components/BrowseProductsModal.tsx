@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useFetcher } from "react-router";
 import type { BrowseData } from "../routes/app.browse-data";
+import { SCROLLBAR_CSS } from "./ui/tokens";
 
 // Shared "Browse products" picker (specs 08/09/12): search + Vendor/Tag/
 // Collection filter chips + paginated table (10/page) served by the
@@ -84,7 +85,12 @@ export function BrowseModalShell(props: {
             onClick={props.onClose}
           />
         </div>
-        <div style={{ padding: "16px 20px", overflowY: "auto", flex: 1 }}>{props.children}</div>
+        {/* App-standard slim scrollbar (tokens.ts) — FAQ modal, product view,
+            browse pickers all render through this shell. */}
+        <style>{SCROLLBAR_CSS}</style>
+        <div className="cc-scroll" style={{ padding: "16px 20px", overflowY: "auto", flex: 1 }}>
+          {props.children}
+        </div>
         <div
           style={{
             display: "flex",

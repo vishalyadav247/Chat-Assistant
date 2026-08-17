@@ -20,6 +20,7 @@ export type AnalyticsEventType =
   | "recommendation_shown"
   | "llm_error"
   | "moderation_error"
+  | "embedding_skipped"
   // 05/06 widget
   | "widget_settings_saved"
   | "widget_opened"

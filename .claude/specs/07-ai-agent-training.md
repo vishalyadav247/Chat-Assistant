@@ -41,9 +41,9 @@ Chip "X of X collections learned"; switch (off default per design); Sync collect
 
 ### FAQs
 - Toolbar: **More actions** (Import CSV ≤1MB w/ sample download; Export: All/Only published), **Add new** (Add FAQ / Add category), search across categories+FAQs, filter chips Status (Published/Draft/Clear) + Featured (Featured/Not featured/Clear) — functional filters.
-- Category tree: category rows (drag reorder, icon — **Polaris icon names only since 2026-08-12 (user decision)**: picker offers a curated preset set, free emoji input removed, legacy emoji rows render as text; name, count, `Default` badge on Uncategorized, status pill, featured star) → FAQ rows (drag, question, status, star) → per-category "+ Add FAQ". Empty state "No FAQs match your filters."
+- Category tree (featured stars are display-only since 2026-08-17, user decision — featured is changed via the edit modals' checkboxes; clicking a star opens the row's modal): category rows (drag reorder, icon — **Polaris icon names only since 2026-08-12 (user decision)**: picker offers a curated preset set, free emoji input removed, legacy emoji rows render as text; name, count, `Default` badge on Uncategorized, status pill, featured star) → FAQ rows (drag, question, status, star) → per-category "+ Add FAQ". Empty state "No FAQs match your filters."
 - **Category modal**: name, icon picker (presets + upload + more), position select, status, "Feature category" checkbox (featured categories appear on widget FAQ home screen).
-- **FAQ modal** (wide): question, rich-text answer (full toolbar incl. image/video), status, category select, Featured question checkbox ("show on first page of chatbox"); Delete in edit mode.
+- **FAQ modal** (wide): question, rich-text answer (full toolbar incl. image/video), status, category select, Featured question checkbox ("show on first page of chatbox"); Delete in edit mode. *Built 2026-08-17 with the app's `RichTextEditor` (bold/italic/underline/lists/link — image/video not in v1); same editor as conversation-starter answers; sanitized server-side.*
 - Published FAQs feed: widget FAQ screen (05, featured first) + knowledge embeddings (04 bridge).
 
 ### Custom knowledge

@@ -8,6 +8,7 @@ import type {
 import { BrowseModalShell } from "./BrowseProductsModal";
 import { ChipInput } from "./ChipInput";
 import { QuotaMeter } from "./QuotaMeter";
+import { EmptyState } from "./ui/EmptyState";
 import {
   LearnCard,
   StatusBadge,
@@ -243,7 +244,7 @@ export function TrainingKnowledgeTab(props: {
                   <s-stack gap="small">
                     <s-text>{s.question}</s-text>
                     <s-text tone="neutral">{s.answer}</s-text>
-                    <div style={{ display: "flex", gap: 8 }}>
+                    <s-stack direction="inline" gap="small-200" alignItems="center">
                       <s-button
                         variant="primary"
                         disabled={busy}
@@ -257,7 +258,7 @@ export function TrainingKnowledgeTab(props: {
                       >
                         Dismiss
                       </s-button>
-                    </div>
+                    </s-stack>
                   </s-stack>
                 </s-box>
               ))}
@@ -268,7 +269,7 @@ export function TrainingKnowledgeTab(props: {
 
       <s-section heading="Manage data">
         <s-stack gap="base">
-          <s-paragraph>What the assistant knows. Knowledge is indexed when you add it.</s-paragraph>
+          <s-paragraph color="subdued">What the assistant knows. Knowledge is indexed when you add it.</s-paragraph>
           <SubTabs
             tabs={[
               { id: "all", label: "All" },
@@ -283,11 +284,16 @@ export function TrainingKnowledgeTab(props: {
           />
 
           {rows.length === 0 ? (
-            <s-box padding="large">
-              <s-text tone="neutral">
-                {filter === "all" ? "No data sources yet — add one below." : "No sources of this type."}
-              </s-text>
-            </s-box>
+            <EmptyState
+              icon="database-add"
+              compact
+              title={filter === "all" ? "No data sources yet" : "No sources of this type"}
+              description={
+                filter === "all"
+                  ? "Add a website URL, a manual Q&A, a CSV or a file below."
+                  : "Switch to All to see every source."
+              }
+            />
           ) : (
             <s-table>
               <s-table-header-row>
@@ -301,10 +307,12 @@ export function TrainingKnowledgeTab(props: {
                 {rows.map((source) => (
                   <s-table-row key={source.id}>
                     <s-table-cell>
-                      <span style={{ fontWeight: 600 }}>{source.name}</span>{" "}
-                      <s-text tone="neutral">
-                        · {source.chunkCount} chunk{source.chunkCount === 1 ? "" : "s"}
-                      </s-text>
+                      <s-stack gap="small-500">
+                        <s-text type="strong">{source.name}</s-text>
+                        <s-text color="subdued">
+                          {source.chunkCount} chunk{source.chunkCount === 1 ? "" : "s"}
+                        </s-text>
+                      </s-stack>
                     </s-table-cell>
                     <s-table-cell>
                       <s-badge tone="neutral">{TYPE_LABEL[source.type] ?? source.type}</s-badge>
@@ -318,7 +326,7 @@ export function TrainingKnowledgeTab(props: {
                       </s-text>
                     </s-table-cell>
                     <s-table-cell>
-                      <span style={{ whiteSpace: "nowrap" }}>
+                      <s-stack direction="inline" gap="small-300" justifyContent="end">
                       <s-button variant="tertiary" onClick={() => openEdit(source)}>
                         Edit
                       </s-button>
@@ -354,14 +362,14 @@ export function TrainingKnowledgeTab(props: {
                           Delete
                         </s-button>
                       )}
-                      </span>
+                      </s-stack>
                     </s-table-cell>
                   </s-table-row>
                 ))}
               </s-table-body>
             </s-table>
           )}
-          <s-text tone="neutral">
+          <s-text color="subdued">
             Re-sync re-reads a source and rebuilds its chunks — use it after your website content
             changes.
           </s-text>
@@ -370,14 +378,8 @@ export function TrainingKnowledgeTab(props: {
 
       <s-section heading="Add data">
         <s-stack gap="base">
-          <s-paragraph>Choose how to feed the assistant — click any option.</s-paragraph>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-              gap: 12,
-            }}
-          >
+          <s-paragraph color="subdued">Choose how to feed the assistant — pick any option.</s-paragraph>
+          <s-grid gridTemplateColumns="repeat(auto-fit, minmax(200px, 1fr))" gap="small-200">
             <AddTile
               title="Website URL"
               description="Crawl pages from your site"
@@ -415,7 +417,7 @@ export function TrainingKnowledgeTab(props: {
               description="Bulk add Q&As"
               onClick={() => setCsvDraft({ id: null, csvText: "", fileName: "" })}
             >
-              <s-text tone="neutral">Up to {props.csvRowCap} Q&A rows per file</s-text>
+              <s-text color="subdued">Up to {props.csvRowCap} Q&A rows per file</s-text>
             </AddTile>
             <AddTile
               title="Upload file"
@@ -432,7 +434,7 @@ export function TrainingKnowledgeTab(props: {
                 label="used"
               />
             </AddTile>
-          </div>
+          </s-grid>
           <AddTile
             wide
             title="Connect policies and pages"
@@ -871,44 +873,21 @@ function AddTile(props: {
   children?: React.ReactNode;
 }) {
   return (
-    <button
-      type="button"
+    <s-clickable
       onClick={props.onClick}
-      style={{
-        // Flex column pinned to the top, children stretched full width —
-        // grid-stretched buttons otherwise vertically center short content
-        // (browser button default) and shrink-wrap the quota meters, making
-        // tiles/bars misaligned and inconsistently sized.
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "stretch",
-        justifyContent: "flex-start",
-        width: "100%",
-        textAlign: props.wide ? "center" : "left",
-        font: "inherit",
-        cursor: "pointer",
-        background: "var(--s-color-bg-fill-secondary, #fbfbfc)",
-        border: "1px solid var(--s-color-border, #e3e3e3)",
-        borderRadius: 14,
-        padding: 16,
-      }}
+      padding="base"
+      borderWidth="base"
+      borderRadius="base"
+      background="subdued"
+      accessibilityLabel={`${props.title} — ${props.description}`}
     >
-      <div style={{ fontWeight: 700, fontSize: 13.5 }}>{props.title}</div>
-      <div
-        style={{
-          fontSize: 12,
-          color: "var(--s-color-text-secondary, #6b6b73)",
-          marginTop: 4,
-          marginBottom: 6,
-        }}
-      >
-        {props.description}
-      </div>
-      {props.children ? (
-        // Pinned to the tile bottom so meters line up across cards even when
-        // descriptions wrap to different line counts.
-        <div style={{ marginTop: "auto" }}>{props.children}</div>
-      ) : null}
-    </button>
+      <s-stack gap="small-200" alignItems={props.wide ? "center" : "start"}>
+        <s-stack gap="small-500" alignItems={props.wide ? "center" : "start"}>
+          <s-text type="strong">{props.title}</s-text>
+          <s-text color="subdued">{props.description}</s-text>
+        </s-stack>
+        {props.children ? <s-box inlineSize="100%">{props.children}</s-box> : null}
+      </s-stack>
+    </s-clickable>
   );
 }

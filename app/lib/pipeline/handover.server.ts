@@ -17,13 +17,16 @@ export type HandoverTrigger =
   | "negative_sentiment"
   | "intent_rule";
 
+// Explicit ask = the shopper wants a person. Every pattern needs an intent verb
+// or an unambiguous "human" noun — a bare "customer service" ("what's your
+// customer service email?") is a QUESTION for the RAG lane, not a handover.
 const EXPLICIT_PATTERNS = [
   /talk\s+to\s+(a\s+)?(human|person|agent|someone|rep)/i,
   /speak\s+(to|with)\s+(a\s+)?(human|person|agent|someone|rep)/i,
   /real\s+(person|human|agent)/i,
   /human\s+(agent|support|help)/i,
-  /connect\s+me\s+(to|with)/i,
-  /customer\s+service/i,
+  /connect\s+me\s+(to|with)\s+(a\s+|the\s+|your\s+)?(human|person|agent|someone|rep|support|team)/i,
+  /\b(talk|speak|chat|connect|contact|reach)\b[^.?!]{0,40}\bcustomer\s+(service|support|care)\b/i,
 ];
 
 const NEGATIVE_EMOJI = /[👎😠😡💩🤬]/u;

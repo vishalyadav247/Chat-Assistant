@@ -49,3 +49,30 @@ export function pseudoEmbedding(text: string): number[] {
   const norm = Math.sqrt(vector.reduce((sum, x) => sum + x * x, 0)) || 1;
   return vector.map((x) => x / norm);
 }
+
+/**
+ * Canonical product embedding text — used by catalog sync AND the seed so
+ * both index the same thing. Title first, then the merchant's classification
+ * (type / vendor / tags), then the FULL description: long descriptions carry
+ * the details shoppers ask about, so they are never trimmed here (only the
+ * model-safety cap in truncateForEmbedding applies). Changing this formula
+ * changes the contentHash → every product re-embeds on the next sync.
+ */
+export function productEmbeddingText(product: {
+  title: string;
+  description?: string | null;
+  productType?: string | null;
+  vendor?: string | null;
+  tags?: string[] | null;
+}): string {
+  const parts = [
+    product.title,
+    product.productType,
+    product.vendor,
+    (product.tags ?? []).filter((t) => t.trim().length > 0).join(", "),
+    product.description,
+  ]
+    .map((p) => (p ?? "").replace(/\s+/g, " ").trim())
+    .filter((p) => p.length > 0);
+  return parts.join(". ");
+}
