@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
+import type { MetafieldDefinitionRow } from "../lib/ingestion/metafields.server";
 import type { ProductDetail, ProductRow, TrainingActionResult } from "../routes/app.ai-agent.training";
 import { DataTable } from "./DataTable";
+import { ManageMetafieldsModal } from "./ManageMetafieldsModal";
 import { BrowseModalShell, BrowseThumb } from "./BrowseProductsModal";
 import {
   AutoSyncControl,
@@ -13,9 +15,10 @@ import {
 import { BRAND } from "./ui/tokens";
 
 // Products tab (spec 07, design #viewTraining → Products): learn card with
-// master switch, manage card (Sync / disabled Manage metafields), sub-tabs
+// master switch, manage card (Manage metafields modal + Sync), sub-tabs
 // All/Active/Inactive + Learning on/off (2026-08-17), table with per-row learn
-// toggle + read-only view modal (row click opens it too).
+// toggle + read-only view modal (row click opens it too; lists synced
+// metafields, flagging the ones the AI learns from — 2026-08-19).
 
 type SubTab = "all" | "active" | "inactive" | "learning_on" | "learning_off";
 
@@ -33,12 +36,17 @@ export function TrainingProductsTab(props: {
   autoSyncAvailable: boolean;
   /** ShopSettings.catalogAutoSync.products — daily full re-sync (webhooks unaffected). */
   autoSyncEnabled: boolean;
+  /** Manage metafields modal rows + plan cap (spec 07, 2026-08-19). */
+  metafields: MetafieldDefinitionRow[];
+  metafieldQuota: number;
+  metafieldSyncAt: string | null;
 }) {
   const { submit, pendingIntent } = useTrainingFetcher();
   const syncWatch = useSyncWatcher(props.lastSyncedAt, "Products synced");
   const [subTab, setSubTab] = useState<SubTab>("all");
   const [detail, setDetail] = useState<ProductDetail | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [metafieldsOpen, setMetafieldsOpen] = useState(false);
   const detailFetcher = useTrainingFetcher((result: TrainingActionResult) => {
     if (result.intent === "product-detail" && result.ok && result.detail) {
       setDetail(result.detail);
@@ -97,10 +105,7 @@ export function TrainingProductsTab(props: {
               }
             />
             <s-stack direction="inline" gap="small-200" alignItems="center">
-              <s-button disabled={true}>
-                Manage metafields
-                <s-tooltip>Coming soon</s-tooltip>
-              </s-button>
+              <s-button onClick={() => setMetafieldsOpen(true)}>Manage metafields</s-button>
               <s-button
                 variant="primary"
                 icon="refresh"
@@ -165,10 +170,10 @@ export function TrainingProductsTab(props: {
                 key: "product",
                 title: "Product",
                 render: (row) => (
-                  <s-stack direction="inline" alignItems="center" gap="small-200">
+                  <s-grid gridTemplateColumns="auto 1fr" gap="small-200" alignItems="center">
                     <BrowseThumb imageUrl={row.imageUrl} title={row.title} />
                     <s-text type="strong">{row.title}</s-text>
-                  </s-stack>
+                  </s-grid>
                 ),
               },
               {
@@ -309,11 +314,41 @@ export function TrainingProductsTab(props: {
               }
             />
 
+            <s-heading>Metafields</s-heading>
+            {detail.metafields.length === 0 ? (
+              <s-text tone="neutral">—</s-text>
+            ) : (
+              <s-stack gap="small-200">
+                {detail.metafields.map((m, index) => (
+                  <s-grid
+                    key={`${m.label}-${index}`}
+                    gridTemplateColumns="140px 1fr auto"
+                    gap="base"
+                    alignItems="start"
+                  >
+                    <s-text color="subdued" type="strong">
+                      {m.label}
+                    </s-text>
+                    <s-text>{m.value}</s-text>
+                    {m.enabled ? <s-badge tone="success">AI</s-badge> : <span />}
+                  </s-grid>
+                ))}
+              </s-stack>
+            )}
+
             <s-heading>Options</s-heading>
             <s-text tone="neutral">—</s-text>
           </s-stack>
         )}
       </BrowseModalShell>
+
+      <ManageMetafieldsModal
+        open={metafieldsOpen}
+        onClose={() => setMetafieldsOpen(false)}
+        rows={props.metafields}
+        quota={props.metafieldQuota}
+        lastSyncedAt={props.metafieldSyncAt}
+      />
     </s-stack>
   );
 }

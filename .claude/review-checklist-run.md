@@ -50,6 +50,7 @@
   - `write_files` — merchant logo/icon uploads (Shopify Files staged uploads)
   - `read_legal_policies` — policy knowledge connector (merchant content, not PCD)
   - `read_online_store_pages` — pages knowledge connector (merchant content, not PCD)
+  - `read_content` (added 2026-08-19) — required by the `metafield_definitions/*` webhooks that keep the Manage-metafields catalog live (no content is read)
 - No `read_orders` / customer scopes — Protected Customer Data process deliberately deferred
   (toml comment cites spec 17).
 - **Manual step**: copy the per-scope justifications into the App Store listing form.

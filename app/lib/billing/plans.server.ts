@@ -25,7 +25,8 @@ export type QuotaDimension =
   | "manual_qas"
   | "policy_pages"
   | "crawl_pages"
-  | "file_uploads";
+  | "file_uploads"
+  | "metafields_enabled"; // product/variant metafields opted into AI training (spec 07)
 
 const ENFORCEMENT: "open" | "enforced" = "open";
 
@@ -57,6 +58,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       policy_pages: 5,
       crawl_pages: 1,
       file_uploads: 0,
+      metafields_enabled: 3,
     },
     features: [],
   },
@@ -75,6 +77,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       policy_pages: 10,
       crawl_pages: 10,
       file_uploads: 0,
+      metafields_enabled: 10,
     },
     features: ["remove_branding", "unanswered_analytics"],
   },
@@ -93,6 +96,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       policy_pages: 10,
       crawl_pages: 10,
       file_uploads: 0,
+      metafields_enabled: 25,
     },
     features: [
       "remove_branding",
@@ -118,6 +122,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       policy_pages: 20,
       crawl_pages: 20,
       file_uploads: 5,
+      metafields_enabled: 100,
     },
     features: [
       "remove_branding",

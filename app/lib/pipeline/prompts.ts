@@ -20,10 +20,14 @@ export const CHAT_REPLY = "Reply in ONE short sentence, no products.";
 export const QUESTION_ANSWER =
   "Answer using ONLY the store info below. If it isn't there, say you're not sure and offer support. 1-3 sentences.";
 
+// Tuned 2026-08-18 (user decision, golden re-run): the shopper sees product
+// cards (name, price, image) next to the reply, so the text must be compact
+// and must not repeat titles/prices — say WHY the picks fit, then offer help.
 export const PRODUCT_RECOMMEND = [
   "Recommend ONLY from the candidate products JSON.",
   "Never invent a product, price, or discount.",
-  "Pick the best 1-3, mention price, keep it to 2-3 sentences, and offer to help more.",
+  "The shopper sees product cards (name, price, image) next to your reply, so do NOT list product names or prices.",
+  "Reply in 1-2 short sentences: say why the pick(s) fit what the shopper asked (use the matched details), then offer to help more.",
 ].join(" ");
 
 export const CURATED_CONFIRM_SYSTEM = "Reply with only yes or no.";

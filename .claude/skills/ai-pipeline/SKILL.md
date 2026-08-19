@@ -19,10 +19,10 @@ Spec: `.claude/specs/03-ai-pipeline.md`. Reference implementation: `.claude/reso
 - Prompts live ONLY in `app/lib/pipeline/prompts.ts` — never inline in handlers. Changing one is a tuning event: run the golden-set eval first, note it in PROGRESS.md.
 - Thresholds come from the shop's `guardrails` row (defaults: minMeaningScore 0.30, curatedMatchThreshold 0.80, curatedBorderline 0.65, bannedMatchThreshold 0.35) — never hard-code in logic.
 - Router: temp 0, `response_format: json_object`, ~160 max tokens. Parse failure → retry once → chat-lane clarify (never default to buy — known demo bug).
-- Generation temps (demo-validated, chatconvert_ui.py chat_call): chat 0.5 (60 tok), RAG 0.3 (220 tok), recommend 0.3 (220 tok).
+- Generation temps (demo-validated, chatconvert_ui.py chat_call): chat 0.5 (60 tok), RAG 0.3 (220 tok), recommend 0.3 (90 tok — compact, no titles/prices in text; user decision 2026-08-18).
 - History: last 10 messages verbatim for BOTH router and generation + rolling summary; the current shopper message is excluded from the window by id and appended once (`loadHistory(..., { excludeMessageId })`).
 - Router prompt: BANNED TOPICS / STORE SCOPE lines only when configured (never a generic default scope — it over-triggers off_topic).
-- Product search (accuracy batch 2026-08-17): keyword = OR of router keywords (ANY qualifies, weighted title>type/tags>description) + lower tier of the shopper's own words; vector = full-text product embedding (`productEmbeddingText`); fused by reciprocal rank; the model gets `{title, price, snippet}` per candidate (snippet = type · tags · `ts_headline` fragment). Cards = top-4 fused. Descriptions are never truncated in the index/embedding.
+- Product search (accuracy batch 2026-08-17): keyword = OR of router keywords (ANY qualifies, weighted title>type/tags>description) + lower tier of the shopper's own words; vector = full-text product embedding (`productEmbeddingText` = title · type · vendor · tags · description · enabled metafields text); fused by reciprocal rank; the model gets `{title, price, snippet}` per candidate (snippet = type · tags · `ts_headline` fragment over description+metafields · enabled metafields ≤300 chars · matched words). Cards = top-4 fused. Descriptions are never truncated in the index/embedding.
 - Handover defaults (schemas.ts): repeatedQuestion 3, cannotAnswer 3, aiWhileWaiting "always"; explicit-ask patterns need an intent verb (a bare "customer service" is a question).
 
 ## Cost budget (enforced in tests)

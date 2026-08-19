@@ -75,7 +75,9 @@ model Product {
   imageUrl         String?
   handle           String                       @default("")
   variants         Json?
-  contentHash      String? // title+description hash — re-embed only on change
+  metafields       Json? // DEFINED product + variant metafields as synced (see metafields.server.ts)
+  metafieldText    String                       @default("") // rendered ENABLED metafields — embedded + full-text indexed
+  contentHash      String? // productEmbeddingText() hash — re-embed only on change
   learnEnabled     Boolean                      @default(true)
   embedding        Unsupported("vector(1536)")?
   searchText       Unsupported("tsvector")? // GENERATED column (see init migration)
@@ -86,6 +88,28 @@ model Product {
   @@index([shopId, price])
   @@index([shopId, stock])
   @@map("products")
+}
+
+/// Shopify metafield definitions (products + variants) mirrored per shop —
+/// structured metafields only. `enabled` = merchant opted this metafield into
+/// AI training (Manage metafields modal, spec 07).
+model ProductMetafieldDefinition {
+  id            String   @id @default(cuid())
+  shopId        String
+  ownerType     String   @default("product") // product | variant
+  namespace     String
+  key           String
+  name          String
+  type          String   @default("single_line_text_field")
+  hasDefinition Boolean  @default(false)
+  usedIn        Int      @default(0)
+  enabled       Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([shopId, ownerType, namespace, key])
+  @@index([shopId])
+  @@map("product_metafield_definitions")
 }
 
 model Collection {
@@ -135,6 +159,7 @@ model SyncState {
   productSyncAt  DateTime?
   collectionSyncAt DateTime?
   discountSyncAt DateTime?
+  metafieldSyncAt DateTime? // metafield definitions catalog (spec 07 Manage metafields)
   productCount   Int       @default(0)
   status         String    @default("idle") // idle | running | error
   errorMessage   String?

@@ -28,6 +28,8 @@ export const JOBS = {
   uninstallPurge: "uninstall-purge",
   knowledgeIngest: "knowledge-ingest",
   customerRedact: "customer-redact",
+  metafieldApply: "metafield-apply",
+  metafieldDefinitionsSync: "metafield-definitions-sync",
 } as const;
 
 /** Grace window after uninstall before domain data is erased (spec 17 delta).
@@ -152,6 +154,27 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
     await deleteProductFromWebhook(job.data.shopDomain, job.data.payload);
   });
 
+  // Manage metafields (spec 07): after an enable/disable toggle, re-render
+  // Product.metafieldText from the stored JSON and re-embed changed products.
+  // Idempotent — a stale duplicate just finds nothing to change.
+  await boss.work<{ shopId: string }>(JOBS.metafieldApply, async ([job]) => {
+    const { applyMetafieldSelection } = await import("../ingestion/metafields.server");
+    await applyMetafieldSelection(requireShopId(job.data.shopId));
+  });
+
+  // metafield_definitions/* webhooks (spec 07): re-mirror the definitions
+  // catalog from the Admin API (payload shape irrelevant → idempotent), then
+  // drop vanished-but-enabled metafields from product text + embeddings.
+  await boss.work<ShopJob>(JOBS.metafieldDefinitionsSync, async ([job]) => {
+    const { resolveShopId } = await import("../tenancy.server");
+    const shopId = requireShopId(await resolveShopId(job.data.shopDomain));
+    const { syncMetafieldDefinitions, applyMetafieldSelection } = await import(
+      "../ingestion/metafields.server"
+    );
+    const { removedEnabled } = await syncMetafieldDefinitions(job.data.shopDomain, shopId);
+    if (removedEnabled) await applyMetafieldSelection(shopId);
+  });
+
   await boss.work<ShopJob>(JOBS.shopCleanup, async ([job]) => {
     await cleanupShop(job.data.shopDomain);
   });
@@ -268,6 +291,7 @@ export async function cleanupShop(shopDomain: string): Promise<void> {
     db.widgetSettings.deleteMany({ where: { shopId } }),
     db.shopSettings.deleteMany({ where: { shopId } }),
     db.product.deleteMany({ where: { shopId } }),
+    db.productMetafieldDefinition.deleteMany({ where: { shopId } }),
     db.collection.deleteMany({ where: { shopId } }),
     db.discount.deleteMany({ where: { shopId } }),
     db.syncState.deleteMany({ where: { shopId } }),

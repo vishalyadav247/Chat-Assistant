@@ -9,6 +9,8 @@ import { resolveShopId } from "../lib/tenancy.server";
 import { invalidateShopConfig } from "../lib/config/shop-config.server";
 import { loadShopSettings } from "../lib/settings/save.server";
 import { ProgressTrack } from "../components/ui/Progress";
+import { IconChip } from "../components/ui/IconChip";
+import { RADIUS } from "../components/ui/tokens";
 
 // AI Agent home (spec 07, design ai-agent.html #viewAgent): master AI switch,
 // unresolved-questions card, 3-step setup grid, done-for-you promo. This route
@@ -184,7 +186,12 @@ export default function AiAgentPage() {
         ) : null}
 
         <s-section>
-          <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="center">
+          <s-grid gridTemplateColumns="auto 1fr auto" gap="base" alignItems="center">
+            <IconChip
+              icon={home.pendingUnresolved > 0 ? "question-circle" : "check-circle"}
+              tone={home.pendingUnresolved > 0 ? "warning" : "success"}
+              size="large"
+            />
             <s-stack gap="small-200">
               <s-stack direction="inline" gap="small-200" alignItems="center">
                 <s-heading>AI unresolved questions</s-heading>
@@ -210,6 +217,8 @@ export default function AiAgentPage() {
             <s-grid gridTemplateColumns="repeat(auto-fit, minmax(220px, 1fr))" gap="base">
               <SetupCard
                 step="Step 1"
+                icon="database"
+                tone="accent"
                 title="Training data"
                 description="What the AI knows about your business"
                 statusLabel={
@@ -222,6 +231,8 @@ export default function AiAgentPage() {
               />
               <SetupCard
                 step="Step 2"
+                icon="compose"
+                tone="info"
                 title="Instructions"
                 description="How the AI responds to your customers"
                 statusLabel={
@@ -238,6 +249,8 @@ export default function AiAgentPage() {
               />
               <SetupCard
                 step="Step 3"
+                icon="chat"
+                tone="success"
                 title="Test AI"
                 description="Chat with your AI to check its answers"
                 statusLabel={testReady ? "Ready to test" : "Finish steps 1 & 2"}
@@ -251,7 +264,7 @@ export default function AiAgentPage() {
         </s-section>
 
         <s-section>
-          <s-grid gridTemplateColumns="1fr auto" gap="large" alignItems="center">
+          <s-grid gridTemplateColumns="1fr" gap="base" alignItems="center">
             <s-stack gap="small-200">
               <s-heading>Want us to set up your AI agent?</s-heading>
               <s-paragraph color="subdued">
@@ -273,14 +286,6 @@ export default function AiAgentPage() {
                 </s-button>
               </s-box>
             </s-stack>
-            <s-box
-              padding="base"
-              borderRadius="base"
-              background="subdued"
-              accessibilityVisibility="hidden"
-            >
-              <s-icon type="chat" tone="neutral" />
-            </s-box>
           </s-grid>
         </s-section>
       </s-stack>
@@ -288,8 +293,17 @@ export default function AiAgentPage() {
   );
 }
 
+// Setup card: plain white bordered card, tone icon chip, hover lift (user
+// decision 2026-08-17 — no strips/tints).
+const SETUP_CARD_CSS = `
+.cc-scard { transition: transform .18s ease, box-shadow .18s ease; }
+.cc-scard:hover { transform: translateY(-4px); box-shadow: 0 14px 30px rgba(20,20,25,.12); }
+`;
+
 function SetupCard(props: {
   step: string;
+  icon: React.ComponentProps<typeof IconChip>["icon"];
+  tone: React.ComponentProps<typeof IconChip>["tone"];
   title: string;
   description: string;
   statusLabel: string;
@@ -299,22 +313,41 @@ function SetupCard(props: {
   onAction: () => void;
 }) {
   return (
-    <s-box padding="base" borderWidth="base" borderRadius="base" background="base">
-      <s-stack gap="small-200">
-        <s-text color="subdued" type="strong">
-          {props.step.toUpperCase()}
-        </s-text>
-        <s-heading>{props.title}</s-heading>
+    <div
+      className="cc-scard"
+      style={{
+        padding: 18,
+        height: "100%",
+        boxSizing: "border-box",
+        display: "flex",
+        flexDirection: "column",
+        borderRadius: RADIUS.banner,
+        border: "1px solid var(--s-color-border, #e3e3e3)",
+        background: "var(--s-color-bg, #fff)",
+      }}
+    >
+      <style>{SETUP_CARD_CSS}</style>
+      <s-stack gap="small-100">
+        <s-grid gridTemplateColumns="auto 1fr" gap="small-200" alignItems="center">
+          <IconChip icon={props.icon} tone={props.tone} />
+          <s-stack gap="none">
+            <s-text color="subdued" type="strong">
+              {props.step.toUpperCase()}
+            </s-text>
+            <s-heading>{props.title}</s-heading>
+          </s-stack>
+        </s-grid>
         <s-text color="subdued">{props.description}</s-text>
-        <s-box paddingBlock="small-200">
+        <s-stack direction="inline">
           <s-badge tone={props.statusTone}>{props.statusLabel}</s-badge>
-        </s-box>
+        </s-stack>
         <ProgressTrack value={props.pct} max={100} height={6} label={`${props.title} progress`} />
-        <s-box paddingBlockStart="small-200">
-          <s-button onClick={props.onAction}>{props.actionLabel}</s-button>
-        </s-box>
       </s-stack>
-    </s-box>
+      {/* Button pinned to the bottom so all three cards line up. */}
+      <div style={{ marginTop: "auto", paddingTop: 12 }}>
+        <s-button onClick={props.onAction}>{props.actionLabel}</s-button>
+      </div>
+    </div>
   );
 }
 

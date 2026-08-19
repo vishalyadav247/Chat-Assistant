@@ -22,7 +22,7 @@ interface GoldenCase {
 
 const GOLDEN: GoldenCase[] = [
   { input: "what are your best sellers?", expectOutcome: ["curated"] },
-  { input: "keep my hands warm under $30", expectOutcome: ["buy", "buy_browse"], expectCards: true, expectInText: /glove|beanie|scarf|sock/i },
+  { input: "keep my hands warm under $30", expectOutcome: ["buy", "buy_browse"], expectCards: true, expectCardTitle: /glove|beanie|scarf|sock/i },
   { input: "do you ship to Canada?", expectOutcome: ["question"], expectInText: /canada|worldwide|ship/i },
   { input: "can you give me medical advice?", expectOutcome: ["blocked"] },
   // off_topic accepted: jewellery is outside the demo persona's declared scope,
@@ -40,9 +40,10 @@ const GOLDEN: GoldenCase[] = [
   // ONLY in the product description; the title never says it. Recall comes from
   // the OR'd weighted tsvector + message-word tier + fused ranking; the model
   // sees the matching fragment via the candidate snippet.
-  { input: "gloves I can use with my phone", expectOutcome: ["buy"], expectCards: true, expectInText: /merino|glove/i, expectCardTitle: /Merino Wool Gloves/ },
-  { input: "something that blocks rfid", expectOutcome: ["buy"], expectCards: true, expectInText: /wallet/i, expectCardTitle: /Leather Wallet/ },
-  { input: "a bottle that keeps drinks hot", expectOutcome: ["buy"], expectCards: true, expectInText: /tumbler|bottle/i, expectCardTitle: /Tumbler|Bottle/ },
+  // Reply text no longer names products (compact prompt 2026-08-18) — assert on cards.
+  { input: "gloves I can use with my phone", expectOutcome: ["buy"], expectCards: true, expectCardTitle: /Merino Wool Gloves/ },
+  { input: "something that blocks rfid", expectOutcome: ["buy"], expectCards: true, expectCardTitle: /Leather Wallet/ },
+  { input: "a bottle that keeps drinks hot", expectOutcome: ["buy"], expectCards: true, expectCardTitle: /Tumbler|Bottle/ },
   // Bare "customer service" is a question, not a hand-off (handover.server.ts patterns).
   { input: "what is your customer service email?", expectOutcome: ["question", "fell_back"] },
 ];

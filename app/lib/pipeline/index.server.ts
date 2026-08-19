@@ -9,6 +9,7 @@ import {
   hybridProductSearch,
   browseCheapestInBudget,
   candidateSnippet,
+  selectRelevant,
   type ProductCandidate,
 } from "../search/product-search.server";
 import { knowledgeSearch } from "../search/knowledge-search.server";
@@ -391,17 +392,18 @@ async function* buyLane(args: {
     return;
   }
 
-  // Allow-list for grounding + card assembly from DB rows. Candidates arrive
-  // sorted by fused relevance (keyword ⊕ vector), so the first 4 cards are the
-  // best matches. The snippet (type · tags · matching description fragment)
-  // lets the model judge description-level asks ("touchscreen", "rfid") —
-  // titles/prices still come only from DB rows (grounding is mechanical).
-  const allowList = candidates.map((c) => ({
+  // Relevance cut: only the top match tier is shown — 1, 2 or 4 products
+  // depending on what actually matched, never padded to four. The model gets
+  // the SAME set (allow-list) so its text and the cards agree. The snippet
+  // (type · tags · matching fragment · matched words) lets it judge
+  // description-level asks — titles/prices still come only from DB rows.
+  const relevant = selectRelevant(candidates, 4);
+  const allowList = relevant.map((c) => ({
     title: c.title,
     price: c.price,
     snippet: candidateSnippet(c),
   }));
-  let cards = candidates.slice(0, 4).map(toCard);
+  let cards = relevant.map(toCard);
   // Cross-sell (spec 08): append companions of any anchored card (cap 6 total).
   cards = await appendCrossSell(args.shopId, cards, excludeOutOfStock);
 
@@ -414,8 +416,8 @@ async function* buyLane(args: {
         content: `Candidate products: ${JSON.stringify(allowList)}\n\nShopper: ${args.message}`,
       },
     ],
-    // Demo-validated generation params (chatconvert_ui.py chat_call defaults).
-    { temperature: 0.3, maxTokens: 220 },
+    // Compact reply (user decision 2026-08-18): 1-2 sentences, no titles/prices.
+    { temperature: 0.3, maxTokens: 90 },
   );
 
   await recordEvent(args.shopId, "recommendation_shown", {
@@ -765,7 +767,7 @@ async function customRecommendationPool(
       select: {
         id: true, shopifyProductId: true, title: true, price: true, stock: true,
         imageUrl: true, handle: true, variants: true,
-        productType: true, tags: true, description: true,
+        productType: true, tags: true, description: true, metafieldText: true,
       },
       take: 8,
     });
@@ -782,8 +784,11 @@ async function customRecommendationPool(
       productType: p.productType,
       tags: p.tags,
       description: p.description,
+      metafieldText: p.metafieldText,
       score: null,
       headline: null,
+      matchedTerms: [],
+      coverage: 0,
       fused: 1 / (60 + i),
     }));
   } catch (error) {

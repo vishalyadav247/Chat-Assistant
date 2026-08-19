@@ -51,12 +51,15 @@ export function pseudoEmbedding(text: string): number[] {
 }
 
 /**
- * Canonical product embedding text — used by catalog sync AND the seed so
- * both index the same thing. Title first, then the merchant's classification
- * (type / vendor / tags), then the FULL description: long descriptions carry
- * the details shoppers ask about, so they are never trimmed here (only the
+ * Canonical product embedding text — used by catalog sync, the metafield
+ * selection job AND the seed so all index the same thing. Title first, then
+ * the merchant's classification (type / vendor / tags), then the FULL
+ * description, then the enabled metafields (Product.metafieldText, spec 07
+ * Manage metafields — "Name: value" lines): long descriptions carry the
+ * details shoppers ask about, so they are never trimmed here (only the
  * model-safety cap in truncateForEmbedding applies). Changing this formula
- * changes the contentHash → every product re-embeds on the next sync.
+ * changes the contentHash → every product re-embeds on the next sync (adding
+ * metafieldText only re-hashes products that HAVE enabled metafield text).
  */
 export function productEmbeddingText(product: {
   title: string;
@@ -64,6 +67,7 @@ export function productEmbeddingText(product: {
   productType?: string | null;
   vendor?: string | null;
   tags?: string[] | null;
+  metafieldText?: string | null;
 }): string {
   const parts = [
     product.title,
@@ -71,6 +75,7 @@ export function productEmbeddingText(product: {
     product.vendor,
     (product.tags ?? []).filter((t) => t.trim().length > 0).join(", "),
     product.description,
+    product.metafieldText,
   ]
     .map((p) => (p ?? "").replace(/\s+/g, " ").trim())
     .filter((p) => p.length > 0);

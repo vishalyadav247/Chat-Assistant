@@ -27,6 +27,15 @@ api_version = "2026-07"
   uri = "/webhooks/products"
   topics = [ "products/delete", "products/create", "products/update" ]
 
+  # Manage metafields (spec 07): keep the definitions catalog live. Needs read_content.
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/metafield-definitions"
+  topics = [
+  "metafield_definitions/create",
+  "metafield_definitions/update",
+  "metafield_definitions/delete"
+]
+
   [[webhooks.subscriptions]]
   uri = "/webhooks/app/uninstalled"
   topics = [ "app/uninstalled" ]
@@ -45,7 +54,7 @@ api_version = "2026-07"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_customers,write_customers,read_discounts,read_legal_policies,read_online_store_pages,read_orders,read_products,write_app_proxy,write_files"
+scopes = "read_content,read_customers,write_customers,read_discounts,read_legal_policies,read_online_store_pages,read_orders,read_products,write_app_proxy,write_files"
 
 [auth]
 redirect_urls = [

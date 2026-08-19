@@ -18,6 +18,10 @@ export interface BrowseItemMeta {
 export function BrowseModalShell(props: {
   open: boolean;
   title: string;
+  /** Small subdued text on the heading row, right after the title (e.g. "Last synced …"). */
+  headerMeta?: React.ReactNode;
+  /** Lock the dialog to its max height (85vh) so filtering/tab changes never resize it. */
+  fixedHeight?: boolean;
   onClose: () => void;
   footer: React.ReactNode;
   children: React.ReactNode;
@@ -63,6 +67,7 @@ export function BrowseModalShell(props: {
           width: "100%",
           maxWidth: 640,
           maxHeight: "85vh",
+          minHeight: props.fixedHeight ? "85vh" : undefined,
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
@@ -77,7 +82,10 @@ export function BrowseModalShell(props: {
             borderBottom: "1px solid var(--s-color-border, #e3e3e3)",
           }}
         >
-          <s-heading>{props.title}</s-heading>
+          <s-stack direction="inline" gap="base" alignItems="baseline">
+            <s-heading>{props.title}</s-heading>
+            {props.headerMeta ? <s-text color="subdued">{props.headerMeta}</s-text> : null}
+          </s-stack>
           <s-button
             icon="x"
             variant="tertiary"

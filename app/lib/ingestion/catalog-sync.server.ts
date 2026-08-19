@@ -1,16 +1,27 @@
-import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import db from "../../db.server";
 import { unauthenticated } from "../../shopify.server";
 import { recordEvent } from "../analytics/events.server";
 import { getQuota } from "../billing/plans.server";
-import { embedTexts, productEmbeddingText, toSqlVector } from "../embeddings/embedding.server";
-import { env } from "../env.server";
+import { productEmbeddingText } from "../embeddings/embedding.server";
 import { requireShopId, resolveShopId } from "../tenancy.server";
+import {
+  buildMetafieldText,
+  embedProducts,
+  hashText,
+  loadEnabledMetafields,
+  parseStoredMetafields,
+  refreshMetafieldUsage,
+  syncMetafieldDefinitions,
+  toStoredMetafield,
+  type StoredMetafield,
+} from "./metafields.server";
 
 // Catalog sync (spec 02). Full paged sync + webhook-driven single upserts.
-// Re-embeds ONLY when the embedding text (title/type/vendor/tags/description)
-// changed — contentHash over productEmbeddingText().
+// Re-embeds ONLY when the embedding text (title/type/vendor/tags/description/
+// enabled metafields) changed — contentHash over productEmbeddingText().
+// Every product + variant metafield is stored (Product.metafields) so the
+// Manage metafields modal can enable/disable without another Shopify call.
 
 const PRODUCTS_QUERY = `#graphql
   query CatalogSyncProducts($cursor: String) {
@@ -29,12 +40,56 @@ const PRODUCTS_QUERY = `#graphql
         priceRangeV2 { minVariantPrice { amount } }
         totalInventory
         variants(first: 10) {
-          nodes { id title price availableForSale }
+          nodes {
+            id title price availableForSale
+            metafields(first: 30) { nodes { namespace key type value definition { id } } }
+          }
         }
+        metafields(first: 100) { nodes { namespace key type value definition { id } } }
       }
     }
   }
 `;
+
+/** Webhook payloads carry no metafields — refetch them for one product. */
+const PRODUCT_METAFIELDS_QUERY = `#graphql
+  query CatalogSyncProductMetafields($id: ID!) {
+    product(id: $id) {
+      metafields(first: 100) { nodes { namespace key type value definition { id } } }
+      variants(first: 10) {
+        nodes { title metafields(first: 30) { nodes { namespace key type value definition { id } } } }
+      }
+    }
+  }
+`;
+
+interface MetafieldNode {
+  namespace: string;
+  key: string;
+  type: string;
+  value: string | null;
+  /** null = no metafield definition → ignored (structured-only rule). */
+  definition: { id: string } | null;
+}
+
+/** Flatten product + variant metafield nodes into the stored shape. */
+function collectMetafields(
+  productNodes: MetafieldNode[] | undefined,
+  variants: Array<{ title: string; metafields?: { nodes: MetafieldNode[] } }> | undefined,
+): StoredMetafield[] {
+  const out: StoredMetafield[] = [];
+  for (const node of productNodes ?? []) {
+    const stored = toStoredMetafield("product", "", node);
+    if (stored) out.push(stored);
+  }
+  for (const variant of variants ?? []) {
+    for (const node of variant.metafields?.nodes ?? []) {
+      const stored = toStoredMetafield("variant", variant.title, node);
+      if (stored) out.push(stored);
+    }
+  }
+  return out;
+}
 
 interface SyncedProduct {
   shopifyProductId: string;
@@ -49,6 +104,8 @@ interface SyncedProduct {
   price: number;
   stock: number;
   variants?: { id: string; title: string; price: number; available: boolean }[];
+  /** All product + variant metafields; undefined = leave the stored value untouched. */
+  metafields?: StoredMetafield[];
 }
 
 export async function fullCatalogSync(shopDomain: string): Promise<void> {
@@ -86,8 +143,15 @@ export async function fullCatalogSync(shopDomain: string): Promise<void> {
               priceRangeV2: { minVariantPrice: { amount: string } };
               totalInventory: number | null;
               variants: {
-                nodes: Array<{ id: string; title: string; price: string; availableForSale: boolean }>;
+                nodes: Array<{
+                  id: string;
+                  title: string;
+                  price: string;
+                  availableForSale: boolean;
+                  metafields: { nodes: MetafieldNode[] };
+                }>;
               };
+              metafields: { nodes: MetafieldNode[] };
             }>;
           };
         };
@@ -118,6 +182,7 @@ export async function fullCatalogSync(shopDomain: string): Promise<void> {
             price: Number(v.price),
             available: v.availableForSale,
           })),
+          metafields: collectMetafields(node.metafields.nodes, node.variants.nodes),
         }),
       );
       await upsertProducts(shopId, products);
@@ -135,6 +200,11 @@ export async function fullCatalogSync(shopDomain: string): Promise<void> {
       },
     });
     await recordEvent(shopId, "catalog_synced", { products: total, capped });
+    // Refresh the metafield catalog (definitions + "used in" counts) from the
+    // freshly synced rows; failures here must not fail the product sync.
+    await syncMetafieldDefinitions(shopDomain, shopId).catch((error: unknown) =>
+      console.error("metafield_definitions_sync_error", shopDomain, error),
+    );
   } catch (error) {
     await db.syncState.update({
       where: { shopId },
@@ -190,8 +260,36 @@ export async function upsertProductFromWebhook(shopDomain: string, payload: unkn
   const stock = webhookVariants.reduce((sum, v) => sum + (v.inventory_quantity ?? 0), 0);
   const price = Math.min(...(webhookVariants.length ? webhookVariants : [{ price: "0" }]).map((v) => Number(v.price ?? 0)));
 
+  // Metafields aren't in the webhook payload: refetch them so metafield edits
+  // (which also fire products/update) reach the AI. On failure keep the stored
+  // metafields (undefined = untouched) rather than wiping them.
+  let metafields: StoredMetafield[] | undefined;
+  try {
+    const { admin } = await unauthenticated.admin(shopDomain);
+    const response = await admin.graphql(PRODUCT_METAFIELDS_QUERY, {
+      variables: { id: shopifyProductId },
+    });
+    const body = (await response.json()) as {
+      data: {
+        product: {
+          metafields: { nodes: MetafieldNode[] };
+          variants: { nodes: Array<{ title: string; metafields: { nodes: MetafieldNode[] } }> };
+        } | null;
+      };
+    };
+    if (body.data?.product) {
+      metafields = collectMetafields(
+        body.data.product.metafields.nodes,
+        body.data.product.variants.nodes,
+      );
+    }
+  } catch (error) {
+    console.error("product webhook metafield refetch failed", error);
+  }
+
   await upsertProducts(shopId, [
     {
+      metafields,
       variants: webhookVariants
         .filter((v) => v.id)
         .map((v) => ({
@@ -218,6 +316,9 @@ export async function upsertProductFromWebhook(shopDomain: string, payload: unkn
       stock,
     },
   ]);
+  await refreshMetafieldUsage(shopId).catch((error: unknown) =>
+    console.error("metafield_usage_refresh_error", shopDomain, error),
+  );
 }
 
 export async function deleteProductFromWebhook(shopDomain: string, payload: unknown): Promise<void> {
@@ -230,49 +331,42 @@ export async function deleteProductFromWebhook(shopDomain: string, payload: unkn
 /** Upsert rows, then (re-)embed only those whose embedding text changed. */
 async function upsertProducts(shopId: string, products: SyncedProduct[]): Promise<void> {
   if (products.length === 0) return;
+  const enabledMetafields = await loadEnabledMetafields(shopId);
   const toEmbed: { id: string; text: string }[] = [];
 
   for (const product of products) {
-    const embeddingText = productEmbeddingText(product);
-    const contentHash = hash(embeddingText);
-    const { variants, ...fields } = product;
+    const { variants, metafields, ...fields } = product;
     const variantsJson = (variants ?? []) as unknown as Prisma.InputJsonValue;
     const existing = await db.product.findUnique({
       where: { shopId_shopifyProductId: { shopId, shopifyProductId: product.shopifyProductId } },
-      select: { id: true, contentHash: true },
+      select: { id: true, contentHash: true, metafields: true },
     });
+    // Webhook path without a successful refetch keeps the stored metafields.
+    const storedMetafields =
+      metafields ?? (existing ? parseStoredMetafields(existing.metafields) : []);
+    const metafieldText = buildMetafieldText(storedMetafields, enabledMetafields);
+    const embeddingText = productEmbeddingText({ ...product, metafieldText });
+    const contentHash = hashText(embeddingText);
+    const metafieldsJson = storedMetafields as unknown as Prisma.InputJsonValue;
     const row = await db.product.upsert({
       where: { shopId_shopifyProductId: { shopId, shopifyProductId: product.shopifyProductId } },
-      update: { ...fields, variants: variantsJson, contentHash },
-      create: { ...fields, variants: variantsJson, shopId, contentHash },
+      update: {
+        ...fields, variants: variantsJson, metafields: metafieldsJson, metafieldText, contentHash,
+      },
+      create: {
+        ...fields, variants: variantsJson, metafields: metafieldsJson, metafieldText, shopId, contentHash,
+      },
     });
     if (!existing || existing.contentHash !== contentHash) {
       toEmbed.push({ id: row.id, text: embeddingText });
     }
   }
 
-  if (toEmbed.length === 0) return;
-  if (!env().OPENAI_API_KEY) {
-    // Never silent: rows keep embedding NULL and are invisible to vector search.
-    console.warn(`embedding_skipped shop=${shopId} products=${toEmbed.length} (no OPENAI_API_KEY)`);
-    await recordEvent(shopId, "embedding_skipped", { products: toEmbed.length });
-    return;
-  }
-  const vectors = await embedTexts(toEmbed.map((e) => e.text));
-  for (let i = 0; i < toEmbed.length; i++) {
-    await db.$executeRaw(Prisma.sql`
-      UPDATE "products" SET "embedding" = ${toSqlVector(vectors[i])}::vector
-      WHERE "id" = ${toEmbed[i].id} AND "shopId" = ${shopId}
-    `);
-  }
+  await embedProducts(shopId, toEmbed);
 }
 
 function stripHtml(html: string): string {
   return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function hash(text: string): string {
-  return createHash("sha256").update(text).digest("hex").slice(0, 32);
 }
 
 // ── Collections ─────────────────────────────────────────────────────────────

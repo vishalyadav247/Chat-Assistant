@@ -20,6 +20,14 @@ import { enqueue } from "../lib/jobs/queue.server";
 import { JOBS } from "../lib/jobs/handlers.server";
 import { KNOWLEDGE_INGEST_JOB } from "../lib/ingestion/knowledge-jobs.server";
 import {
+  isSupportedMetafieldType,
+  listMetafieldDefinitions,
+  parseStoredMetafields,
+  renderMetafieldValue,
+  syncMetafieldDefinitions,
+  type MetafieldDefinitionRow,
+} from "../lib/ingestion/metafields.server";
+import {
   approveSuggested,
   createSource,
   deleteSource,
@@ -128,6 +136,8 @@ export interface ProductDetail {
   tags: string[];
   faqCount: number;
   variants: { title: string; price: number; available: boolean }[];
+  /** Product + variant metafields as synced; `enabled` = currently trained on. */
+  metafields: { label: string; value: string; enabled: boolean }[];
 }
 
 export interface PoliciesPayload {
@@ -142,6 +152,8 @@ export interface TrainingActionResult {
   message?: string;
   error?: string;
   detail?: ProductDetail;
+  /** Fresh Manage-metafields rows after metafields-sync / metafield-toggle. */
+  metafields?: MetafieldDefinitionRow[];
   policies?: PoliciesPayload;
   csv?: string;
   filename?: string;
@@ -156,7 +168,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = await resolveShopId(session.shop);
 
-  const [shop, products, collections, discounts, syncState, faqTree, sources, suggested, shopSettings] =
+  const [shop, products, collections, discounts, syncState, faqTree, sources, suggested, shopSettings, metafieldRows] =
     await Promise.all([
       db.shop.findUnique({
         where: { id: shopId },
@@ -208,6 +220,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       listSources(shopId),
       listSuggested(shopId),
       loadShopSettings(shopId),
+      listMetafieldDefinitions(shopId),
     ]);
 
   const plan = shop?.plan ?? "free";
@@ -279,6 +292,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       rows: products as ProductRow[],
       total: products.length,
       learned: products.filter((p) => p.learnEnabled).length,
+    },
+    // Manage metafields modal (spec 07): catalog rows + plan cap on enabled ones.
+    metafields: {
+      rows: metafieldRows,
+      quota: displayQuota(plan, "metafields_enabled"),
+      lastSyncedAt: syncState?.metafieldSyncAt?.toISOString() ?? null,
     },
     collections: collections as CollectionRow[],
     discounts: discounts.map((d) => ({
@@ -365,6 +384,32 @@ const filePayloadSchema = z.object({
   dataBase64: z.string().min(1),
 });
 
+/** View-product modal rows: every synced metafield, rendered, flagged when enabled. */
+async function productDetailMetafields(
+  shopId: string,
+  json: Prisma.JsonValue | null,
+): Promise<ProductDetail["metafields"]> {
+  const entries = parseStoredMetafields(json);
+  if (entries.length === 0) return [];
+  const defs = await db.productMetafieldDefinition.findMany({
+    where: { shopId },
+    select: { ownerType: true, namespace: true, key: true, name: true, enabled: true },
+  });
+  const byKey = new Map(defs.map((d) => [`${d.ownerType}:${d.namespace}.${d.key}`, d]));
+  return entries
+    .map((m) => {
+      const def = byKey.get(`${m.owner}:${m.namespace}.${m.key}`);
+      const name = def?.name ?? `${m.namespace}.${m.key}`;
+      const value = renderMetafieldValue(m.type, m.value) || m.value.slice(0, 200);
+      return {
+        label: m.owner === "variant" && m.variant ? `${name} (${m.variant})` : name,
+        value: value.length > 400 ? `${value.slice(0, 400)}…` : value,
+        enabled: Boolean(def?.enabled),
+      };
+    })
+    .sort((a, b) => Number(b.enabled) - Number(a.enabled) || a.label.localeCompare(b.label));
+}
+
 function friendlyError(error: unknown): string {
   if (error instanceof QuotaError) {
     return `Plan limit reached: ${error.used} of ${error.limit} ${error.dimension.replace(/_/g, " ")} used. Upgrade to add more.`;
@@ -398,6 +443,53 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
       case "sync-collections":
         await enqueue(JOBS.collectionSync, { shopDomain });
         return { intent, ok: true, message: "Collection sync started" };
+
+      // ── Manage metafields (spec 07) ─────────────────────────────────────
+      // Definitions + "used in" counts refresh inline (one Admin call + one
+      // aggregate); metafield VALUES arrive via product sync / webhooks.
+      case "metafields-sync": {
+        const { removedEnabled } = await syncMetafieldDefinitions(shopDomain, shopId);
+        if (removedEnabled) await enqueue(JOBS.metafieldApply, { shopId });
+        return {
+          intent,
+          ok: true,
+          message: "Metafields synced",
+          metafields: await listMetafieldDefinitions(shopId),
+        };
+      }
+      case "metafield-toggle": {
+        const enabled = str("enabled") === "true";
+        const row = await db.productMetafieldDefinition.findFirst({
+          where: { id: str("id"), shopId },
+        });
+        if (!row) return { intent, ok: false, error: "Metafield not found" };
+        if (enabled) {
+          if (!isSupportedMetafieldType(row.type)) {
+            return { intent, ok: false, error: "This metafield type isn't supported yet" };
+          }
+          // Plan cap on enabled metafields — server-side (open enforcement → unlimited).
+          const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
+          const limit = getQuota(shop?.plan ?? "free", "metafields_enabled");
+          const used = await db.productMetafieldDefinition.count({ where: { shopId, enabled: true } });
+          if (!row.enabled && used >= limit) throw new QuotaError("metafields_enabled", used, limit);
+        }
+        if (row.enabled !== enabled) {
+          await db.productMetafieldDefinition.updateMany({
+            where: { id: row.id, shopId },
+            data: { enabled },
+          });
+          // Re-render metafieldText + re-embed changed products in the background.
+          await enqueue(JOBS.metafieldApply, { shopId });
+        }
+        return {
+          intent,
+          ok: true,
+          message: enabled
+            ? `${row.name} enabled — the AI is learning it in the background`
+            : `${row.name} disabled`,
+          metafields: await listMetafieldDefinitions(shopId),
+        };
+      }
       case "sync-discounts":
         await enqueue(JOBS.discountSync, { shopDomain });
         return { intent, ok: true, message: "Discount sync started" };
@@ -565,6 +657,7 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
             tags: product.tags,
             faqCount: 0,
             variants,
+            metafields: await productDetailMetafields(shopId, product.metafields),
           },
         };
       }
@@ -944,6 +1037,9 @@ export default function TrainingDataPage() {
             masterEnabled={data.learnMaster.products}
             autoSyncAvailable={data.catalogGate.available}
             autoSyncEnabled={data.catalogGate.products}
+            metafields={data.metafields.rows}
+            metafieldQuota={data.metafields.quota}
+            metafieldSyncAt={data.metafields.lastSyncedAt}
           />
         ) : null}
         {tab === "collections" ? (

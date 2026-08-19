@@ -63,6 +63,7 @@ Out: knowledge ingestion (04), the Training-data admin UI itself (07).
 
 ## Out of scope / gaps
 
-- Metafields sync ("Manage metafields" button in design has no behavior) — backlog.
+- Metafields: built 2026-08-19 (spec 07 Manage metafields) — catalog sync stores all product/variant metafields (`Product.metafields`), enabled ones feed embedding + full-text via `Product.metafieldText`.
+- Metafield definitions webhooks `metafield_definitions/create|update|delete` (2026-08-19, needs `read_content`) → enqueue-only handler → `metafield-definitions-sync` job re-mirrors the catalog; `SyncState.metafieldSyncAt`.
 - Collections "conditions" display beyond summary text.
 - Discount semantics in the pipeline (the AI mentioning discounts) — pipeline spec 03 forbids invented discounts; synced discounts become RAG-available later.
