@@ -1,12 +1,12 @@
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { useLoaderData, useNavigate, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { authenticate } from "../shopify.server";
 import db from "../db.server";
-import { resolveShopId } from "../lib/tenancy.server";
 import { recordEvent } from "../lib/analytics/events.server";
 import { TestAiConsole } from "../components/TestAiConsole";
 import { PageHeader } from "../components/ui/PageHeader";
+import { requireShopAccess } from "../lib/access.server";
+import { routeError } from "../lib/ui/route-error";
 
 // Test AI (spec 08, design ai-agent.html #viewTest): merchant chat console
 // that streams the REAL pipeline via /api/test-chat (isTest: true → no usage
@@ -29,8 +29,7 @@ export interface TestActionResult {
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const { shopId } = await requireShopAccess(request, { permission: "ai_agent" });
 
   const [persona, faqs, shop] = await Promise.all([
     db.persona.findUnique({ where: { shopId }, select: { welcomeMessage: true } }),
@@ -55,8 +54,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs): Promise<TestActionResult> => {
-  const { session } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const { shopId } = await requireShopAccess(request, { permission: "ai_agent" });
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
 
@@ -123,7 +121,7 @@ export default function TestAiPage() {
 }
 
 export function ErrorBoundary() {
-  return boundary.error(useRouteError());
+  return routeError(useRouteError());
 }
 
 export const headers: HeadersFunction = (headersArgs) => {

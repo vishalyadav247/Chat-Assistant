@@ -29,9 +29,11 @@
 
 ```
 Storefront chat widget  ─┐                          ┌─ Postgres + pgvector (per-shop rows)
-(theme app extension)    ├──►  App backend  ────────┼─ LLM provider (embeddings + chat)
-Merchant admin app       ┘     (multi-tenant,        └─ Shopify Admin API + webhooks
-(embedded in Admin)             agent pipeline)          (catalog, orders, GDPR)
+(theme app extension)    │                          │
+Merchant admin app       ├──►  App backend  ────────┼─ LLM provider (embeddings + chat)
+(embedded in Admin)      │     (multi-tenant,        │
+Team web app (spec 18)   ┘      agent pipeline)      └─ Shopify Admin API + webhooks
+(same /app pages, own login)                            (catalog, orders, GDPR)
 ```
 
 - Backend holds all logic: agent pipeline, tenant isolation, caching, rate-limiting, billing.
@@ -93,6 +95,7 @@ Budget: a normal turn ≈ 2 LLM chat calls + 1–2 embedding calls + a few DB/Sh
 | 15 | `15-billing-plans.md` | Billing, plans, usage metering, gating matrix |
 | 16 | `16-settings.md` | Settings (general, availability, survey, tracking) |
 | 17 | `17-compliance-gdpr.md` | GDPR, retention, app review |
+| 18 | `18-web-app-team.md` | Standalone web app, team logins (roles), browser push notifications, live inbox feed |
 
 ## Suggested build order (after Phase 0 foundation)
 

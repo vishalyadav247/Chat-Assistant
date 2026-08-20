@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { useDateTime } from "../lib/format/context";
 import {
   authorLabel,
   avatarGradient,
-  dayLabel,
   displayName,
-  fmtTime,
   initials,
   StarIcon,
 } from "./InboxShared";
@@ -34,6 +33,7 @@ export function InboxThread({
   onBlock: () => void;
   onDelete: () => void;
 }) {
+  const dt = useDateTime();
   const [text, setText] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -146,7 +146,7 @@ export function InboxThread({
 
       <div className="cin-msgs" ref={msgsRef}>
         {active.messages.map((m) => {
-          const day = dayLabel(m.createdAt);
+          const day = dt.dayLabel(m.createdAt);
           const divider =
             day !== lastDay ? (
               <div className="cin-mtime" key={`day-${m.id}`}>
@@ -177,7 +177,7 @@ export function InboxThread({
                 <span className="cin-mwrap">
                   <span className="cin-mmeta">
                     {authorLabel(m, active.contact?.name || active.contact?.email || null)} ·{" "}
-                    {fmtTime(m.createdAt)}
+                    {dt.time(m.createdAt)}
                   </span>
                   <span className={`cin-bubble ${out ? "out" : "in"}`}>{m.content}</span>
                 </span>

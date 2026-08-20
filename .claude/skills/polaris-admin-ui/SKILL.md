@@ -29,6 +29,7 @@ The design prototypes in `.claude/resources/html_design/` + `NOTES.md` define ev
 - Reordering: drag handles (drag starts from the handle only — rows stay scrollable), shared `app/components/DragReorder.tsx` for flat lists; keep ArrowUp/Down keyboard fallback. Row hover = scoped stylesheet (see FaqManager TABLE_CSS).
 - Counts/quotas/meters always come from server data derived from the plan matrix (spec 15) — never hard-code tier values (design bug to avoid).
 - Currency: format with shop currency/locale from loader data (designs mix ₹/$ — ignore that).
+- **Scoped stylesheets in JSX**: render inline CSS as `<style dangerouslySetInnerHTML={{ __html: CSS }} />`, never `<style>{CSS}</style>`. React SSR escapes `"`/`>`/`&` inside text children, so any CSS with `content:""` or `a > b` fails hydration; React then re-renders the whole document and (in dev) wipes the Vite-injected CSS-module styles — the web-surface shell (spec 18) loses its styling. Found 2026-08-19.
 
 ## Files
 

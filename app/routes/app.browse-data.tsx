@@ -1,12 +1,11 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { authenticate } from "../shopify.server";
 import db from "../db.server";
-import { resolveShopId } from "../lib/tenancy.server";
+import { requireShopAccess } from "../lib/access.server";
 
 // Resource route feeding the shared Browse products / Browse collections
 // modals (specs 08/09/12). Loader-only JSON; every query shop-scoped via
-// resolveShopId(session.shop) — the shop identity never comes from the client.
+// resolveShopId(shopDomain) — the shop identity never comes from the client.
 
 const PAGE_SIZE = 10;
 const COLLECTION_GID = /^gid:\/\/shopify\/Collection\/\d+$/;
@@ -46,8 +45,11 @@ function stockLabel(stock: number, variants: unknown): string {
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs): Promise<BrowseData> => {
-  const { session, admin } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  // Catalog browsing feeds the AI-agent / curated / proactive modals — not an
+  // agent-role surface (spec 18 roles).
+  const access = await requireShopAccess(request, { permission: "ai_agent" });
+  const { shopId } = access;
+  const admin = await access.getAdmin();
 
   const url = new URL(request.url);
   const kind = url.searchParams.get("kind") === "collections" ? "collections" : "products";

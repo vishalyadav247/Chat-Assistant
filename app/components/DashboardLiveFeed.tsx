@@ -15,7 +15,9 @@ const AVATAR_GRADIENTS = [
 
 export function relativeTime(iso: string, now = Date.now()): string {
   const seconds = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
+  // Minute granularity: a seconds counter differs between server render and
+  // hydration and would trip a mismatch on every dashboard load.
+  if (seconds < 60) return "Just now";
   const minutes = Math.round(seconds / 60);
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.round(minutes / 60);

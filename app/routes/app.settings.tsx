@@ -7,10 +7,8 @@ import type {
 } from "react-router";
 import { useFetcher, useLoaderData, useRouteError, useSearchParams } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { useAppBridge } from "@shopify/app-bridge-react";
-import { authenticate } from "../shopify.server";
+import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
-import { resolveShopId } from "../lib/tenancy.server";
 import { env } from "../lib/env.server";
 import { reviewFallbackUrl } from "../lib/review";
 import { resolveAvailability } from "../lib/settings/availability.server";
@@ -27,6 +25,13 @@ import { SettingsChatbox } from "../components/SettingsChatbox";
 import { SettingsAvailability } from "../components/SettingsAvailability";
 import { SettingsSurvey } from "../components/SettingsSurvey";
 import { SettingsPrivacy } from "../components/SettingsPrivacy";
+import { requireShopAccess } from "../lib/access.server";
+import { applyTeamIntent, isTeamIntent } from "../lib/team/team-intents.server";
+import { listMembers } from "../lib/team/team.server";
+import { getQuota } from "../lib/billing/plans.server";
+import { emailConfigured } from "../lib/email/email.server";
+import { formatDate as formatDateWithPrefs } from "../lib/format/datetime";
+import { routeError } from "../lib/ui/route-error";
 
 // Settings (spec 16): General / Chatbox / Privacy & Data Requests tabs plus
 // the Chat availability (?tab=availability) and Satisfaction survey
@@ -46,42 +51,60 @@ export const shouldRevalidate: ShouldRevalidateFunction = ({
 };
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const access = await requireShopAccess(request, { permission: "settings" });
+  const { shopId, shopDomain } = access;
 
-  const [shop, settings, ownerSession, dataRequestRows] = await Promise.all([
+  const [shop, settings, ownerSession, dataRequestRows, members] = await Promise.all([
     db.shop.findUnique({ where: { id: shopId } }),
     loadShopSettings(shopId),
-    db.session.findFirst({ where: { shop: session.shop }, orderBy: { accountOwner: "desc" } }),
+    db.session.findFirst({ where: { shop: shopDomain }, orderBy: { accountOwner: "desc" } }),
     db.dataRequest.findMany({ where: { shopId }, orderBy: { requestedAt: "desc" }, take: 50 }),
+    listMembers(shopId),
   ]);
+  const ownerMember = members.find((m) => m.role === "owner") ?? null;
 
   const timezone = shop?.timezone || "UTC";
   const preview = resolveAvailability(settings.availability, timezone);
-  const formatDate = (date: Date) =>
-    date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  // Pre-formatted dates follow the shop's global date format (Store information).
+  const dtPrefs = { dateFormat: settings.storeInfo.dateFormat, timeFormat: settings.storeInfo.timeFormat, timeZone: timezone };
+  const formatDate = (date: Date) => formatDateWithPrefs(date, dtPrefs);
 
-  const fallbackName = session.shop.replace(".myshopify.com", "");
+  const fallbackName = shopDomain.replace(".myshopify.com", "");
   const ownerName =
-    [ownerSession?.firstName, ownerSession?.lastName].filter(Boolean).join(" ") || fallbackName;
+    ownerMember?.name ||
+    [ownerSession?.firstName, ownerSession?.lastName].filter(Boolean).join(" ") ||
+    fallbackName;
 
   return {
-    shopDomain: session.shop,
+    shopDomain: shopDomain,
     apiKey: process.env.SHOPIFY_API_KEY || "",
     settings,
     timezone,
     // Theme app-embed detection (spec 13's helper; "unknown" until read_themes).
     embedStatus: await (async () => {
       const { getEmbedStatus } = await import("../lib/embed-status.server");
-      return getEmbedStatus(session.shop);
+      return getEmbedStatus(shopDomain);
     })(),
     defaultStoreName: shop?.name ?? fallbackName,
     // null until SHOPIFY_APP_STORE_HANDLE is set (listing live) — link hidden.
     reviewUrl: reviewFallbackUrl(env().SHOPIFY_APP_STORE_HANDLE),
     owner: {
       name: ownerName,
-      email: ownerSession?.email ?? "—",
+      email: ownerMember?.email ?? ownerSession?.email ?? "—",
       since: shop?.installedAt ? formatDate(shop.installedAt) : "—",
+    },
+    // Team (spec 18): real logins for the standalone web app.
+    team: {
+      members: members.filter((m) => m.role !== "owner"),
+      seatsUsed: members.filter((m) => m.role !== "owner").length,
+      // null = unlimited (plan enforcement "open" or a very high cap).
+      seatQuota: (() => {
+        const q = getQuota(shop?.plan ?? "free", "team_seats");
+        return q >= 1_000_000 ? null : q;
+      })(),
+      emailConfigured: emailConfigured(),
+      surface: access.surface,
+      selfId: access.member?.id ?? null,
     },
     availabilityPreview: { status: preview.status, message: preview.message },
     dataRequests: dataRequestRows.map((row) => ({
@@ -96,9 +119,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const access = await requireShopAccess(request, { permission: "settings" });
+  const { shopId, shopDomain } = access;
   const formData = await request.formData();
+  const intent = String(formData.get("intent") ?? "");
+  if (isTeamIntent(intent)) {
+    let raw: unknown = {};
+    try {
+      raw = JSON.parse(String(formData.get("payload") ?? "{}"));
+    } catch {
+      raw = {};
+    }
+    return applyTeamIntent({ access, intent, raw });
+  }
   // Data-request export (spec 17): compiled fresh on download, returned in the
   // action payload for a client-side Blob save (see app.contacts.tsx export).
   if (formData.get("intent") === "download-data-request") {
@@ -116,7 +149,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       };
     }
   }
-  return applySettingsIntent({ shopId, shopDomain: session.shop, formData });
+  return applySettingsIntent({ shopId, shopDomain: shopDomain, formData });
 };
 
 const VIEWS = ["general", "chatbox", "privacy", "availability", "survey"] as const;
@@ -140,7 +173,13 @@ const INTENTS: Record<View, string> = {
 function sliceFor(view: View, settings: ShopSettingsData, timezone: string): unknown {
   switch (view) {
     case "general":
-      return { name: settings.storeInfo.name, theme: settings.theme, inbox: settings.inbox };
+      return {
+        name: settings.storeInfo.name,
+        dateFormat: settings.storeInfo.dateFormat,
+        timeFormat: settings.storeInfo.timeFormat,
+        theme: settings.theme,
+        inbox: settings.inbox,
+      };
     case "chatbox":
       // apiKey is excluded: the Connect button owns it (validate-then-persist),
       // so typing a key must not arm the SaveBar or ride along with Save.
@@ -217,7 +256,12 @@ export default function SettingsPage() {
             ...current,
             theme: init.theme,
             inbox: init.inbox,
-            storeInfo: { ...current.storeInfo, name: init.storeInfo.name },
+            storeInfo: {
+              ...current.storeInfo,
+              name: init.storeInfo.name,
+              dateFormat: init.storeInfo.dateFormat,
+              timeFormat: init.storeInfo.timeFormat,
+            },
           };
         case "chatbox":
           return { ...current, cartDrawer: init.cartDrawer, orderTracking: init.orderTracking };
@@ -316,6 +360,16 @@ export default function SettingsPage() {
         {view === "general" ? (
           <SettingsGeneral
             name={draft.storeInfo.name}
+            dateFormat={draft.storeInfo.dateFormat}
+            timeFormat={draft.storeInfo.timeFormat}
+            timeZone={data.timezone}
+            onDateFormatChange={(dateFormat) =>
+              setDraft((d) => ({ ...d, storeInfo: { ...d.storeInfo, dateFormat } }))
+            }
+            onTimeFormatChange={(timeFormat) =>
+              setDraft((d) => ({ ...d, storeInfo: { ...d.storeInfo, timeFormat } }))
+            }
+            onOpenAvailability={() => go("availability")}
             placeholderName={data.defaultStoreName}
             logoUrl={draft.storeInfo.logoUrl}
             theme={draft.theme}
@@ -324,7 +378,7 @@ export default function SettingsPage() {
             shopDomain={data.shopDomain}
             apiKey={data.apiKey}
             owner={data.owner}
-            members={data.settings.team.members}
+            team={data.team}
             reviewUrl={data.reviewUrl}
             onNameChange={(name) =>
               setDraft((d) => ({ ...d, storeInfo: { ...d.storeInfo, name } }))
@@ -400,7 +454,7 @@ export default function SettingsPage() {
 }
 
 export function ErrorBoundary() {
-  return boundary.error(useRouteError());
+  return routeError(useRouteError());
 }
 
 export const headers: HeadersFunction = (headersArgs) => {

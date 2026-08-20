@@ -14,7 +14,7 @@ Full checklist lives in `.claude/specs/17-compliance-gdpr.md`. This skill is the
 3. **Billing**: any paid feature must be gated via `requirePlan()` server-side (spec 15 matrix) and charged only through Shopify Billing API.
 4. **Webhooks**: compliance topics must keep returning 200 (valid HMAC) / 401 (invalid). Never remove or bypass `authenticate.webhook`.
 5. **Storefront performance**: widget/extension changes keep the bundle deferred, small (<30KB gz core), zero CLS, no external CDNs.
-6. **Embedded UX**: session-token auth everywhere, no cookies-based auth fallbacks, Polaris UI, App Bridge for top-level redirects.
+6. **Embedded UX**: session-token auth for every embedded (admin) request, no cookie-based auth fallback inside the admin, Polaris UI, App Bridge for top-level redirects. The standalone web surface (spec 18) is the one sanctioned cookie session (first-party, HttpOnly, SameSite=Lax, `TeamSession`-backed) — it must stay additive (embedded app remains feature-complete, req 2.2.2) and reviewers need a web test login (req 4.5).
 
 ## AI-specific obligations
 

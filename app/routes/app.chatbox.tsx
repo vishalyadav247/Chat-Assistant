@@ -2,10 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { useAppBridge } from "@shopify/app-bridge-react";
-import { authenticate } from "../shopify.server";
+import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
-import { resolveShopId } from "../lib/tenancy.server";
 import { hasFeature } from "../lib/billing/plans.server";
 import { resolveAvailability } from "../lib/settings/availability.server";
 import { loadShopSettings } from "../lib/settings/save.server";
@@ -22,14 +20,15 @@ import { ChatboxGeneral } from "../components/ChatboxGeneral";
 import { ChatboxChatPage } from "../components/ChatboxChatPage";
 import { ChatboxAppearance } from "../components/ChatboxAppearance";
 import { ChatboxPreview, type ChatboxTab } from "../components/ChatboxPreview";
+import { requireShopAccess } from "../lib/access.server";
+import { routeError } from "../lib/ui/route-error";
 
 // Chatbox settings + live preview (spec 06). Left: General / Chat page /
 // Appearance tabs. Right: sticky preview rendered by the storefront widget's
 // own renderer (parity by construction — see renderer-assets.server.ts).
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const { shopId, shopDomain } = await requireShopAccess(request, { permission: "chatbox" });
 
   const [shop, settings, shopSettings, faqs, categories, importableFaqs] = await Promise.all([
     db.shop.findUnique({ where: { id: shopId } }),
@@ -87,16 +86,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     // avatar (logo, or name initials) + author caption on bot messages.
     storeInfo: {
       logoUrl: shopSettings.storeInfo.logoUrl,
-      name: shopSettings.storeInfo.name.trim() || shop?.name || session.shop.replace(".myshopify.com", ""),
+      name: shopSettings.storeInfo.name.trim() || shop?.name || shopDomain.replace(".myshopify.com", ""),
     },
   };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const { shopId, shopDomain } = await requireShopAccess(request, { permission: "chatbox" });
   const formData = await request.formData();
-  return applyChatboxIntent({ shopId, shopDomain: session.shop, formData });
+  return applyChatboxIntent({ shopId, shopDomain: shopDomain, formData });
 };
 
 const TABS: Array<{ id: ChatboxTab; label: string }> = [
@@ -243,7 +241,7 @@ export default function ChatboxPage() {
 }
 
 export function ErrorBoundary() {
-  return boundary.error(useRouteError());
+  return routeError(useRouteError());
 }
 
 export const headers: HeadersFunction = (headersArgs) => {

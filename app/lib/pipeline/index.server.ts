@@ -18,6 +18,7 @@ import { recommendationMatch } from "../search/recommendation-match.server";
 import { ensureSessionContact } from "../contacts/contacts.server";
 import { requireShopId } from "../tenancy.server";
 import { mergePageContext } from "../widget/page-context.server";
+import { notifyNewConversation, notifyShopperMessage } from "../notify.server";
 import { keywordScan, meaningScan, moderationCheck } from "./guardrail.server";
 import { detectHandover, detectCannotAnswer, executeHandover } from "./handover.server";
 import { loadHistory } from "./history.server";
@@ -98,7 +99,9 @@ export async function* runPipeline(input: PipelineInput): AsyncIterable<Pipeline
   });
 
   // Human mode: AI stays dormant (spec 10 wires aiWhileWaiting refinements).
+  // The team hears about the shopper's message instead (spec 18 push).
   if (convo.mode === "human") {
+    if (!input.isTest) await notifyShopperMessage(shopId, convo.id);
     yield { type: "done", outcome: "human_mode", conversationId: convo.id };
     return;
   }
@@ -694,7 +697,7 @@ async function ensureConversation(shopId: string, input: PipelineInput) {
   // row, else a fresh anonymous one) so unidentified chatters appear in the
   // Contacts Anonymous tab (spec 11). Test-widget chats stay contact-less.
   const contactId = input.isTest ? null : await ensureSessionContact(shopId, input.sessionId);
-  return db.conversation.create({
+  const created = await db.conversation.create({
     data: {
       shopId,
       sessionId: input.sessionId,
@@ -703,6 +706,9 @@ async function ensureConversation(shopId: string, input: PipelineInput) {
       pageContext: mergePageContext(undefined, input.pageContext, input.userAgent),
     },
   });
+  // Opt-in "new conversation" notification for team members (spec 18).
+  if (!input.isTest) await notifyNewConversation(shopId, created.id);
+  return created;
 }
 
 async function saveMessage(

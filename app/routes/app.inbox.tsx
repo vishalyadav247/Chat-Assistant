@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData, useRevalidator, useRouteError, useSearchParams } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { useAppBridge } from "@shopify/app-bridge-react";
+import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
 import { hasFeature } from "../lib/billing/plans.server";
 import {
@@ -15,25 +15,28 @@ import {
   setResolved,
   setStarred,
 } from "../lib/inbox/inbox.server";
-import { resolveShopId } from "../lib/tenancy.server";
-import { authenticate } from "../shopify.server";
 import { InboxDetails } from "../components/InboxDetails";
 import { BRAND } from "../components/ui/tokens";
-import { loadShopSettings } from "../lib/settings/save.server";
+import { assigneeOptions, isValidAssignee, parseNotifyPrefs } from "../lib/team/team.server";
+import { playChime, useInboxLive } from "../lib/ui/inbox-live";
+import { OpenInWebButton } from "../components/web/OpenInWebButton";
 import { InboxFilters } from "../components/InboxFilters";
 import { InboxList } from "../components/InboxList";
 import { InboxThread } from "../components/InboxThread";
 import { FILTERS, displayName, unreadOpenCount } from "../components/InboxShared";
 import type { FilterKey, InboxRow } from "../components/InboxShared";
+import { requireShopAccess } from "../lib/access.server";
+import { routeError } from "../lib/ui/route-error";
 
 // Inbox workspace (spec 10, design inbox.html): 4 columns —
 // Filters | List | Thread | Details — with human reply into the shopper's
-// widget (delivered via the proxy.messages 5s poll). Realtime v1 = loader
-// revalidation every 7s while the tab is visible.
+// widget (delivered via the proxy.messages 5s poll). Realtime: the
+// /app/inbox-events change feed (spec 18) triggers loader revalidation; a slow
+// 30s poll remains as a fallback. Same page on both surfaces (admin + web).
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const access = await requireShopAccess(request, { permission: "inbox" });
+  const { shopId } = access;
 
   const conversations = await listConversations(shopId);
 
@@ -45,12 +48,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       : (conversations.find((c) => !c.blocked)?.id ?? conversations[0]?.id ?? null);
   const active = activeId ? await getConversationDetail(shopId, activeId) : null;
 
-  const [shop, settings] = await Promise.all([
+  const [shop, assignees] = await Promise.all([
     db.shop.findUnique({
       where: { id: shopId },
       select: { plan: true, currency: true, name: true },
     }),
-    loadShopSettings(shopId),
+    assigneeOptions(shopId),
   ]);
 
   return {
@@ -58,17 +61,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     active,
     cartViewEnabled: hasFeature(shop?.plan ?? "free", "inbox_cart_view"),
     currency: shop?.currency ?? "USD",
-    // Assignable people: the owner + the team roster (spec 16 team v1).
-    assignees: [
-      { id: "owner", name: `${shop?.name || "Store owner"} (Owner)` },
-      ...settings.team.members.map((m) => ({ id: m.id, name: m.name })),
-    ],
+    // Assignable people: the owner + the team roster (spec 18 TeamMember table).
+    assignees,
+    // Web surface: chime on new activity when the member wants it.
+    live: {
+      surface: access.surface,
+      sound: access.member ? parseNotifyPrefs(access.member.notifyPrefs, access.member.role).sound : false,
+    },
   };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const { shopId } = await requireShopAccess(request, { permission: "inbox" });
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
   const conversationId = String(formData.get("conversationId") ?? "");
@@ -100,11 +104,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     case "assign": {
       const assigneeId = String(formData.get("assigneeId") ?? "");
       // "" = unassign; otherwise the id must be the owner or a roster member.
-      if (assigneeId && assigneeId !== "owner") {
-        const settings = await loadShopSettings(shopId);
-        if (!settings.team.members.some((m) => m.id === assigneeId)) {
-          return { ok: false, intent };
-        }
+      if (assigneeId && !(await isValidAssignee(shopId, assigneeId))) {
+        return { ok: false, intent };
       }
       const result = await db.conversation.updateMany({
         where: { id: conversationId, shopId },
@@ -175,13 +176,26 @@ export default function InboxPage() {
     };
   }, []);
 
-  // Poll for new conversations/messages every 7s — only while visible.
+  // Live change feed (spec 18): revalidate on every `changed` frame. The web
+  // surface also badges the tab title and (optionally) chimes.
+  const baseTitle = useRef<string | null>(null);
+  useInboxLive((frame) => {
+    if (frame.type === "changed") {
+      if (revalidator.state === "idle") revalidator.revalidate();
+      if (data.live.surface === "web" && data.live.sound && document.visibilityState !== "visible") playChime();
+    }
+    if (data.live.surface === "web" && typeof frame.unread === "number") {
+      if (baseTitle.current === null) baseTitle.current = document.title.replace(/^\(\d+\)\s*/, "");
+      document.title = frame.unread > 0 ? `(${frame.unread}) ${baseTitle.current}` : baseTitle.current;
+    }
+  });
+  // Fallback poll (slow) in case the stream is blocked by a proxy — only while visible.
   useEffect(() => {
     const timer = setInterval(() => {
       if (document.visibilityState === "visible" && revalidator.state === "idle") {
         revalidator.revalidate();
       }
-    }, 7000);
+    }, 30000);
     return () => clearInterval(timer);
   }, [revalidator]);
 
@@ -252,7 +266,8 @@ export default function InboxPage() {
 
   return (
     <s-page heading="Inbox" inlineSize="large">
-      <style>{WORKSPACE_CSS}</style>
+      <OpenInWebButton slot="secondary-actions" />
+      <style dangerouslySetInnerHTML={{ __html: WORKSPACE_CSS }} />
       <div className="cin-grid" ref={gridRef}>
         <InboxFilters rows={data.conversations} filter={filter} onSelect={setFilter} />
         <InboxList
@@ -302,7 +317,7 @@ export default function InboxPage() {
 }
 
 export function ErrorBoundary() {
-  return boundary.error(useRouteError());
+  return routeError(useRouteError());
 }
 
 export const headers: HeadersFunction = (headersArgs) => {

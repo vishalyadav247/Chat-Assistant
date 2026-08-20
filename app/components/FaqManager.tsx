@@ -398,7 +398,7 @@ export function FaqManager(props: {
           </div>
         </div>
 
-        <style>{TABLE_CSS}</style>
+        <style dangerouslySetInnerHTML={{ __html: TABLE_CSS }} />
         <div
           style={{
             border: "1px solid var(--s-color-border, #e3e3e3)",

@@ -1,9 +1,8 @@
 import type { ActionFunctionArgs } from "react-router";
 import { z } from "zod";
-import { authenticate } from "../shopify.server";
-import { resolveShopId } from "../lib/tenancy.server";
 import { runPipeline } from "../lib/pipeline/index.server";
 import { sseResponse } from "../lib/sse.server";
+import { requireShopAccess } from "../lib/access.server";
 
 // Test AI streaming endpoint (spec 08): POST /api/test-chat → SSE stream of
 // the SAME pipeline frames the storefront gets (proxy.chat.tsx), but behind
@@ -21,14 +20,12 @@ const bodySchema = z.object({
 });
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { shopId } = await requireShopAccess(request, { permission: "ai_agent" });
 
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
     return new Response("bad request", { status: 400 });
   }
-
-  const shopId = await resolveShopId(session.shop);
   const frames = runPipeline({
     shopId,
     sessionId: parsed.data.sessionId,

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useFetcher } from "react-router";
-import { useAppBridge } from "@shopify/app-bridge-react";
+import { useAppBridge } from "../lib/ui/surface";
 import type {
   InstructionsActionResult,
   ProductMeta,

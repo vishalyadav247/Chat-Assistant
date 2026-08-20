@@ -2,10 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { useAppBridge } from "@shopify/app-bridge-react";
-import { authenticate } from "../shopify.server";
+import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
-import { resolveShopId } from "../lib/tenancy.server";
 import { displayQuota } from "../lib/billing/plans.server";
 import { currentPeriodStart } from "../lib/billing/usage.server";
 import {
@@ -21,6 +19,8 @@ import { ChipInput } from "../components/ChipInput";
 import type { BrowseItemMeta } from "../components/BrowseProductsModal";
 import { BrowseProductsModal, BrowseThumb } from "../components/BrowseProductsModal";
 import { SaveBar } from "../components/SaveBar";
+import { requireShopAccess } from "../lib/access.server";
+import { routeError } from "../lib/ui/route-error";
 
 // Curated Answers admin (spec 09): KPI row + quota meter, searchable list
 // (10/page), add/edit view with synonyms chips, talking points, hand-picked
@@ -29,8 +29,7 @@ import { SaveBar } from "../components/SaveBar";
 // the pipeline (03) + app/lib/search/curated-match.server.ts.
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const { shopId } = await requireShopAccess(request, { permission: "curated" });
   const monthStart = currentPeriodStart();
 
   const [shop, answers, suggestions, eventCounts, pendingIds] = await Promise.all([
@@ -107,8 +106,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const { shopId } = await requireShopAccess(request, { permission: "curated" });
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
 
@@ -630,7 +628,7 @@ export default function CuratedAnswersPage() {
 }
 
 export function ErrorBoundary() {
-  return boundary.error(useRouteError());
+  return routeError(useRouteError());
 }
 
 export const headers: HeadersFunction = (headersArgs) => {

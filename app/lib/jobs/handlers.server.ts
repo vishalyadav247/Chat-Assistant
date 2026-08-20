@@ -30,6 +30,7 @@ export const JOBS = {
   customerRedact: "customer-redact",
   metafieldApply: "metafield-apply",
   metafieldDefinitionsSync: "metafield-definitions-sync",
+  teamNotify: "team-notify", // spec 18: browser push + handover email to team members
 } as const;
 
 /** Grace window after uninstall before domain data is erased (spec 17 delta).
@@ -95,6 +96,9 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
   // (governed by redact/uninstall).
   await boss.work(JOBS.retentionPurge, async () => {
     const { shopSettingsSchema } = await import("../settings/schemas");
+    // Expired web sessions / one-time tokens (spec 18) ride along daily.
+    const { purgeExpiredTokens } = await import("../team/tokens.server");
+    await purgeExpiredTokens().catch((error: unknown) => console.error("token_purge_error", error));
     const rows = await db.shopSettings.findMany({
       select: { shopId: true, settings: true },
     });
@@ -119,6 +123,15 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
   await boss.schedule(JOBS.retentionPurge, "41 4 * * *", {}, {}).catch((error: unknown) => {
     console.error("retention_schedule_error", error);
   });
+
+  // Team notifications (spec 18): push + email delivery off the request path.
+  await boss.work<{ shopId: string; conversationId: string; kind: "handover" | "humanReply" | "newConversation" }>(
+    JOBS.teamNotify,
+    async ([job]) => {
+      const { deliverNotification } = await import("../notify/deliver.server");
+      await deliverNotification(job.data);
+    },
+  );
 
   // Daily curated stock revalidation (spec 09): flags dead-stock picks.
   await boss.work(JOBS.curatedRevalidate, async () => {
@@ -296,6 +309,10 @@ export async function cleanupShop(shopDomain: string): Promise<void> {
     db.discount.deleteMany({ where: { shopId } }),
     db.syncState.deleteMany({ where: { shopId } }),
     db.dataRequest.deleteMany({ where: { shopId } }),
+    // Team logins for the standalone web app (spec 18).
+    db.pushSubscription.deleteMany({ where: { shopId } }),
+    db.teamSession.deleteMany({ where: { shopId } }),
+    db.teamMember.deleteMany({ where: { shopId } }),
     // Session rows hold the offline token + owner PII — must go too (review M3).
     db.session.deleteMany({ where: { shop: shopDomain } }),
     // Preserve the original uninstall stamp (the purge sweep's done-marker

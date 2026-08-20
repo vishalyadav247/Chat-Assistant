@@ -1,0 +1,263 @@
+/* Standalone web shell (spec 18). ChatConvert-branded chrome around the same
+   /app pages that render inside the Shopify admin. Deliberately distinct from
+   the admin (dark rail, brand accent) — see Polaris license note in spec 18. */
+
+.ccws-shell {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  min-height: 100vh;
+  background: #f6f6f7;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.ccws-rail {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #14141a;
+  color: #e6e6ea;
+  padding: 14px 10px;
+  box-sizing: border-box;
+}
+
+.ccws-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px 14px;
+}
+
+.ccws-brandMark {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #6d3bf5, #3b82f6);
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 800;
+  font-size: 14px;
+  letter-spacing: -0.02em;
+}
+
+.ccws-brandText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ccws-brandName {
+  font-weight: 700;
+  font-size: 14px;
+  color: #fff;
+}
+
+.ccws-brandShop {
+  font-size: 11.5px;
+  color: #9a9aa6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ccws-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.ccws-navItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  color: #c9c9d2;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.ccws-navItem:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+}
+
+.ccws-navItemActive {
+  background: rgba(109, 59, 245, 0.28);
+  color: #fff;
+}
+
+.ccws-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #6d3bf5;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-grid;
+  place-items: center;
+}
+
+.ccws-railFooter {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ccws-user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  color: #e6e6ea;
+  text-decoration: none;
+  background: transparent;
+  border: 0;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.ccws-user:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.ccws-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #2a2a33;
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  flex: none;
+}
+
+.ccws-userMeta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ccws-userName {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ccws-userRole {
+  font-size: 11px;
+  color: #9a9aa6;
+  text-transform: capitalize;
+}
+
+.ccws-railLink {
+  display: block;
+  padding: 6px 10px;
+  border-radius: 8px;
+  color: #b3b3bf;
+  font-size: 12.5px;
+  text-decoration: none;
+  background: transparent;
+  border: 0;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.ccws-railLink:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+}
+
+.ccws-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ccws-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 16px 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #efeafe;
+  color: #3b1d8f;
+  font-size: 13px;
+}
+
+.ccws-noticeActions {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.ccws-noticeButton {
+  background: #6d3bf5;
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ccws-noticeGhost {
+  background: transparent;
+  color: #3b1d8f;
+  border: 0;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.ccws-content {
+  flex: 1;
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .ccws-shell {
+    grid-template-columns: 1fr;
+  }
+  .ccws-rail {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .ccws-nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .ccws-railFooter {
+    border-top: 0;
+    padding-top: 0;
+    flex-direction: row;
+    align-items: center;
+  }
+}

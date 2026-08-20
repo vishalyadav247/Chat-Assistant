@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { ChangeEvent } from "react";
 import { useFetcher } from "react-router";
-import { useAppBridge } from "@shopify/app-bridge-react";
+import { useAppBridge } from "../lib/ui/surface";
 
 // Shared image-upload button for the chatbox page (header logo + custom
 // launcher icon). Submits multipart to the chatbox action; the server

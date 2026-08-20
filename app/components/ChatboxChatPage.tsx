@@ -472,7 +472,7 @@ export function ChatboxChatPage(props: {
       </s-modal>
 
       <s-modal id={IMPORT_MODAL_ID} heading="Import from FAQs">
-        <style>{SCROLLBAR_CSS}</style>
+        <style dangerouslySetInnerHTML={{ __html: SCROLLBAR_CSS }} />
         <s-stack gap="base">
           {props.faqs.length === 0 ? (
             <s-paragraph>

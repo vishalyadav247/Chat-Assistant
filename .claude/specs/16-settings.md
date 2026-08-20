@@ -13,10 +13,10 @@
 
 ## Tab: General
 
-- **Store information**: name field, logo upload (avatar initials fallback) — "shown in conversations" (widget store-branding avatar, 06).
+- **Store information**: name field, logo upload (avatar initials fallback) — "shown in conversations" (widget store-branding avatar, 06). **Date & time format** (2026-08-19, global merchants): `storeInfo.dateFormat` (MMM D, YYYY · D MMM YYYY · MM/DD/YYYY · DD/MM/YYYY · DD.MM.YYYY · YYYY-MM-DD · YYYY年M月D日) + `storeInfo.timeFormat` (12h/24h), with live examples in the store time zone (link to Chat availability to change the zone). Applied app-wide through `app/lib/format/datetime.ts` + the `DateTimeProvider`/`useDateTime()` context mounted in `app/routes/app.tsx` (inbox, contacts, dashboard, analytics axes, training "last synced", proactive table, recommendations, review queue, plan trial date, settings data-requests); server-side formatting uses `getDateTimePrefs(shopId)`. Deterministic (en-US digits, shop TZ) so SSR and client always agree.
 - **Theme**: storefront theme select Auto-detect (recommended)/Dawn/Refresh/Craft/Custom — informs cart-drawer integration hints; **"App is embedded to your theme"** status badge On/Off + Turn on/off button → deep link to theme editor app-embed activation (`https://{shop}/admin/themes/current/editor?context=apps&activateAppId={uuid}/chat-widget`); status detected via Admin API (main theme settings_data check) — feeds onboarding step 1 (13).
 - **Inbox**: Automatic resolution toggle + "Auto resolve after N {Minute/Hour/Day}" (default 60 min) → consumed by 10.
-- **Team member**: Invite member button **disabled** (v1 single-user; tooltip "coming soon"), search/sort, table Name|Email|Member since|Role|Status — shows owner row (Admin/Active).
+- **Team members** (spec 18 owns the model): Invite member → real `TeamMember` row + invite email / copy-link; table Name|Email|Member since|Role (select)|Status (Invited/Active/Disabled)|actions (resend invite, reset link, disable/enable, remove); owner row from the owner member; seats used vs `team_seats` plan quota; **Open in web** button (admin surface) opens the standalone web app.
 
 ## Tab: Chatbox
 

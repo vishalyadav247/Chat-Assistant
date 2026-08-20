@@ -1,8 +1,9 @@
 import db from "../db.server";
 
 // Multi-tenancy seam. Every domain query goes through / is checked against a shopId
-// resolved from a TRUSTED source (authenticate.admin, appProxy, webhook payload) —
-// never from client input. See .claude/skills/db-tenancy/SKILL.md.
+// resolved from a TRUSTED source (authenticate.admin, appProxy, webhook payload, or
+// the TeamSession row behind the web-surface cookie — see app/lib/access.server.ts,
+// spec 18) — never from client input. See .claude/skills/db-tenancy/SKILL.md.
 
 /** Resolve (and lazily create) the Shop row for a trusted shop domain. */
 export async function resolveShopId(shopDomain: string): Promise<string> {

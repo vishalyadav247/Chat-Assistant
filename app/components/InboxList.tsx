@@ -1,4 +1,5 @@
-import { avatarGradient, displayName, initials, relTime, StarIcon } from "./InboxShared";
+import { useDateTime } from "../lib/format/context";
+import { avatarGradient, displayName, initials, StarIcon } from "./InboxShared";
 import type { InboxRow } from "./InboxShared";
 
 // List column (design inbox.html): title = filter label, unread-only toggle,
@@ -27,6 +28,7 @@ export function InboxList({
   onSearch: (value: string) => void;
   onSelect: (row: InboxRow) => void;
 }) {
+  const dt = useDateTime();
   return (
     <div className="cin-col cin-listcol">
       <div className="cin-list-top">
@@ -70,7 +72,7 @@ export function InboxList({
                       </span>
                     ) : null}
                   </span>
-                  <span className="cin-ctime">{relTime(row.lastMessageAt)}</span>
+                  <span className="cin-ctime">{dt.relative(row.lastMessageAt)}</span>
                   {row.unread ? <span className="cin-cdot" /> : null}
                 </span>
                 <span className="cin-cprev">{row.preview || "No messages yet"}</span>

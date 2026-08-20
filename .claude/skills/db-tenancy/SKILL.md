@@ -10,7 +10,7 @@ description: Prisma + Postgres + pgvector conventions and multi-tenant safety. U
 - Every domain table has `shopId`; **every** query filters by it — reads, writes, aggregates, raw SQL, jobs.
 - Raw SQL takes `shopId` as the first bound parameter; helpers in `app/lib/tenancy.server.ts` throw when it's missing. Composite indexes put `shop_id` first.
 - Cross-shop anything is a bug of the highest severity — run the `tenancy-auditor` subagent on every feature diff.
-- Shop identity comes from `authenticate.admin` (admin), `authenticate.public.appProxy` (storefront), or webhook payload — **never** from client-supplied input.
+- Shop identity comes from `authenticate.admin` (admin), `authenticate.public.appProxy` (storefront), webhook payload, or — for the standalone web surface (spec 18) — the `TeamSession` row looked up by the opaque `cc_web_session` cookie inside `requireShopAccess()` (`app/lib/access.server.ts`) — **never** from client-supplied input (params, body, headers, client JSON). `/app/*` routes call `requireShopAccess()`, not `authenticate.admin()` directly.
 
 ## Migrations
 

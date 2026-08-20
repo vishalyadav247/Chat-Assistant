@@ -2,13 +2,14 @@ import { useEffect, useRef } from "react";
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData, useNavigate, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { useAppBridge } from "@shopify/app-bridge-react";
-import { authenticate } from "../shopify.server";
+import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
-import { resolveShopId } from "../lib/tenancy.server";
 import { DataTable } from "../components/DataTable";
 import { EmptyState } from "../components/ui/EmptyState";
 import { PageHeader } from "../components/ui/PageHeader";
+import { requireShopAccess } from "../lib/access.server";
+import { routeError } from "../lib/ui/route-error";
+import { useDateTime } from "../lib/format/context";
 
 // AI unresolved questions review queue (spec 07): shopper questions that hit
 // the pipeline fallback (logged by spec 03). Actions prefill the target form —
@@ -23,8 +24,7 @@ const REASON_LABEL: Record<string, string> = {
 };
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const { shopId } = await requireShopAccess(request, { permission: "ai_agent" });
   const questions = await db.unresolvedQuestion.findMany({
     where: { shopId, status: "pending" },
     orderBy: [{ count: "desc" }, { createdAt: "desc" }],
@@ -36,8 +36,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const { shopId } = await requireShopAccess(request, { permission: "ai_agent" });
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
 
@@ -53,6 +52,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 export default function ReviewQueuePage() {
   const data = useLoaderData<typeof loader>();
+  const dt = useDateTime();
   const shopify = useAppBridge();
   const navigate = useNavigate();
   const fetcher = useFetcher<typeof action>();
@@ -119,7 +119,7 @@ export default function ReviewQueuePage() {
                   key: "date",
                   title: "First asked",
                   render: (row) => (
-                    <s-text tone="neutral">{new Date(row.createdAt).toLocaleDateString()}</s-text>
+                    <s-text tone="neutral">{dt.date(row.createdAt)}</s-text>
                   ),
                 },
                 {
@@ -179,7 +179,7 @@ export default function ReviewQueuePage() {
 }
 
 export function ErrorBoundary() {
-  return boundary.error(useRouteError());
+  return routeError(useRouteError());
 }
 
 export const headers: HeadersFunction = (headersArgs) => {

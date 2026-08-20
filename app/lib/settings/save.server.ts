@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import db from "../../db.server";
@@ -12,6 +11,7 @@ import {
   type ShopSettingsData,
 } from "./schemas";
 import { validate17TrackKey } from "../tracking/seventeen-track.server";
+import { DATE_FORMATS, DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, TIME_FORMATS } from "../format/datetime";
 
 // Settings save workflow (spec 16): one intent per tab/card. Every intent
 // zod-parses the incoming slice, merges it onto the current settings blob,
@@ -27,6 +27,8 @@ export interface SettingsActionResult {
 
 const generalPayload = z.object({
   name: z.string().max(100).catch(""),
+  dateFormat: z.enum(DATE_FORMATS).catch(DEFAULT_DATE_FORMAT),
+  timeFormat: z.enum(TIME_FORMATS).catch(DEFAULT_TIME_FORMAT),
   theme: shopSettingsSchema.shape.theme,
   inbox: shopSettingsSchema.shape.inbox,
 });
@@ -102,7 +104,7 @@ export async function applySettingsIntent(args: {
             ...current,
             theme: p.theme,
             inbox: p.inbox,
-            storeInfo: { ...current.storeInfo, name: p.name },
+            storeInfo: { ...current.storeInfo, name: p.name, dateFormat: p.dateFormat, timeFormat: p.timeFormat },
           };
           break;
         }
@@ -162,59 +164,6 @@ export async function applySettingsIntent(args: {
           break;
         }
 
-        // ── Team roster (spec 16 team v1 — assignment/display layer; login
-        //    access is Shopify staff accounts) ───────────────────────────────
-        case "team-invite": {
-          const p = z
-            .object({
-              name: z.string().trim().min(1).max(100),
-              email: z.string().trim().email().max(200),
-              role: z.enum(["admin", "agent"]).default("agent"),
-            })
-            .parse(raw);
-          const exists = current.team.members.some(
-            (m) => m.email.toLowerCase() === p.email.toLowerCase(),
-          );
-          if (exists) {
-            return { ok: false, intent, error: "A member with this email already exists." };
-          }
-          const member = {
-            id: randomUUID(),
-            name: p.name,
-            email: p.email,
-            role: p.role,
-            since: new Date().toISOString().slice(0, 10),
-          };
-          next = { ...current, team: { members: [...current.team.members, member] } };
-          break;
-        }
-        case "team-role": {
-          const p = z
-            .object({ id: z.string().min(1), role: z.enum(["admin", "agent"]) })
-            .parse(raw);
-          next = {
-            ...current,
-            team: {
-              members: current.team.members.map((m) =>
-                m.id === p.id ? { ...m, role: p.role } : m,
-              ),
-            },
-          };
-          break;
-        }
-        case "team-remove": {
-          const p = z.object({ id: z.string().min(1) }).parse(raw);
-          next = {
-            ...current,
-            team: { members: current.team.members.filter((m) => m.id !== p.id) },
-          };
-          // Their open assignments go back to Unassigned.
-          await db.conversation.updateMany({
-            where: { shopId, assigneeId: p.id },
-            data: { assigneeId: null },
-          });
-          break;
-        }
         default:
           return { ok: false, intent, error: `Unknown settings intent: ${intent || "(none)"}` };
       }

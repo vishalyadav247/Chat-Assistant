@@ -517,3 +517,76 @@ model RedactLog {
   @@index([shopId])
   @@map("redact_logs")
 }
+
+// ── Team & standalone web access (spec 18) ──────────────────────────────────
+// Team members are merchant staff who may log into ChatConvert outside the
+// Shopify admin (web surface). Owner row is created lazily from the admin
+// handoff; `assigneeId` on conversations keeps the literal "owner" key for the
+// owner role and the member id for everyone else.
+
+model TeamMember {
+  id           String    @id @default(cuid())
+  shopId       String
+  email        String
+  name         String
+  role         String    @default("agent") // owner | admin | agent
+  status       String    @default("invited") // invited | active | disabled
+  passwordHash String?
+  notifyPrefs  Json?
+  failedLogins Int       @default(0)
+  lockedUntil  DateTime?
+  invitedAt    DateTime  @default(now())
+  joinedAt     DateTime?
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([shopId, email])
+  @@index([shopId])
+  @@index([email])
+  @@map("team_members")
+}
+
+// Opaque-token sessions + one-time tokens (handoff / invite / reset). The raw
+// token lives only in the cookie / link; the row stores sha256(token).
+model TeamSession {
+  id         String   @id @default(cuid())
+  tokenHash  String   @unique
+  shopId     String
+  memberId   String
+  kind       String   @default("session") // session | handoff | invite | reset
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  userAgent  String?
+
+  @@index([shopId, memberId])
+  @@index([expiresAt])
+  @@map("team_sessions")
+}
+
+model PushSubscription {
+  id         String    @id @default(cuid())
+  shopId     String
+  memberId   String
+  endpoint   String    @unique
+  p256dh     String
+  auth       String
+  userAgent  String?
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+  failedAt   DateTime?
+
+  @@index([shopId, memberId])
+  @@map("push_subscriptions")
+}
+
+// App-level (not shop-scoped) generated secrets, e.g. auto-provisioned VAPID
+// keys for Web Push when the env vars are absent. Env always overrides.
+model AppSecret {
+  key       String   @id
+  value     String
+  createdAt DateTime @default(now())
+
+  @@map("app_secrets")
+}

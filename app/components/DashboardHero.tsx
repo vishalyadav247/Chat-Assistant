@@ -129,7 +129,7 @@ export function DashboardHero(props: {
         boxShadow: SHADOW.md,
       }}
     >
-      <style>{HERO_CSS}</style>
+      <style dangerouslySetInnerHTML={{ __html: HERO_CSS }} />
       <DecoCircle size={240} opacity={0.12} style={{ right: -40, top: -60 }} />
       <DecoCircle size={180} opacity={0.08} style={{ right: 120, bottom: -80 }} />
 

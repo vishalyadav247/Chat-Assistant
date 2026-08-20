@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useFetcher } from "react-router";
-import { useAppBridge } from "@shopify/app-bridge-react";
+import { useAppBridge } from "../lib/ui/surface";
 import type {
   CrossSellPairRowData,
   CustomRecommendationRowData,
@@ -10,6 +10,7 @@ import type {
 } from "../routes/app.ai-agent.instructions";
 import { DataTable, type Column } from "./DataTable";
 import { BrowseProductsModal, BrowseThumb, type BrowseItemMeta } from "./BrowseProductsModal";
+import { useDateTime } from "../lib/format/context";
 
 // Instructions → Product recommendations tab (spec 08, design #viewInstructions
 // prod panel): Rules card, App recommendations table, Custom recommendations
@@ -23,15 +24,6 @@ import { BrowseProductsModal, BrowseThumb, type BrowseItemMeta } from "./BrowseP
 //   OFF lets unavailable products appear in recommendation cards.
 // - "Push overstock" renders OFF + disabled — coming soon, no storage in v1.
 
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, {
-    month: "2-digit",
-    day: "2-digit",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
 
 export function InstructionsRecommendationsTab(props: {
   recommendations: RecommendationRowData[];
@@ -42,6 +34,7 @@ export function InstructionsRecommendationsTab(props: {
   onOpenRec: (id: string) => void;
   onOpenCustom: (id: string) => void;
 }) {
+  const dt = useDateTime();
   const shopify = useAppBridge();
   const fetcher = useFetcher<InstructionsActionResult>();
   const busy = fetcher.state !== "idle";
@@ -91,7 +84,7 @@ export function InstructionsRecommendationsTab(props: {
       ),
     },
     { key: "products", title: "Products", render: (row) => String(row.productIds.length) },
-    { key: "modified", title: "Last modified", render: (row) => formatDate(row.updatedAt) },
+    { key: "modified", title: "Last modified", render: (row) => dt.dateTime(row.updatedAt) },
     {
       key: "status",
       title: "Status",
@@ -160,7 +153,7 @@ export function InstructionsRecommendationsTab(props: {
           ? `${row.productIds.length} + ${row.collectionIds.length} collection${row.collectionIds.length === 1 ? "" : "s"}`
           : String(row.productIds.length),
     },
-    { key: "modified", title: "Last modified", render: (row) => formatDate(row.updatedAt) },
+    { key: "modified", title: "Last modified", render: (row) => dt.dateTime(row.updatedAt) },
     {
       key: "status",
       title: "Status",

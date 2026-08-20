@@ -7,7 +7,6 @@ import {
   StatusBadge,
   SubTabs,
   SyncControlLayout,
-  formatDate,
   useSyncWatcher,
   useTrainingFetcher,
 } from "./TrainingShared";
@@ -43,6 +42,7 @@ export function TrainingDiscountsTab(props: {
    *  independent of per-row learnEnabled, which applies only when this is on. */
   masterEnabled: boolean;
 }) {
+  const dt = useDateTime();
   const { submit, pendingIntent } = useTrainingFetcher();
   const syncWatch = useSyncWatcher(props.lastSyncedAt, "Discounts synced");
   const navigate = useNavigate();
@@ -217,13 +217,13 @@ export function TrainingDiscountsTab(props: {
               {
                 key: "startsAt",
                 title: "Start date",
-                render: (row) => <s-text tone="neutral">{formatDate(row.startsAt)}</s-text>,
+                render: (row) => <s-text tone="neutral">{row.startsAt ? dt.date(row.startsAt) : "—"}</s-text>,
               },
               {
                 key: "endsAt",
                 title: "End date",
                 render: (row) => (
-                  <s-text tone="neutral">{row.endsAt ? formatDate(row.endsAt) : "-"}</s-text>
+                  <s-text tone="neutral">{row.endsAt ? dt.date(row.endsAt) : "-"}</s-text>
                 ),
               },
               {
@@ -257,3 +257,5 @@ export function TrainingDiscountsTab(props: {
     </s-stack>
   );
 }
+
+import { useDateTime } from "../lib/format/context";

@@ -26,7 +26,8 @@ export type QuotaDimension =
   | "policy_pages"
   | "crawl_pages"
   | "file_uploads"
-  | "metafields_enabled"; // product/variant metafields opted into AI training (spec 07)
+  | "metafields_enabled" // product/variant metafields opted into AI training (spec 07)
+  | "team_seats"; // team members (excluding the owner) who can log into the web app (spec 18)
 
 const ENFORCEMENT: "open" | "enforced" = "open";
 
@@ -59,6 +60,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       crawl_pages: 1,
       file_uploads: 0,
       metafields_enabled: 3,
+      team_seats: 1,
     },
     features: [],
   },
@@ -78,6 +80,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       crawl_pages: 10,
       file_uploads: 0,
       metafields_enabled: 10,
+      team_seats: 3,
     },
     features: ["remove_branding", "unanswered_analytics"],
   },
@@ -97,6 +100,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       crawl_pages: 10,
       file_uploads: 0,
       metafields_enabled: 25,
+      team_seats: 5,
     },
     features: [
       "remove_branding",
@@ -123,6 +127,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       crawl_pages: 20,
       file_uploads: 5,
       metafields_enabled: 100,
+      team_seats: 10,
     },
     features: [
       "remove_branding",

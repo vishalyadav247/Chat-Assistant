@@ -1,14 +1,25 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import { useFetcher } from "react-router";
-import { useAppBridge } from "@shopify/app-bridge-react";
-import type { ShopSettingsData, TeamMemberData } from "../lib/settings/schemas";
+import { useAppBridge } from "../lib/ui/surface";
+import type { ShopSettingsData } from "../lib/settings/schemas";
+import {
+  dateFormatOptions,
+  timeFormatOptions,
+  formatDateTime,
+  SAMPLE_INSTANT,
+  type DateFormat,
+  type TimeFormat,
+} from "../lib/format/datetime";
+import type { MemberRow } from "../lib/team/team.server";
+import type { TeamIntentResult } from "../lib/team/team-intents.server";
 import { BrowseModalShell } from "./BrowseProductsModal";
 import { ConfirmDeleteModal } from "./ui/ConfirmDeleteModal";
+import { OpenInWebButton } from "./web/OpenInWebButton";
 
 // Settings → General tab (spec 16): store info + logo, theme + embed status,
-// inbox auto-resolution, team roster (invite/role/remove — powers inbox
-// assignment; login access itself is managed by Shopify staff accounts).
+// inbox auto-resolution, team (spec 18: invite → email/copy-link → member sets
+// a password and signs into the standalone web app; roles gate pages there).
 
 type Inbox = ShopSettingsData["inbox"];
 type Theme = ShopSettingsData["theme"];
@@ -19,10 +30,28 @@ export interface TeamMemberRow {
   since: string;
 }
 
+export interface TeamSectionData {
+  members: MemberRow[];
+  seatsUsed: number;
+  /** null = unlimited. */
+  seatQuota: number | null;
+  emailConfigured: boolean;
+  surface: "admin" | "web";
+  /** The signed-in member on the web surface (can't edit themselves). */
+  selfId: string | null;
+}
+
 const EMPTY_INVITE = { name: "", email: "", role: "agent" as "agent" | "admin" };
 
 export function SettingsGeneral(props: {
   name: string;
+  /** Global date/time display format (spec 16 delta 2026-08-19). */
+  dateFormat: DateFormat;
+  timeFormat: TimeFormat;
+  timeZone: string;
+  onDateFormatChange: (value: DateFormat) => void;
+  onTimeFormatChange: (value: TimeFormat) => void;
+  onOpenAvailability: () => void;
   placeholderName: string;
   logoUrl: string | null;
   theme: Theme;
@@ -31,7 +60,7 @@ export function SettingsGeneral(props: {
   shopDomain: string;
   apiKey?: string;
   owner: TeamMemberRow;
-  members: TeamMemberData[];
+  team: TeamSectionData;
   reviewUrl: string | null;
   onNameChange: (name: string) => void;
   onThemeChange: (theme: Theme) => void;
@@ -43,11 +72,15 @@ export function SettingsGeneral(props: {
   const [teamQuery, setTeamQuery] = useState("");
 
   // ── Team roster (self-contained fetcher, like the logo upload) ────────────
-  const teamFetcher = useFetcher<{ ok: boolean; intent?: string; error?: string }>();
+  const teamFetcher = useFetcher<TeamIntentResult>();
   const teamBusy = teamFetcher.state !== "idle";
   const [inviteOpen, setInviteOpen] = useState(false);
   const [invite, setInvite] = useState(EMPTY_INVITE);
-  const [removeTarget, setRemoveTarget] = useState<TeamMemberData | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<MemberRow | null>(null);
+  // Copy-link reveal after invite / resend / reset-link (always offered; the
+  // email may or may not have gone out depending on EMAIL_PROVIDER).
+  const [linkReveal, setLinkReveal] = useState<{ title: string; link: string; emailDelivered: boolean } | null>(null);
+  const [copied, setCopied] = useState(false);
   const processedTeam = useRef<unknown>(null);
   useEffect(() => {
     if (teamFetcher.state !== "idle" || !teamFetcher.data) return;
@@ -56,20 +89,40 @@ export function SettingsGeneral(props: {
     const result = teamFetcher.data;
     if (!result.intent?.startsWith("team-")) return;
     if (result.ok) {
-      shopify.toast.show(
-        result.intent === "team-invite"
-          ? "Member added"
-          : result.intent === "team-remove"
-            ? "Member removed"
-            : "Role updated",
-      );
+      const messages: Record<string, string> = {
+        "team-invite": "Invitation created",
+        "team-resend": "Invitation re-sent",
+        "team-reset-link": "Password reset link created",
+        "team-remove": "Member removed",
+        "team-role": "Role updated",
+        "team-status": "Member updated",
+      };
+      shopify.toast.show(messages[result.intent] ?? "Saved");
       setInviteOpen(false);
       setInvite(EMPTY_INVITE);
       setRemoveTarget(null);
+      if (result.link) {
+        setCopied(false);
+        setLinkReveal({
+          title: result.intent === "team-reset-link" ? "Password reset link" : "Invitation link",
+          link: result.link,
+          emailDelivered: Boolean(result.emailDelivered),
+        });
+      }
     } else if (result.error) {
       shopify.toast.show(result.error, { isError: true });
     }
   }, [teamFetcher.state, teamFetcher.data, shopify]);
+
+  const copyLink = async (link: string) => {
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      shopify.toast.show("Link copied");
+    } catch {
+      shopify.toast.show("Couldn't copy — select the link and copy it manually", { isError: true });
+    }
+  };
 
   const submitTeam = (intent: string, payload: Record<string, unknown>) =>
     teamFetcher.submit({ intent, payload: JSON.stringify(payload) }, { method: "post" });
@@ -117,7 +170,24 @@ export function SettingsGeneral(props: {
   const matches = (name: string, email: string) =>
     !query || name.toLowerCase().includes(query) || email.toLowerCase().includes(query);
   const ownerVisible = matches(props.owner.name, props.owner.email);
-  const visibleMembers = props.members.filter((m) => matches(m.name, m.email));
+  const visibleMembers = props.team.members.filter((m) => matches(m.name, m.email));
+  const seatsLeft = props.team.seatQuota === null ? Infinity : Math.max(0, props.team.seatQuota - props.team.seatsUsed);
+  const memberInitials = (name: string) =>
+    name
+      .split(/\s+/)
+      .map((w) => w[0])
+      .filter(Boolean)
+      .slice(0, 2)
+      .join("")
+      .toUpperCase();
+  const statusBadge = (m: MemberRow) =>
+    m.status === "active" ? (
+      <s-badge tone="success">Active</s-badge>
+    ) : m.status === "disabled" ? (
+      <s-badge tone="critical">Disabled</s-badge>
+    ) : (
+      <s-badge tone="warning">Invited</s-badge>
+    );
 
   const embedBadge =
     props.embedStatus === "on"
@@ -196,6 +266,43 @@ export function SettingsGeneral(props: {
               </s-stack>
             </s-stack>
           </s-stack>
+        </s-stack>
+        {/* ── Date & time format (global; merchants worldwide) ─────────── */}
+        <s-stack gap="small-200">
+          <s-text type="strong">Date &amp; time format</s-text>
+          <s-text tone="neutral">
+            Used everywhere in ChatConvert — inbox, contacts, analytics, exports. Times are shown in your store
+            time zone ({props.timeZone}) —{" "}
+            <s-link onClick={props.onOpenAvailability}>change it in Chat availability</s-link>.
+          </s-text>
+          <s-grid gridTemplateColumns="minmax(0,1fr) minmax(0,1fr)" gap="base">
+            <s-select
+              label="Date format"
+              value={props.dateFormat}
+              onChange={(e) => props.onDateFormatChange(e.currentTarget.value as DateFormat)}
+            >
+              {dateFormatOptions(SAMPLE_INSTANT, props.timeZone).map((o) => (
+                <s-option key={o.value} value={o.value}>
+                  {o.label}
+                </s-option>
+              ))}
+            </s-select>
+            <s-select
+              label="Time format"
+              value={props.timeFormat}
+              onChange={(e) => props.onTimeFormatChange(e.currentTarget.value as TimeFormat)}
+            >
+              {timeFormatOptions(SAMPLE_INSTANT, props.timeZone).map((o) => (
+                <s-option key={o.value} value={o.value}>
+                  {o.label}
+                </s-option>
+              ))}
+            </s-select>
+          </s-grid>
+          <s-text tone="neutral">
+            Example:{" "}
+            {formatDateTime(SAMPLE_INSTANT, { dateFormat: props.dateFormat, timeFormat: props.timeFormat, timeZone: props.timeZone })}
+          </s-text>
         </s-stack>
         <input
           ref={fileRef}
@@ -279,15 +386,33 @@ export function SettingsGeneral(props: {
 
       <s-section heading="Team members">
         <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">
-          <s-paragraph>Invite and manage your team members</s-paragraph>
-          <s-button icon="person-add" variant="primary" onClick={() => setInviteOpen(true)}>
-            Invite member
-          </s-button>
+          <s-paragraph>
+            Invite teammates to review and reply to conversations in the ChatConvert web app —
+            no Shopify staff account needed.
+          </s-paragraph>
+          <s-stack direction="inline" gap="small" alignItems="center">
+            <OpenInWebButton />
+            <s-button
+              icon="person-add"
+              variant="primary"
+              disabled={seatsLeft === 0}
+              onClick={() => setInviteOpen(true)}
+            >
+              Invite member
+            </s-button>
+          </s-stack>
         </s-stack>
-        <s-banner tone="info">
-          Members appear here for inbox assignment and reporting. To let them open ChatConvert,
-          also give them staff access in your Shopify admin (Settings → Users and permissions).
-        </s-banner>
+        <s-text tone="neutral">
+          {props.team.seatQuota === null
+            ? `${props.team.seatsUsed} team member${props.team.seatsUsed === 1 ? "" : "s"}`
+            : `${props.team.seatsUsed} of ${props.team.seatQuota} team seat${props.team.seatQuota === 1 ? "" : "s"} used${seatsLeft === 0 ? " — upgrade your plan to invite more." : ""}`}
+        </s-text>
+        {!props.team.emailConfigured ? (
+          <s-banner tone="info">
+            Invitation emails aren&apos;t configured on this server yet — after inviting someone, copy the
+            invitation link and send it to them yourself.
+          </s-banner>
+        ) : null}
         <s-search-field
           label="Search team members"
           labelAccessibilityVisibility="exclusive"
@@ -322,55 +447,90 @@ export function SettingsGeneral(props: {
                 <s-table-cell> </s-table-cell>
               </s-table-row>
             ) : null}
-            {visibleMembers.map((member) => (
-              <s-table-row key={member.id}>
-                <s-table-cell>
-                  <s-stack direction="inline" gap="small" alignItems="center">
-                    <s-avatar
-                      size="small"
-                      initials={member.name
-                        .split(/\s+/)
-                        .map((w) => w[0])
-                        .filter(Boolean)
-                        .slice(0, 2)
-                        .join("")
-                        .toUpperCase()}
-                      alt={member.name}
-                    />
-                    <s-text>{member.name}</s-text>
-                  </s-stack>
-                </s-table-cell>
-                <s-table-cell>{member.email}</s-table-cell>
-                <s-table-cell>{member.since || "—"}</s-table-cell>
-                <s-table-cell>
-                  <s-select
-                    label={`Role for ${member.name}`}
-                    labelAccessibilityVisibility="exclusive"
-                    value={member.role}
-                    disabled={teamBusy}
-                    onChange={(e) =>
-                      submitTeam("team-role", { id: member.id, role: e.currentTarget.value })
-                    }
-                  >
-                    <s-option value="admin">Admin</s-option>
-                    <s-option value="agent">Agent</s-option>
-                  </s-select>
-                </s-table-cell>
-                <s-table-cell>
-                  <s-badge tone="success">Active</s-badge>
-                </s-table-cell>
-                <s-table-cell>
-                  <s-button
-                    variant="tertiary"
-                    tone="critical"
-                    icon="delete"
-                    accessibilityLabel={`Remove ${member.name}`}
-                    disabled={teamBusy}
-                    onClick={() => setRemoveTarget(member)}
-                  />
-                </s-table-cell>
-              </s-table-row>
-            ))}
+            {visibleMembers.map((member) => {
+              const isSelf = props.team.selfId === member.id;
+              return (
+                <s-table-row key={member.id}>
+                  <s-table-cell>
+                    <s-stack direction="inline" gap="small" alignItems="center">
+                      <s-avatar size="small" initials={memberInitials(member.name)} alt={member.name} />
+                      <s-text>
+                        {member.name}
+                        {isSelf ? " (you)" : ""}
+                      </s-text>
+                    </s-stack>
+                  </s-table-cell>
+                  <s-table-cell>{member.email}</s-table-cell>
+                  <s-table-cell>{member.since || "—"}</s-table-cell>
+                  <s-table-cell>
+                    <s-select
+                      label={`Role for ${member.name}`}
+                      labelAccessibilityVisibility="exclusive"
+                      value={member.role}
+                      disabled={teamBusy || isSelf}
+                      onChange={(e) =>
+                        submitTeam("team-role", { id: member.id, role: e.currentTarget.value })
+                      }
+                    >
+                      <s-option value="admin">Admin</s-option>
+                      <s-option value="agent">Agent</s-option>
+                    </s-select>
+                  </s-table-cell>
+                  <s-table-cell>{statusBadge(member)}</s-table-cell>
+                  <s-table-cell>
+                    <s-stack direction="inline" gap="small-200" alignItems="center">
+                      {member.status === "invited" ? (
+                        <s-button
+                          variant="tertiary"
+                          icon="email"
+                          accessibilityLabel={`Resend invitation to ${member.name}`}
+                          disabled={teamBusy}
+                          onClick={() => submitTeam("team-resend", { id: member.id })}
+                        >
+                          Resend invite
+                        </s-button>
+                      ) : null}
+                      {member.status === "active" && !isSelf ? (
+                        <s-button
+                          variant="tertiary"
+                          icon="key"
+                          accessibilityLabel={`Password reset link for ${member.name}`}
+                          disabled={teamBusy}
+                          onClick={() => submitTeam("team-reset-link", { id: member.id })}
+                        >
+                          Reset link
+                        </s-button>
+                      ) : null}
+                      {member.status !== "invited" && !isSelf ? (
+                        <s-button
+                          variant="tertiary"
+                          accessibilityLabel={`${member.status === "disabled" ? "Enable" : "Disable"} ${member.name}`}
+                          disabled={teamBusy}
+                          onClick={() =>
+                            submitTeam("team-status", {
+                              id: member.id,
+                              status: member.status === "disabled" ? "active" : "disabled",
+                            })
+                          }
+                        >
+                          {member.status === "disabled" ? "Enable" : "Disable"}
+                        </s-button>
+                      ) : null}
+                      {!isSelf ? (
+                        <s-button
+                          variant="tertiary"
+                          tone="critical"
+                          icon="delete"
+                          accessibilityLabel={`Remove ${member.name}`}
+                          disabled={teamBusy}
+                          onClick={() => setRemoveTarget(member)}
+                        />
+                      ) : null}
+                    </s-stack>
+                  </s-table-cell>
+                </s-table-row>
+              );
+            })}
           </s-table-body>
         </s-table>
         {!ownerVisible && visibleMembers.length === 0 ? (
@@ -412,7 +572,7 @@ export function SettingsGeneral(props: {
                 })
               }
             >
-              Add member
+              Send invitation
             </s-button>
           </span>
         }
@@ -440,16 +600,55 @@ export function SettingsGeneral(props: {
             <s-option value="admin">Admin — full app access</s-option>
           </s-select>
           <s-banner tone="info">
-            To let this person open ChatConvert, also add them as staff in your Shopify admin:
-            Settings → Users and permissions → Add staff.
+            They&apos;ll get a link to set their password and sign in to the ChatConvert web app.
+            Agents see Inbox and Contacts; Admins see everything except billing.
           </s-banner>
+        </s-stack>
+      </BrowseModalShell>
+
+      {/* ── Invite / reset link reveal ──────────────────────────────────── */}
+      <BrowseModalShell
+        open={linkReveal !== null}
+        title={linkReveal?.title ?? "Link"}
+        onClose={() => setLinkReveal(null)}
+        footer={
+          <span style={{ marginLeft: "auto", display: "inline-flex", gap: 8 }}>
+            <s-button onClick={() => setLinkReveal(null)}>Done</s-button>
+            <s-button variant="primary" icon="clipboard" onClick={() => linkReveal && copyLink(linkReveal.link)}>
+              {copied ? "Copied" : "Copy link"}
+            </s-button>
+          </span>
+        }
+      >
+        <s-stack gap="base">
+          <s-paragraph>
+            {linkReveal?.emailDelivered
+              ? "We emailed this link. You can also share it directly:"
+              : "Share this link with them directly (email delivery isn't configured on this server):"}
+          </s-paragraph>
+          <div
+            style={{
+              padding: 10,
+              borderRadius: 8,
+              background: "#f6f6f7",
+              border: "1px solid #e3e3e3",
+              fontSize: 12.5,
+              wordBreak: "break-all",
+              userSelect: "all",
+            }}
+          >
+            {linkReveal?.link}
+          </div>
+          <s-text tone="neutral">
+            {linkReveal?.title === "Password reset link" ? "Valid for 1 hour." : "Valid for 7 days."}
+          </s-text>
         </s-stack>
       </BrowseModalShell>
 
       <ConfirmDeleteModal
         open={removeTarget !== null}
         title={`Remove ${removeTarget?.name ?? "this member"}?`}
-        body="Their assigned conversations move back to Unassigned. This can't be undone."
+        body="They lose access to the web app immediately and their assigned conversations move back to Unassigned. This can't be undone."
         confirmLabel="Remove"
         loading={teamBusy}
         onCancel={() => setRemoveTarget(null)}

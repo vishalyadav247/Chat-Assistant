@@ -10,6 +10,30 @@ const envSchema = z.object({
   // App Store listing handle (apps.shopify.com/<handle>). Blank until the
   // listing is live; while blank the "Leave a review" fallback link is hidden.
   SHOPIFY_APP_STORE_HANDLE: z.string().optional().default(""),
+  // ── Standalone web surface (spec 18) ──
+  // Public origin used in invite / reset / notification links. Defaults to
+  // SHOPIFY_APP_URL (same host serves both surfaces).
+  WEB_APP_URL: z.string().optional().default(""),
+  // Transactional email. "log" prints the message (and the UI falls back to
+  // copy-link); "resend" posts to the Resend HTTPS API.
+  EMAIL_PROVIDER: z.enum(["log", "resend", "smtp"]).default("log"),
+  RESEND_API_KEY: z.string().optional().default(""),
+  // SMTP (any mailbox / SES / Gmail app password) — used when EMAIL_PROVIDER=smtp.
+  SMTP_HOST: z.string().optional().default(""),
+  SMTP_PORT: z.coerce.number().int().positive().optional().default(587),
+  SMTP_USER: z.string().optional().default(""),
+  SMTP_PASS: z.string().optional().default(""),
+  SMTP_SECURE: z
+    .enum(["true", "false"])
+    .optional()
+    .default("false")
+    .transform((v) => v === "true"),
+  EMAIL_FROM: z.string().optional().default("ChatConvert <no-reply@example.com>"),
+  // Web Push (VAPID). Generate once: `npx web-push generate-vapid-keys`.
+  // Push is silently disabled while the keys are blank.
+  VAPID_PUBLIC_KEY: z.string().optional().default(""),
+  VAPID_PRIVATE_KEY: z.string().optional().default(""),
+  VAPID_SUBJECT: z.string().optional().default("mailto:support@example.com"),
 });
 
 export type Env = z.infer<typeof envSchema>;

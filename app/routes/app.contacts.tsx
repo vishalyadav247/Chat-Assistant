@@ -8,9 +8,7 @@ import {
   useSearchParams,
 } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { useAppBridge } from "@shopify/app-bridge-react";
-import { authenticate } from "../shopify.server";
-import { resolveShopId } from "../lib/tenancy.server";
+import { useAppBridge } from "../lib/ui/surface";
 import {
   contactDetail,
   contactStats,
@@ -41,6 +39,8 @@ import {
   type ContactType,
 } from "../components/ContactsShared";
 import { ContactDetailPanel } from "../components/ContactDetailPanel";
+import { requireShopAccess } from "../lib/access.server";
+import { routeError } from "../lib/ui/route-error";
 
 // Contacts CRM (spec 11, design contacts.html): stat tiles, tabbed + searchable
 // contact table with conversation counts, contact detail side panel, CSV export
@@ -67,8 +67,9 @@ function parseType(raw: string | null): ContactType | undefined {
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session, admin } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const access = await requireShopAccess(request, { permission: "contacts" });
+  const { shopId } = access;
+  const admin = await access.getAdmin();
   const type = parseType(new URL(request.url).searchParams.get("type"));
 
   // Opportunistic classification passes on every load (all no-ops once caught
@@ -87,8 +88,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session, admin } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const access = await requireShopAccess(request, { permission: "contacts" });
+  const { shopId } = access;
+  const admin = await access.getAdmin();
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
   const joinedName = () =>
@@ -887,7 +889,7 @@ export default function ContactsPage() {
 }
 
 export function ErrorBoundary() {
-  return boundary.error(useRouteError());
+  return routeError(useRouteError());
 }
 
 export const headers: HeadersFunction = (headersArgs) => {

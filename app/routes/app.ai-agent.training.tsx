@@ -2,9 +2,7 @@ import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "re
 import { useLoaderData, useNavigate, useRouteError, useSearchParams } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { z } from "zod";
-import { authenticate } from "../shopify.server";
 import db from "../db.server";
-import { resolveShopId } from "../lib/tenancy.server";
 import type { Prisma } from "@prisma/client";
 import {
   displayQuota,
@@ -62,10 +60,12 @@ import { TrainingProductsTab } from "../components/TrainingProductsTab";
 import { TrainingCollectionsTab } from "../components/TrainingCollectionsTab";
 import { TrainingDiscountsTab } from "../components/TrainingDiscountsTab";
 import { TrainingKnowledgeTab } from "../components/TrainingKnowledgeTab";
+import { requireShopAccess } from "../lib/access.server";
+import { routeError } from "../lib/ui/route-error";
 
 // Training data (spec 07, design ai-agent.html #viewTraining): five tabs via
 // ?tab= — Products / Collections / Discounts / FAQs / Custom knowledge.
-// All reads and writes are shop-scoped via resolveShopId(session.shop).
+// All reads and writes are shop-scoped via resolveShopId(shopDomain).
 
 export type TrainingTab = "products" | "collections" | "discounts" | "faqs" | "knowledge";
 
@@ -165,8 +165,7 @@ const csvEscape = (value: string) =>
   /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const { shopId, shopDomain } = await requireShopAccess(request, { permission: "ai_agent" });
 
   const [shop, products, collections, discounts, syncState, faqTree, sources, suggested, shopSettings, metafieldRows] =
     await Promise.all([
@@ -285,7 +284,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return {
     shop: {
       plan,
-      domain: shop?.domain ?? session.shop,
+      domain: shop?.domain ?? shopDomain,
       currency: shop?.currency ?? "USD",
     },
     products: {
@@ -426,9 +425,7 @@ function friendlyError(error: unknown): string {
 }
 
 export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingActionResult> => {
-  const { session } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
-  const shopDomain = session.shop;
+  const { shopId, shopDomain } = await requireShopAccess(request, { permission: "ai_agent" });
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
   const str = (key: string) => String(formData.get(key) ?? "");
@@ -1086,7 +1083,7 @@ export default function TrainingDataPage() {
 }
 
 export function ErrorBoundary() {
-  return boundary.error(useRouteError());
+  return routeError(useRouteError());
 }
 
 export const headers: HeadersFunction = (headersArgs) => {

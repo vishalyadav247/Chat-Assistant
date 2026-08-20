@@ -14,7 +14,6 @@ import {
   StatusBadge,
   SubTabs,
   downloadText,
-  formatDateTime,
   useTrainingFetcher,
 } from "./TrainingShared";
 
@@ -79,6 +78,7 @@ export function TrainingKnowledgeTab(props: {
   prefillQuestion: string;
   prefillUnresolvedId: string;
 }) {
+  const dt = useDateTime();
   const [filter, setFilter] = useState<SourceFilter>("all");
   const [reviewOpen, setReviewOpen] = useState(false);
   const [qaDraft, setQaDraft] = useState<QaDraft | null>(null);
@@ -322,7 +322,7 @@ export function TrainingKnowledgeTab(props: {
                     </s-table-cell>
                     <s-table-cell>
                       <s-text tone="neutral">
-                        {source.lastSyncedAt ? formatDateTime(source.lastSyncedAt) : "—"}
+                        {source.lastSyncedAt ? dt.dateTime(source.lastSyncedAt) : "—"}
                       </s-text>
                     </s-table-cell>
                     <s-table-cell>
@@ -891,3 +891,5 @@ function AddTile(props: {
     </s-clickable>
   );
 }
+
+import { useDateTime } from "../lib/format/context";

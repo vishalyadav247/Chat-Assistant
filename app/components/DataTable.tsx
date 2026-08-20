@@ -243,7 +243,7 @@ export function DataTable<Row extends { id: string }>(props: {
         // (Polaris IndexTable behavior) instead of inserting a row above the
         // table — no layout shift when rows are selected/deselected.
         <div className={scopeClass} style={{ position: "relative" }}>
-          {scopedCss ? <style>{scopedCss}</style> : null}
+          {scopedCss ? <style dangerouslySetInnerHTML={{ __html: scopedCss }} /> : null}
           {props.bulkActions && selected.size > 0 ? (
             <div
               style={{

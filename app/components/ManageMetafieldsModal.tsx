@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import type { MetafieldDefinitionRow } from "../lib/ingestion/metafields.server";
 import type { TrainingActionResult } from "../routes/app.ai-agent.training";
 import { BrowseModalShell } from "./BrowseProductsModal";
-import { SubTabs, formatDateTime, useTrainingFetcher } from "./TrainingShared";
+import { SubTabs, useTrainingFetcher } from "./TrainingShared";
 import { BRAND } from "./ui/tokens";
+import { useDateTime } from "../lib/format/context";
 
 // Manage metafields modal (spec 07 → Products tab, reference
 // resources/other/productMetafields.png, 2026-08-19): Product / Variant
@@ -46,6 +47,7 @@ export function ManageMetafieldsModal(props: {
   /** SyncState.metafieldSyncAt — last definitions refresh (any path). */
   lastSyncedAt: string | null;
 }) {
+  const dt = useDateTime();
   // Rows are seeded from the loader and replaced by each action's fresh list
   // so toggles/sync reflect instantly without waiting for revalidation.
   const [rows, setRows] = useState(props.rows);
@@ -83,7 +85,7 @@ export function ManageMetafieldsModal(props: {
     <BrowseModalShell
       open={props.open}
       title="Manage metafields"
-      headerMeta={`Last synced: ${formatDateTime(props.lastSyncedAt)}`}
+      headerMeta={`Last synced: ${props.lastSyncedAt ? dt.dateTime(props.lastSyncedAt) : "N/A"}`}
       fixedHeight
       onClose={props.onClose}
       footer={

@@ -1,9 +1,7 @@
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { useLoaderData, useNavigate, useRouteError, useSearchParams } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { authenticate } from "../shopify.server";
 import db from "../db.server";
-import { resolveShopId } from "../lib/tenancy.server";
 import { hasFeature, PlanGateError } from "../lib/billing/plans.server";
 import {
   handoverConfigSchema,
@@ -29,12 +27,14 @@ import { InstructionsHandoverTab } from "../components/InstructionsHandoverTab";
 import { RecommendationDetail } from "../components/RecommendationDetail";
 import { RecommendationDetailCustom } from "../components/RecommendationDetailCustom";
 import { PageHeader } from "../components/ui/PageHeader";
+import { requireShopAccess } from "../lib/access.server";
+import { routeError } from "../lib/ui/route-error";
 
 // Instructions (spec 08, design ai-agent.html #viewInstructions): three tabs
 // via ?tab= — General Instructions / Product recommendations / Human handover.
 // Recommendation detail views (#viewRec / #viewCustomRec) render in-route via
 // ?rec= / ?custom= search params. All reads/writes shop-scoped via
-// resolveShopId(session.shop).
+// resolveShopId(shopDomain).
 
 export type InstructionsTab = "general" | "recommendations" | "handover";
 
@@ -92,8 +92,7 @@ export interface InstructionsActionResult {
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const { shopId } = await requireShopAccess(request, { permission: "ai_agent" });
 
   const [shop, persona, guardrails, handoverRow, settingsRow, recommendations, customRecs, pairs] =
     await Promise.all([
@@ -181,8 +180,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs): Promise<InstructionsActionResult> => {
-  const { session } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const { shopId } = await requireShopAccess(request, { permission: "ai_agent" });
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
 
@@ -377,7 +375,7 @@ export default function InstructionsPage() {
 }
 
 export function ErrorBoundary() {
-  return boundary.error(useRouteError());
+  return routeError(useRouteError());
 }
 
 export const headers: HeadersFunction = (headersArgs) => {

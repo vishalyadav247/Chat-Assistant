@@ -1,6 +1,7 @@
 import type { DashboardMetrics, DashboardRange } from "../lib/dashboard/dashboard.server";
 import { StatGrid, StatTile } from "./ui/StatTile";
 import { Toolbar } from "./ui/Row";
+import { useDateTime, type DateTimeApi } from "../lib/format/context";
 
 // Overview KPI card (spec 13, design dashboard.html #rangeBtn/#reloadBtn +
 // .ov-kpis): range dropdown, compare-to label, Reload, four KPI tiles with
@@ -14,11 +15,8 @@ const RANGE_LABELS: Record<DashboardRange, string> = {
   "12m": "Last 12 months",
 };
 
-function formatCompare(fromIso: string, toIso: string): string {
-  const from = new Date(fromIso);
-  const to = new Date(toIso);
-  const day = (d: Date) => d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
-  return `${day(from)} – ${day(to)} ${to.getFullYear()}`;
+function formatCompare(fromIso: string, toIso: string, dt: DateTimeApi): string {
+  return `${dt.date(fromIso, { year: false })} – ${dt.date(toIso)}`;
 }
 
 function deltaProps(delta: number | null): { value: string; direction: "up" | "down" } | undefined {
@@ -33,6 +31,7 @@ export function DashboardOverview(props: {
   onRangeChange: (range: DashboardRange) => void;
   onReload: () => void;
 }) {
+  const dt = useDateTime();
   const m = props.metrics;
   const n = (value: number) => value.toLocaleString("en-US");
 
@@ -59,7 +58,7 @@ export function DashboardOverview(props: {
             ))}
           </s-select>
           <s-text tone="neutral">
-            Compare to: {formatCompare(m.compare.from, m.compare.to)}
+            Compare to: {formatCompare(m.compare.from, m.compare.to, dt)}
           </s-text>
         </Toolbar>
 

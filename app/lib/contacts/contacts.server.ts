@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
-import { loadShopSettings } from "../settings/save.server";
+import { assigneeNameMap } from "../team/team.server";
 import { recordEvent } from "../analytics/events.server";
 import {
   CONTACTS_PAGE_SIZE,
@@ -589,7 +589,7 @@ export async function contactDetail(
       : []),
   ];
 
-  const [previews, handoverMessages, cardMessages, cartEvents, conversionEvents, settings] =
+  const [previews, handoverMessages, cardMessages, cartEvents, conversionEvents, assigneeNames] =
     await Promise.all([
     Promise.all(
       conversations.map((c) =>
@@ -637,10 +637,10 @@ export async function contactDetail(
       take: 10,
       select: { occurredAt: true, payload: true },
     }),
-    loadShopSettings(shopId),
+    assigneeNameMap(shopId),
   ]);
 
-  const memberName = new Map(settings.team.members.map((m) => [m.id, m.name]));
+  const memberName = assigneeNames;
   const activities: ContactActivity[] = [{ at: contact.createdAt, kind: "first_seen" }];
   for (const c of conversations) {
     activities.push({ at: c.startedAt, kind: "conversation_started" });

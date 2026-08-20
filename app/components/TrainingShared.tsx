@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useFetcher, useNavigate, useRevalidator } from "react-router";
-import { useAppBridge } from "@shopify/app-bridge-react";
+import { useAppBridge } from "../lib/ui/surface";
 import type { TrainingActionResult } from "../routes/app.ai-agent.training";
 import { TabPills } from "./ui/TabPills";
+import { useDateTime } from "../lib/format/context";
 
 // Shared bits for the AI Agent training tabs (spec 07).
 
@@ -164,6 +165,7 @@ export function SyncControlLayout(props: {
   lastSyncedAt: string | null;
   running?: boolean;
 }) {
+  const dt = useDateTime();
   const navigate = useNavigate();
   return (
     <s-stack gap="none">
@@ -181,7 +183,7 @@ export function SyncControlLayout(props: {
       </s-stack>
       <s-stack direction="inline" gap="small-200" alignItems="center">
         <s-icon type="clock" tone="neutral" size="small" />
-        <s-text color="subdued">Last updated {formatDateTime(props.lastSyncedAt)}</s-text>
+        <s-text color="subdued">Last updated {props.lastSyncedAt ? dt.dateTime(props.lastSyncedAt) : "N/A"}</s-text>
         {props.running ? <s-badge tone="info">Sync running</s-badge> : null}
       </s-stack>
     </s-stack>
@@ -219,25 +221,6 @@ export function StatusBadge(props: { status: string; error?: string | null }) {
   );
 }
 
-export function formatDateTime(iso: string | null): string {
-  if (!iso) return "N/A";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "N/A";
-  return date.toLocaleString(undefined, {
-    year: "2-digit",
-    month: "numeric",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-export function formatDate(iso: string | null): string {
-  if (!iso) return "—";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleDateString();
-}
 
 /** Trigger a client-side text-file download (CSV export in an embedded iframe). */
 export function downloadText(filename: string, text: string, mime = "text/csv;charset=utf-8") {

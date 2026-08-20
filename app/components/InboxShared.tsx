@@ -125,33 +125,6 @@ export function avatarGradient(id: string): string {
   return AV_GRADIENTS[Math.abs(hash) % AV_GRADIENTS.length];
 }
 
-/** Relative time for list rows ("Just now", "5m", "2h", "Yesterday", "3d", date). */
-export function relTime(iso: string): string {
-  const then = new Date(iso).getTime();
-  const diff = Date.now() - then;
-  if (diff < 60_000) return "Just now";
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h`;
-  if (diff < 172_800_000) return "Yesterday";
-  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)}d`;
-  return new Date(iso).toLocaleDateString();
-}
-
-export function fmtTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-}
-
-/** Day-divider label ("Today", "Yesterday", or the date). */
-export function dayLabel(iso: string): string {
-  const d = new Date(iso);
-  const today = new Date();
-  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const days = Math.round((startOf(today) - startOf(d)) / 86_400_000);
-  if (days === 0) return "Today";
-  if (days === 1) return "Yesterday";
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-}
-
 /** Author caption for thread bubbles. */
 export function authorLabel(message: InboxMessage, contactName: string | null): string {
   if (message.role === "in") return displayName(contactName);

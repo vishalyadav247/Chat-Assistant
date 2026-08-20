@@ -131,7 +131,7 @@ export function SettingsChatbox(props: {
               />
               <s-paragraph>
                 Don&apos;t have your API key?{" "}
-                <s-link href="https://api.17track.net/en/admin/settings">
+                <s-link href="https://api.17track.net/en/admin/settings" target="_blank">
                   Learn how to find it
                 </s-link>
               </s-paragraph>

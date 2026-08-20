@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DATE_FORMATS, DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, TIME_FORMATS } from "../format/datetime";
 
 // Zod schemas + defaults for the JSON-blob settings rows (specs 06/08/16).
 // `.default()`/`.catch()` everywhere so `schema.parse({})` yields a complete,
@@ -159,18 +160,18 @@ export const surveySchema = z.object({
   triggerKeywords: z.object({ enabled: z.boolean().catch(true), keywords: z.array(z.string().max(50)).catch(["Thank you", "Thanks", "Got it", "That helps", "Perfect"]) }).catch({ enabled: true, keywords: ["Thank you", "Thanks", "Got it", "That helps", "Perfect"] }),
 });
 
-export const teamMemberSchema = z.object({
-  id: z.string().min(1).max(64),
-  name: z.string().trim().min(1).max(100),
-  email: z.string().trim().email().max(200),
-  role: z.enum(["admin", "agent"]).catch("agent"),
-  /** ISO date the member was added. */
-  since: z.string().max(30).catch(""),
-});
-export type TeamMemberData = z.infer<typeof teamMemberSchema>;
-
 export const shopSettingsSchema = z.object({
-  storeInfo: z.object({ name: z.string().max(100).catch(""), logoUrl: z.string().max(500).nullable().catch(null) }).catch({ name: "", logoUrl: null }),
+  storeInfo: z
+    .object({
+      name: z.string().max(100).catch(""),
+      logoUrl: z.string().max(500).nullable().catch(null),
+      /** Global date/time display format (Settings → General; spec 16
+       *  delta 2026-08-19). Every admin/web date goes through
+       *  app/lib/format/datetime.ts with these + Shop.timezone. */
+      dateFormat: z.enum(DATE_FORMATS).catch(DEFAULT_DATE_FORMAT),
+      timeFormat: z.enum(TIME_FORMATS).catch(DEFAULT_TIME_FORMAT),
+    })
+    .catch({ name: "", logoUrl: null, dateFormat: DEFAULT_DATE_FORMAT, timeFormat: DEFAULT_TIME_FORMAT }),
   theme: z.enum(["auto", "dawn", "refresh", "craft", "custom"]).catch("auto"),
   inbox: z
     .object({ autoResolve: z.boolean().catch(true), after: z.number().int().min(1).catch(60), unit: z.enum(["minute", "hour", "day"]).catch("minute") })
@@ -213,12 +214,8 @@ export const shopSettingsSchema = z.object({
       discounts: z.boolean().catch(true),
     })
     .catch({ products: true, collections: true, discounts: true }),
-  /** Team roster (spec 16 team v1): powers inbox assignment + member table.
-   *  Login access itself is managed by Shopify staff accounts — the roster is
-   *  ChatConvert's assignment/display layer. */
-  team: z
-    .object({ members: z.array(teamMemberSchema).max(50).catch([]) })
-    .catch({ members: [] }),
+  // Team roster moved to the TeamMember table (spec 18) — any leftover
+  // `team` key in stored JSON is stripped on the next save.
 });
 
 export type ShopSettingsData = z.infer<typeof shopSettingsSchema>;

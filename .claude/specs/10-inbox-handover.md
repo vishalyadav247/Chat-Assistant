@@ -19,12 +19,12 @@ Title reflects filter; **Unread-only toggle**; search by name; rows: gradient av
 Contact name + Anonymous tag; star toggle; **Resolve** button (open↔resolved, "Resolved ✓"); kebab. Message rendering: time dividers, `in`/`out` bubbles, `sys` events ("Handed over to a human agent.", "ChatConvert AI is preparing an answer…", "Visitor blocked.", "Conversation resolved."), Seen receipt. Composer: contenteditable, emoji/attach (v1: emoji real, attach hidden), Send disabled until text, Enter=send / Shift+Enter=newline. Sending as merchant: message role=out(author=agent) → delivered to widget (05 polling channel); conversation mode stays/becomes `human`.
 
 ### Details column
-Conversation details: customer card (name/email/phone from Contact), **Assignee** (v1: single-user — Assign disabled like settings' invite; show "Unassigned"); meta accordions Visitor device / Recent orders / Browsed pages (from widget pageContext + contact); **Shopping cart** card — **premium gate** (Upgrade pill below required tier): live cart line items + total captured from widget cart context; Satisfaction survey card (rating or "Visitor has not rated yet"); footer **Block** (blocks visitor session: widget shows blocked state, conversation tagged) + **Delete** (hard delete conversation + messages, confirm dialog).
+Conversation details: customer card (name/email/phone from Contact), **Assignee** (owner + team members from the `TeamMember` table — spec 18; assignment also scopes who gets notified); meta accordions Visitor device / Recent orders / Browsed pages (from widget pageContext + contact); **Shopping cart** card — **premium gate** (Upgrade pill below required tier): live cart line items + total captured from widget cart context; Satisfaction survey card (rating or "Visitor has not rated yet"); footer **Block** (blocks visitor session: widget shows blocked state, conversation tagged) + **Delete** (hard delete conversation + messages, confirm dialog).
 
 Responsive: collapse Details ≤1240, Filters ≤1040 per design.
 
 ### Realtime
-v1: list + thread poll (5–10s) via loader revalidation; unread counts server-computed. (SSE/live upgrade later.)
+`/app/inbox-events` POST fetch-stream SSE change feed (spec 18) → loader revalidation on every change; 30 s poll kept as fallback. Unread counts server-computed. Web surface: tab-title badge + optional chime.
 
 ## Handover runtime
 
@@ -65,4 +65,4 @@ Settings (16): auto-resolve after N minutes/hours/days of inactivity → status 
 
 ## Out of scope / gaps
 
-Multi-agent assignment (team invites disabled v1), attach/file uploads in composer, Slack notifications (email only v1), typing indicators for merchant, IP-level blocking, realtime websockets.
+Attach/file uploads in composer, Slack notifications, typing indicators for merchant, IP-level blocking, websockets. (Team assignment, live feed and push/email notifications moved into spec 18.)

@@ -9,10 +9,8 @@ import {
   useSearchParams,
 } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { useAppBridge } from "@shopify/app-bridge-react";
-import { authenticate } from "../shopify.server";
+import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
-import { resolveShopId } from "../lib/tenancy.server";
 import { hasFeature, PlanGateError } from "../lib/billing/plans.server";
 import {
   DASHBOARD_RANGES,
@@ -34,6 +32,8 @@ import {
 import { DashboardOverview } from "../components/DashboardOverview";
 import { AnalyticsLineChart } from "../components/AnalyticsLineChart";
 import { AnalyticsCsat, AnalyticsResolutionDonut } from "../components/AnalyticsBreakdown";
+import { requireShopAccess } from "../lib/access.server";
+import { routeError } from "../lib/ui/route-error";
 import {
   AnalyticsFunnel,
   AnalyticsResponsePerformance,
@@ -59,8 +59,7 @@ function isAnalyticsRange(value: string | null): value is AnalyticsRange {
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const { shopId } = await requireShopAccess(request, { permission: "analytics" });
   const url = new URL(request.url);
   const range: DashboardRange = isDashboardRange(url.searchParams.get("range"))
     ? (url.searchParams.get("range") as DashboardRange)
@@ -101,8 +100,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const { shopId } = await requireShopAccess(request, { permission: "analytics" });
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
   const stamp = new Date().toISOString().slice(0, 10);
@@ -254,7 +252,7 @@ export default function AnalyticsPage() {
 }
 
 export function ErrorBoundary() {
-  return boundary.error(useRouteError());
+  return routeError(useRouteError());
 }
 
 export const headers: HeadersFunction = (headersArgs) => {

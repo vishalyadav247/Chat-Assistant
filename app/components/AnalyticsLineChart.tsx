@@ -2,6 +2,8 @@ import { useMemo, useState } from "react";
 import type { AnalyticsRange, SeriesPoint } from "../lib/analytics/shared";
 import { ANALYTICS_RANGE_LABELS, ANALYTICS_RANGES } from "../lib/analytics/shared";
 import { BRAND } from "./ui/tokens";
+import { useDateTime } from "../lib/format/context";
+import { formatDate, type DateTimePrefs } from "../lib/format/datetime";
 
 // "Total conversations over time" card (spec 14, design analytics.html
 // #lineChart): hand-rolled SVG smoothed line chart, Human vs AI series, own
@@ -43,13 +45,10 @@ function smoothPath(points: [number, number][]): string {
   return d;
 }
 
-function labelFor(iso: string): string {
-  const date = new Date(`${iso}T00:00:00Z`);
-  return date.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  });
+/** Date-only series points (YYYY-MM-DD, already shop-local days) → shop date
+ *  format without the year; formatted in UTC so the day never shifts. */
+function labelFor(iso: string, prefs: DateTimePrefs): string {
+  return formatDate(`${iso}T00:00:00Z`, { ...prefs, timeZone: "UTC" }, { year: false });
 }
 
 export function AnalyticsLineChart(props: {
@@ -57,6 +56,7 @@ export function AnalyticsLineChart(props: {
   range: AnalyticsRange;
   onRangeChange: (range: AnalyticsRange) => void;
 }) {
+  const dt = useDateTime();
   const [hover, setHover] = useState<number | null>(null);
   const { series, range } = props;
 
@@ -175,7 +175,7 @@ export function AnalyticsLineChart(props: {
                     fontSize="12"
                     fill="#9a9aa2"
                   >
-                    {labelFor(p.date)}
+                    {labelFor(p.date, dt.prefs)}
                   </text>
                 ) : null,
               )}
@@ -246,7 +246,7 @@ export function AnalyticsLineChart(props: {
                   whiteSpace: "nowrap",
                 }}
               >
-                <div style={{ fontWeight: 600 }}>{labelFor(hovered.date)}</div>
+                <div style={{ fontWeight: 600 }}>{labelFor(hovered.date, dt.prefs)}</div>
                 <div>
                   <span style={{ color: AI_COLOR }}>●</span> AI agent: {hovered.ai}
                 </div>

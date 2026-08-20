@@ -9,10 +9,8 @@ import {
   useSearchParams,
 } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { useAppBridge } from "@shopify/app-bridge-react";
-import { authenticate } from "../shopify.server";
+import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
-import { resolveShopId } from "../lib/tenancy.server";
 import { enqueue } from "../lib/jobs/queue.server";
 import { JOBS } from "../lib/jobs/handlers.server";
 import {
@@ -30,6 +28,8 @@ import { StripBanner } from "../components/ui/StripBanner";
 import { SPACE } from "../components/ui/tokens";
 import { currentUsage } from "../lib/billing/usage.server";
 import { getQuota } from "../lib/billing/plans.server";
+import { requireShopAccess } from "../lib/access.server";
+import { routeError } from "../lib/ui/route-error";
 
 // Dashboard (spec 13, design dashboard.html): greeting hero, overview KPIs
 // with range/compare, 6-step setup checklist with progress ring, live
@@ -69,8 +69,9 @@ function greetingFor(timezone: string): string {
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session, admin } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const access = await requireShopAccess(request, { permission: "dashboard" });
+  const { shopId, shopDomain } = access;
+  const admin = await access.getAdmin();
   const url = new URL(request.url);
   const rangeParam = url.searchParams.get("range");
   const range: DashboardRange = isRange(rangeParam) ? rangeParam : "7d";
@@ -112,7 +113,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
   const [metrics, checklist, feed, pendingQuestions, atcThisMonth, usage] = await Promise.all([
     dashboardMetrics(shopId, range),
-    setupChecklist(shopId, session.shop),
+    setupChecklist(shopId, shopDomain),
     liveFeed(shopId),
     db.unresolvedQuestion.count({ where: { shopId, status: "pending" } }),
     db.analyticsEvent.count({
@@ -128,8 +129,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const timezone = shop?.timezone || "UTC";
   return {
-    shopDomain: session.shop,
-    shopName: shop?.name || session.shop.replace(".myshopify.com", ""),
+    shopDomain: shopDomain,
+    shopName: shop?.name || shopDomain.replace(".myshopify.com", ""),
     greeting: greetingFor(timezone),
     aiEnabled: shop?.aiEnabled ?? true,
     range,
@@ -144,15 +145,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  await resolveShopId(session.shop); // shop row must exist before jobs run
+  const { shopDomain } = await requireShopAccess(request, { permission: "dashboard" }); // shop row guaranteed by access seam
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
 
   if (intent === "sync-catalog") {
     // Same jobs the install bootstrap enqueues (spec 02) — workers do the rest.
-    await enqueue(JOBS.catalogSync, { shopDomain: session.shop });
-    await enqueue(JOBS.collectionSync, { shopDomain: session.shop });
+    await enqueue(JOBS.catalogSync, { shopDomain: shopDomain });
+    await enqueue(JOBS.collectionSync, { shopDomain: shopDomain });
     return { ok: true, intent };
   }
   return { ok: false, intent };
@@ -285,7 +285,7 @@ export default function DashboardPage() {
 }
 
 export function ErrorBoundary() {
-  return boundary.error(useRouteError());
+  return routeError(useRouteError());
 }
 
 export const headers: HeadersFunction = (headersArgs) => {

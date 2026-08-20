@@ -2,8 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { useAppBridge } from "@shopify/app-bridge-react";
-import { authenticate } from "../shopify.server";
+import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
 import { hasFeature } from "../lib/billing/plans.server";
 import {
@@ -16,13 +15,14 @@ import {
   type CampaignRow,
 } from "../lib/campaigns/campaigns.server";
 import { campaignTemplate, type CampaignTemplate } from "../lib/campaigns/templates";
-import { resolveShopId } from "../lib/tenancy.server";
 import type { BrowseItemMeta } from "../components/BrowseProductsModal";
 import { ProactiveCampaignEditor, type CampaignDraft } from "../components/ProactiveCampaignEditor";
 import { campaignCtr, ProactiveCampaignTable } from "../components/ProactiveCampaignTable";
 import { ProactiveTemplatePicker } from "../components/ProactiveTemplatePicker";
 import { SaveBar } from "../components/SaveBar";
 import { StatGrid, StatTile } from "../components/ui/StatTile";
+import { requireShopAccess } from "../lib/access.server";
+import { routeError } from "../lib/ui/route-error";
 
 // Proactive Chat admin (spec 12, design proactive-chat.html): dashboard
 // (overview KPIs + campaign table) ⇄ template picker ⇄ minimal editor.
@@ -30,8 +30,7 @@ import { StatGrid, StatTile } from "../components/ui/StatTile";
 // event-based range aggregation lands with analytics, spec 14).
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const { shopId } = await requireShopAccess(request, { permission: "proactive" });
 
   const [shop, campaigns] = await Promise.all([
     db.shop.findUnique({ where: { id: shopId }, select: { plan: true, currency: true } }),
@@ -73,8 +72,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const { shopId } = await requireShopAccess(request, { permission: "proactive" });
   const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
   const plan = shop?.plan ?? "free";
   const formData = await request.formData();
@@ -340,7 +338,7 @@ export default function ProactiveChatPage() {
 }
 
 export function ErrorBoundary() {
-  return boundary.error(useRouteError());
+  return routeError(useRouteError());
 }
 
 export const headers: HeadersFunction = (headersArgs) => {

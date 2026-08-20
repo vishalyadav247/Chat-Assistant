@@ -105,6 +105,15 @@ async function main() {
   await db.collection.create({ data: { shopId: a, shopifyCollectionId: "gid://c/1", title: "Test collection" } });
   await db.discount.create({ data: { shopId: a, shopifyDiscountId: "gid://d/1", title: "Test discount" } });
   await db.syncState.create({ data: { shopId: a } });
+  const memberA = await db.teamMember.create({
+    data: { shopId: a, email: "agent@verify-compliance.test", name: "Agent A", role: "agent", status: "active" },
+  });
+  await db.teamSession.create({
+    data: { tokenHash: `verify-${a}`, shopId: a, memberId: memberA.id, expiresAt: new Date(Date.now() + 60_000) },
+  });
+  await db.pushSubscription.create({
+    data: { shopId: a, memberId: memberA.id, endpoint: `https://push.example/${a}`, p256dh: "k", auth: "a" },
+  });
   await db.dataSource.create({ data: { shopId: a, type: "url", name: "Test source" } });
   await db.knowledge.create({ data: { shopId: a, topic: "shipping", body: "Ships in 2 days" } });
   const faqCat = await db.faqCategory.create({ data: { shopId: a, name: "General" } });
@@ -303,6 +312,10 @@ async function main() {
     ["campaigns", await db.campaign.count({ where: { shopId: a } })],
     ["plan_usage", await db.planUsage.count({ where: { shopId: a } })],
     ["data_requests", await db.dataRequest.count({ where: { shopId: a } })],
+    // Team logins for the standalone web app (spec 18).
+    ["team_members", await db.teamMember.count({ where: { shopId: a } })],
+    ["team_sessions", await db.teamSession.count({ where: { shopId: a } })],
+    ["push_subscriptions", await db.pushSubscription.count({ where: { shopId: a } })],
     // sessions are keyed by shop domain, not shopId — they hold the offline token.
     ["sessions", await db.session.count({ where: { shop: DOMAIN_A } })],
   ];

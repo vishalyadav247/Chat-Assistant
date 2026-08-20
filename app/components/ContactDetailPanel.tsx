@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { SCROLLBAR_CSS } from "./ui/tokens";
 import type { ContactRowData } from "./ContactsShared";
 import { CHANNEL_LABELS, ContactTypeBadge, contactDisplayName } from "./ContactsShared";
+import { useDateTime } from "../lib/format/context";
 
 // Contact detail side panel (spec 11 v1): overlay sliding panel with contact
 // info + their conversation list. Conversation rows link to /app/inbox
@@ -56,7 +57,7 @@ function Bone(props: { w: number | string; h: number; r?: number | string; style
 function PanelSkeleton() {
   return (
     <div className="ccdp-skel">
-      <style>{SKELETON_CSS}</style>
+      <style dangerouslySetInnerHTML={{ __html: SKELETON_CSS }} />
       <s-stack gap="base">
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <Bone w={150} h={16} />
@@ -87,21 +88,6 @@ function PanelSkeleton() {
       </s-stack>
     </div>
   );
-}
-
-function formatDate(value: string | Date) {
-  return new Date(value).toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
-
-function formatDateTime(value: string | Date) {
-  return `${formatDate(value)} ${new Date(value).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  })}`;
 }
 
 // Activity timeline (customer5.png): date group headers on a dotted vertical
@@ -208,14 +194,11 @@ function activityLabel(item: ContactActivityItem): React.ReactNode {
 }
 
 function ActivityTimeline(props: { items: ContactActivityItem[] }) {
+  const dt = useDateTime();
   // Group consecutive entries by calendar day (items arrive newest-first).
   const groups: { date: string; items: ContactActivityItem[] }[] = [];
   for (const item of props.items) {
-    const date = new Date(item.at).toLocaleDateString(undefined, {
-      month: "2-digit",
-      day: "2-digit",
-      year: "numeric",
-    });
+    const date = dt.date(item.at);
     const last = groups[groups.length - 1];
     if (last && last.date === date) last.items.push(item);
     else groups.push({ date, items: [item] });
@@ -276,7 +259,7 @@ function ActivityTimeline(props: { items: ContactActivityItem[] }) {
                 {activityLabel(item)}
               </span>
               <span style={{ flex: "none", fontWeight: 650, fontSize: 12.5 }}>
-                {new Date(item.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                {dt.time(item.at)}
               </span>
             </div>
           ))}
@@ -314,6 +297,7 @@ export function ContactDetailPanel(props: {
   onDelete: (contact: ContactRowData) => void;
   onConvert: (contact: ContactRowData) => void;
 }) {
+  const dt = useDateTime();
   const { open, onClose } = props;
   useEffect(() => {
     if (!open) return;
@@ -395,7 +379,7 @@ export function ContactDetailPanel(props: {
           </div>
         </div>
 
-        <style>{SCROLLBAR_CSS}</style>
+        <style dangerouslySetInnerHTML={{ __html: SCROLLBAR_CSS }} />
         <div className="cc-scroll" style={{ padding: "16px 20px", overflowY: "auto", flex: 1 }}>
           {props.loading || !contact ? (
             <PanelSkeleton />
@@ -439,9 +423,9 @@ export function ContactDetailPanel(props: {
                 <InfoRow label="Marketing opt-in">
                   {contact.marketingOptIn ? "Yes" : "No"}
                 </InfoRow>
-                <InfoRow label="First seen">{formatDate(contact.createdAt)}</InfoRow>
+                <InfoRow label="First seen">{dt.date(contact.createdAt)}</InfoRow>
                 <InfoRow label="Last chat at">
-                  {contact.lastActivityAt ? formatDateTime(contact.lastActivityAt) : "—"}
+                  {contact.lastActivityAt ? dt.dateTime(contact.lastActivityAt) : "—"}
                 </InfoRow>
               </s-box>
 
@@ -466,7 +450,7 @@ export function ContactDetailPanel(props: {
                           <s-badge tone={c.status === "resolved" ? "success" : "info"}>
                             {c.status === "resolved" ? "Resolved" : "Open"}
                           </s-badge>
-                          <s-text tone="neutral">{formatDate(c.lastMessageAt)}</s-text>
+                          <s-text tone="neutral">{dt.date(c.lastMessageAt)}</s-text>
                         </div>
                         <span
                           style={{

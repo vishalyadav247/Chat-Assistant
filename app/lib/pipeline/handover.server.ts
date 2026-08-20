@@ -5,6 +5,7 @@ import { resolveAvailability } from "../settings/availability.server";
 import { requireShopId } from "../tenancy.server";
 import type { HandoverConfigData } from "../settings/schemas";
 import type { ShopConfig } from "../config/shop-config.server";
+import { notifyMerchantHandover } from "../notify.server";
 
 // Human-handover runtime (spec 10; config authored in 08). Detection +
 // state transition + the frames the widget renders. The inbox UI consumes the
@@ -219,6 +220,9 @@ export async function executeHandover(args: {
     destination: handover.destination,
     aiDormant,
   });
+  // Tell the team now unless a form is shown — the form submission
+  // (submitHandoverForm) notifies once the shopper's details are in.
+  if (!form) await notifyMerchantHandover(shopId, args.conversationId);
 
   return { destination: handover.destination, messages, form, aiDormant };
 }

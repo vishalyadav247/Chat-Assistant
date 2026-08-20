@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { useAppBridge } from "@shopify/app-bridge-react";
+import { useAppBridge } from "../lib/ui/surface";
 
 // App Store review prompt (spec: .claude/specs/APP_REVIEW.md). Fires
 // shopify.reviews.request() once per app load when the server-side gate says

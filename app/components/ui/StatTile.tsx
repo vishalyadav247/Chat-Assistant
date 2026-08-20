@@ -96,7 +96,7 @@ export function StatTile(props: {
         minWidth: 0,
       }}
     >
-      {props.live ? <style>{LIVE_PULSE_CSS}</style> : null}
+      {props.live ? <style dangerouslySetInnerHTML={{ __html: LIVE_PULSE_CSS }} /> : null}
       <div style={{ display: "flex", alignItems: "center", gap: SPACE.sm }}>
         {props.icon ? (
           <span
@@ -225,7 +225,7 @@ export function StatGrid(props: { children: React.ReactNode; columns?: number })
         gap: SPACE.md,
       }}
     >
-      <style>{ELEVATED_HOVER_CSS}</style>
+      <style dangerouslySetInnerHTML={{ __html: ELEVATED_HOVER_CSS }} />
       {props.children}
     </div>
   );

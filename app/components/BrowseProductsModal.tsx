@@ -95,7 +95,7 @@ export function BrowseModalShell(props: {
         </div>
         {/* App-standard slim scrollbar (tokens.ts) — FAQ modal, product view,
             browse pickers all render through this shell. */}
-        <style>{SCROLLBAR_CSS}</style>
+        <style dangerouslySetInnerHTML={{ __html: SCROLLBAR_CSS }} />
         <div className="cc-scroll" style={{ padding: "16px 20px", overflowY: "auto", flex: 1 }}>
           {props.children}
         </div>

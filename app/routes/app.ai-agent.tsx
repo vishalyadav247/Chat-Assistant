@@ -2,15 +2,15 @@ import { useEffect, useState } from "react";
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData, useNavigate, useOutlet, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { useAppBridge } from "@shopify/app-bridge-react";
-import { authenticate } from "../shopify.server";
+import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
-import { resolveShopId } from "../lib/tenancy.server";
 import { invalidateShopConfig } from "../lib/config/shop-config.server";
 import { loadShopSettings } from "../lib/settings/save.server";
 import { ProgressTrack } from "../components/ui/Progress";
 import { IconChip } from "../components/ui/IconChip";
 import { RADIUS } from "../components/ui/tokens";
+import { requireShopAccess } from "../lib/access.server";
+import { routeError } from "../lib/ui/route-error";
 
 // AI Agent home (spec 07, design ai-agent.html #viewAgent): master AI switch,
 // unresolved-questions card, 3-step setup grid, done-for-you promo. This route
@@ -32,13 +32,12 @@ interface HomeData {
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { shopId } = await requireShopAccess(request, { permission: "ai_agent" });
   const url = new URL(request.url);
   // Child routes (training / review) load their own data — skip the home queries.
   if (url.pathname.replace(/\/+$/, "") !== "/app/ai-agent") {
     return { home: null as HomeData | null };
   }
-  const shopId = await resolveShopId(session.shop);
 
   const [shop, pendingUnresolved, learnedProducts, sources, publishedFaqs, persona, settings] =
     await Promise.all([
@@ -80,8 +79,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const { shopId } = await requireShopAccess(request, { permission: "ai_agent" });
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
 
@@ -326,7 +324,7 @@ function SetupCard(props: {
         background: "var(--s-color-bg, #fff)",
       }}
     >
-      <style>{SETUP_CARD_CSS}</style>
+      <style dangerouslySetInnerHTML={{ __html: SETUP_CARD_CSS }} />
       <s-stack gap="small-100">
         <s-grid gridTemplateColumns="auto 1fr" gap="small-200" alignItems="center">
           <IconChip icon={props.icon} tone={props.tone} />
@@ -352,7 +350,7 @@ function SetupCard(props: {
 }
 
 export function ErrorBoundary() {
-  return boundary.error(useRouteError());
+  return routeError(useRouteError());
 }
 
 export const headers: HeadersFunction = (headersArgs) => {

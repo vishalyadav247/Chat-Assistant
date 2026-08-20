@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { CampaignRow } from "../lib/campaigns/campaigns.server";
 import { campaignTemplate } from "../lib/campaigns/templates";
 import { DataTable } from "./DataTable";
+import { useDateTime } from "../lib/format/context";
 
 // Campaign table (spec 12 dashboard): sub-tabs All/Active/Inactive, columns
 // Priority (reorder buttons persisting ints) | Name | Type | View | CTR (value
@@ -27,6 +28,7 @@ export function ProactiveCampaignTable(props: {
   onToggle: (id: string, active: boolean) => void;
   onReorder: (id: string, direction: "up" | "down") => void;
 }) {
+  const dt = useDateTime();
   const [tab, setTab] = useState<"all" | "active" | "inactive">("all");
   const [menuFor, setMenuFor] = useState<string | null>(null);
 
@@ -197,10 +199,7 @@ export function ProactiveCampaignTable(props: {
             title: "Updated at",
             render: (row) => (
               <s-text tone="neutral">
-                {new Date(row.updatedAt).toLocaleString(undefined, {
-                  dateStyle: "short",
-                  timeStyle: "short",
-                })}
+                {dt.dateTime(row.updatedAt)}
               </s-text>
             ),
           },

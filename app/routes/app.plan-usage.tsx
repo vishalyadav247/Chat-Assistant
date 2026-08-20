@@ -2,8 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData, useLocation, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { useAppBridge } from "@shopify/app-bridge-react";
-import { authenticate } from "../shopify.server";
+import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
 import { resolveShopId } from "../lib/tenancy.server";
 import { PLANS, displayQuota, type PlanDefinition } from "../lib/billing/plans.server";
@@ -19,6 +18,9 @@ import { QuotaMeter } from "../components/QuotaMeter";
 import { PlanCards, type PlanCardData } from "../components/PlanCards";
 import { PlanDiscountCard, PlanDoneForYouCard } from "../components/PlanExtras";
 import { PlanFaq } from "../components/PlanFaq";
+import { requireShopAccess } from "../lib/access.server";
+import { routeError } from "../lib/ui/route-error";
+import { useDateTime } from "../lib/format/context";
 
 // Plan & Usage (spec 15 / feature 15b, design plan-usage.html): usage meter,
 // current-plan card, tier cards with Monthly|Yearly toggle, discount code,
@@ -74,8 +76,8 @@ function bulletsFor(def: PlanDefinition): string[] {
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shopId = await resolveShopId(session.shop);
+  const access = await requireShopAccess(request, { permission: "plan" });
+  const { shopId, shopDomain } = access;
 
   const [shop, usage] = await Promise.all([
     db.shop.findUnique({
@@ -108,12 +110,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     usage,
     quota: displayQuota(plan, "conversations"),
     plans,
+    // Spec 18: Shopify Billing confirmation must run inside the admin, so the
+    // web surface is read-only with a deep link back.
+    billingManageable: access.surface === "admin",
+    adminPlanUrl: `https://admin.shopify.com/store/${shopDomain.replace(".myshopify.com", "")}/apps/${process.env.SHOPIFY_API_KEY ?? ""}/app/plan-usage`,
   };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  await resolveShopId(session.shop); // ensure shop row exists
+  // Billing mutations are admin-surface only (spec 18) — requireShopAccess
+  // throws 403 for the web surface on "billing_manage".
+  const { shopDomain } = await requireShopAccess(request, { permission: "billing_manage" });
+  await resolveShopId(shopDomain); // ensure shop row exists
 
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
@@ -125,7 +133,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return { ok: false as const, error: "Invalid billing interval." };
     }
     if (plan === "free") {
-      const result = await downgradeToFree(session.shop);
+      const result = await downgradeToFree(shopDomain);
       return result.ok
         ? { ok: true as const, downgraded: true }
         : { ok: false as const, error: result.error ?? "Could not switch to Free." };
@@ -135,13 +143,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
     try {
       const { confirmationUrl } = await getBillingProvider().createSubscription({
-        shopDomain: session.shop,
+        shopDomain: shopDomain,
         plan,
         interval,
       });
       return { ok: true as const, confirmationUrl };
     } catch (error) {
-      console.error("billing_subscribe_error", session.shop, error);
+      console.error("billing_subscribe_error", shopDomain, error);
       return {
         ok: false as const,
         error: "Could not start the subscription — please try again.",
@@ -155,18 +163,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 function statusBadge(
   planStatus: string,
   trialEndsAt: string | null,
+  formatDate: (iso: string) => string,
 ): { label: string; tone?: "success" | "info" | "warning" } {
   switch (planStatus) {
     case "active":
       return { label: "Active", tone: "success" };
     case "trial": {
-      const ends = trialEndsAt
-        ? new Date(trialEndsAt).toLocaleDateString("en-US", {
-            month: "short",
-            day: "numeric",
-            year: "numeric",
-          })
-        : null;
+      const ends = trialEndsAt ? formatDate(trialEndsAt) : null;
       return { label: ends ? `Free trial — ends ${ends}` : "Free trial", tone: "info" };
     }
     case "cancelled":
@@ -178,6 +181,7 @@ function statusBadge(
 
 export default function PlanUsagePage() {
   const data = useLoaderData<typeof loader>();
+  const dt = useDateTime();
   const location = useLocation();
   const shopify = useAppBridge();
   const fetcher = useFetcher<typeof action>();
@@ -221,7 +225,7 @@ export default function PlanUsagePage() {
   };
 
   const pct = data.quota > 0 ? Math.round((data.usage / data.quota) * 100) : 0;
-  const badge = statusBadge(data.planStatus, data.trialEndsAt);
+  const badge = statusBadge(data.planStatus, data.trialEndsAt, dt.date);
   const actionError =
     fetcher.state === "idle" && fetcher.data && !fetcher.data.ok ? fetcher.data.error : null;
 
@@ -252,6 +256,14 @@ export default function PlanUsagePage() {
             <s-heading>{data.planName}</s-heading>
             <s-badge tone={badge.tone}>{badge.label}</s-badge>
           </s-stack>
+          {!data.billingManageable ? (
+            <s-banner tone="info">
+              Plan changes are made in the Shopify admin.{" "}
+              <s-link href={data.adminPlanUrl} target="_blank">
+                Open Plan &amp; Usage in Shopify admin
+              </s-link>
+            </s-banner>
+          ) : null}
         </s-section>
 
         <s-section>
@@ -260,7 +272,7 @@ export default function PlanUsagePage() {
             currentPlan={data.plan}
             interval={interval}
             onIntervalChange={setInterval}
-            onSelect={selectPlan}
+            onSelect={data.billingManageable ? selectPlan : () => shopify.toast.show("Change your plan from the Shopify admin")}
             subscribingPlan={subscribingPlan}
           />
         </s-section>
@@ -274,7 +286,7 @@ export default function PlanUsagePage() {
 }
 
 export function ErrorBoundary() {
-  return boundary.error(useRouteError());
+  return routeError(useRouteError());
 }
 
 export const headers: HeadersFunction = (headersArgs) => {
