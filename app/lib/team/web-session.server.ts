@@ -45,6 +45,9 @@ export function parseCookies(header: string | null): Record<string, string> {
 }
 
 function isSecure(request: Request): boolean {
+  // Force Secure in production even if a proxy strips x-forwarded-proto
+  // (mirrors platform-auth.server.ts).
+  if (process.env.NODE_ENV === "production") return true;
   const proto = request.headers.get("x-forwarded-proto") ?? new URL(request.url).protocol.replace(":", "");
   return proto === "https";
 }

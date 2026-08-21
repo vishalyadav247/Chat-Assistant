@@ -4,6 +4,7 @@ import db from "../db.server";
 import { requireShopAccess } from "../lib/access.server";
 import { readWebSession } from "../lib/team/web-session.server";
 import { sseResponse } from "../lib/sse.server";
+import { logError } from "../lib/log.server";
 
 // Inbox change feed (spec 18 live upgrade for spec 10's 7s poll). POST +
 // fetch-stream SSE — POST so the App Bridge-patched fetch carries the session
@@ -16,11 +17,14 @@ const MAX_MS = 10 * 60 * 1000; // client reconnects after this
 async function signature(shopId: string): Promise<string> {
   const [latest, unread] = await Promise.all([
     db.conversation.findFirst({
-      where: { shopId },
+      where: { shopId, isTest: false },
       orderBy: { lastMessageAt: "desc" },
       select: { id: true, lastMessageAt: true },
     }),
-    db.conversation.count({ where: { shopId, unread: true, status: "open", blocked: false } }),
+    // Mirrors the inbox list / rail badge: test-console chats never count.
+    db.conversation.count({
+      where: { shopId, isTest: false, unread: true, status: "open", blocked: false },
+    }),
   ]);
   return `${latest?.id ?? ""}:${latest?.lastMessageAt.getTime() ?? 0}:${unread}`;
 }
@@ -45,7 +49,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       try {
         next = await signature(shopId);
       } catch (error) {
-        console.error("inbox_events_tick_error", error);
+        logError("inbox_events_tick_error", error);
         continue;
       }
       if (next !== last) {

@@ -13,8 +13,8 @@ const bodySchema = z.object({
   sessionId: z.string().min(8).max(64),
   conversationId: z.string().min(1).max(64),
   values: z.object({
-    email: z.email().max(200),
-    issue: z.string().min(1).max(2000),
+    email: z.email().max(200).transform((v) => v.trim().toLowerCase()),
+    issue: z.string().trim().min(1).max(2000),
     orderNumber: z.string().max(60).optional(),
     phone: z.string().max(40).optional(),
   }),

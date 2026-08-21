@@ -9,6 +9,10 @@
 (function () {
   "use strict";
 
+  /** No frame for this long ⇒ treat the stream as dead (server heartbeats
+   *  every 15s, so this only trips on a genuinely stalled connection). */
+  var STREAM_IDLE_MS = 45000;
+
   /** Parse an SSE fetch-stream body, calling onFrame per JSON data frame. */
   function readSse(res, onFrame) {
     if (!res.ok || !res.body) return Promise.reject(new Error("bad response: " + res.status));
@@ -53,13 +57,42 @@
       body: JSON.stringify(payload),
     })
       .then(function (res) {
+        // A body that ends without a `done`/`error` frame (server restart,
+        // proxy timeout, cut connection) used to resolve silently, leaving the
+        // widget stuck "streaming" with a dead composer (QA D11).
+        var settled = false;
+        var watchdog = null;
+        var armWatchdog = function () {
+          if (watchdog) clearTimeout(watchdog);
+          watchdog = setTimeout(function () {
+            if (settled) return;
+            settled = true;
+            if (handlers.onError) handlers.onError(new Error("stream_stalled"));
+          }, STREAM_IDLE_MS);
+        };
+        armWatchdog();
         return readSse(res, function (frame) {
+          if (settled) return;
+          armWatchdog();
           if (frame.type === "token" && handlers.onToken) handlers.onToken(frame.text);
           else if (frame.type === "message" && handlers.onMessage) handlers.onMessage(frame.text);
           else if (frame.type === "cards" && handlers.onCards) handlers.onCards(frame.cards);
           else if (frame.type === "handover" && handlers.onHandover) handlers.onHandover(frame.data);
-          else if (frame.type === "done" && handlers.onDone) handlers.onDone(frame);
-          else if (frame.type === "error" && handlers.onError) handlers.onError(new Error("stream_failed"));
+          else if (frame.type === "done") {
+            settled = true;
+            if (watchdog) clearTimeout(watchdog);
+            if (handlers.onDone) handlers.onDone(frame);
+          } else if (frame.type === "error") {
+            settled = true;
+            if (watchdog) clearTimeout(watchdog);
+            if (handlers.onError) handlers.onError(new Error("stream_failed"));
+          }
+        }).then(function () {
+          if (watchdog) clearTimeout(watchdog);
+          if (!settled) {
+            settled = true;
+            if (handlers.onError) handlers.onError(new Error("stream_truncated"));
+          }
         });
       })
       .catch(function (err) {

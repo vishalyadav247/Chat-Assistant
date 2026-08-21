@@ -15,6 +15,10 @@ import {
 // invalidateShopConfig(shopId) so acceptance flows never wait on expiry.
 
 const TTL_MS = 60_000;
+/** Hard cap on cached shops — one process can serve thousands of tenants and an
+ *  unbounded Map is a slow leak. Expired entries are swept first; if that is
+ *  not enough the oldest entries go (they cost one re-read, never wrong data). */
+const MAX_ENTRIES = 500;
 
 export interface ShopConfig {
   shopId: string;
@@ -68,8 +72,28 @@ export async function getShopConfig(shopId: string): Promise<ShopConfig> {
     settings: shopSettingsSchema.parse(settingsRow?.settings ?? {}),
     handover: handoverConfigSchema.parse(handoverRow?.config ?? {}),
   };
-  cache().set(shopId, { config, at: Date.now() });
+  const store = cache();
+  // delete-then-set so the key moves to the end of the Map's insertion order —
+  // that is what makes the eviction below least-recently-refreshed-first.
+  store.delete(shopId);
+  store.set(shopId, { config, at: Date.now() });
+  evict(store);
   return config;
+}
+
+/** Bound the cache: drop expired entries, then oldest-first until under cap. */
+function evict(store: Map<string, { config: ShopConfig; at: number }>): void {
+  if (store.size <= MAX_ENTRIES) return;
+  const now = Date.now();
+  for (const [key, entry] of store) {
+    if (now - entry.at >= TTL_MS) store.delete(key);
+  }
+  if (store.size <= MAX_ENTRIES) return;
+  // Map preserves insertion order and every write re-inserts, so the head is
+  // the least-recently-refreshed entry.
+  for (const key of [...store.keys()].slice(0, store.size - MAX_ENTRIES)) {
+    store.delete(key);
+  }
 }
 
 /** Call from EVERY action that saves shop-scoped config. */

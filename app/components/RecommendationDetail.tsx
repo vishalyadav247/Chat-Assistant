@@ -178,6 +178,8 @@ export function RecommendationDetail(props: {
       <BrowseProductsModal
         open={pickerOpen}
         selectedIds={productIds}
+        // Mirrors recommendationSchema.productIds.max(50) (instructions/save.server.ts).
+        maxSelected={50}
         onClose={() => setPickerOpen(false)}
         onConfirm={(ids, newMeta) => {
           setProductIds(ids);

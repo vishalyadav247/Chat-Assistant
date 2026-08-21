@@ -4,6 +4,7 @@ import { Form, Link, useActionData, useNavigation } from "react-router";
 import { AuthCard, authStyles } from "../components/web/AuthCard";
 import { emailConfigured } from "../lib/email/email.server";
 import { allowAttempt, clientKey } from "../lib/team/login-limiter.server";
+import { sameOrigin } from "../lib/team/same-origin.server";
 import { requestPasswordReset } from "../lib/team/team.server";
 
 // Forgot password (spec 18). Always answers the same way (no account
@@ -13,6 +14,10 @@ import { requestPasswordReset } from "../lib/team/team.server";
 export const loader = async () => ({ emailConfigured: emailConfigured() });
 
 export const action = async ({ request }: ActionFunctionArgs) => {
+  // Cross-site submissions would let any page mint reset links (and reset
+  // emails) for an address of the attacker's choosing. Answer identically so a
+  // blocked request is indistinguishable from a delivered one.
+  if (!sameOrigin(request)) return { done: true as const };
   const form = await request.formData();
   const email = String(form.get("email") ?? "").trim();
   if (!allowAttempt(clientKey(request, `forgot:${email}`))) {

@@ -1,5 +1,6 @@
 import { getLlmProvider, type ChatMessage } from "../llm/index.server";
 import { ROUTER } from "./prompts";
+import { logError } from "../log.server";
 
 // Intent router (spec 03 step 4): gpt-4o-mini, temp 0, strict JSON.
 // Parse failure → ONE retry → chat-lane clarify (never default to buy — the
@@ -17,6 +18,7 @@ export interface RouteResult {
 }
 
 export async function route(args: {
+  shopId: string;
   message: string;
   history: ChatMessage[];
   bannedTopics: string[];
@@ -39,15 +41,15 @@ export async function route(args: {
 
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const raw = await getLlmProvider().chat(messages, {
-        temperature: 0,
-        maxTokens: 160,
-        jsonObject: true,
-      });
+      const raw = await getLlmProvider().chat(
+        messages,
+        { shopId: args.shopId, purpose: "router" },
+        { temperature: 0, maxTokens: 160, jsonObject: true },
+      );
       const parsed = parseRoute(raw);
       if (parsed) return parsed;
     } catch (error) {
-      console.error("router_error", attempt, error);
+      logError("router_error", error, { attempt, shopId: args.shopId });
     }
   }
 

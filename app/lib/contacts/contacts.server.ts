@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { z } from "zod";
 import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
 import { assigneeNameMap } from "../team/team.server";
@@ -150,21 +151,39 @@ export async function updateContactInfo(
   shopId: string,
   contactId: string,
   data: { name: string; email: string; phone: string },
-): Promise<boolean> {
+): Promise<boolean | { error: string }> {
   const existing = await db.contact.findFirst({
     where: { id: contactId, shopId: requireShopId(shopId) },
     select: { type: true },
   });
   if (!existing || existing.type === "customer") return false;
-  const email = data.email.trim() || null;
+  const name = data.name.trim().slice(0, 120) || null;
+  const email = data.email.trim().toLowerCase() || null;
+  const phone = data.phone.trim() || null;
+  if (email && !z.email().max(200).safeParse(email).success) {
+    return { error: "Enter a valid email address." };
+  }
+  if (phone && !/^\+?[\d\s().-]{5,40}$/.test(phone)) {
+    return { error: "Enter a valid phone number." };
+  }
+  if (email) {
+    const clash = await db.contact.findFirst({
+      where: { shopId, email, id: { not: contactId } },
+      select: { id: true },
+    });
+    if (clash) return { error: "Another contact already uses this email." };
+  }
   const becomesLead = existing.type === "anonymous" && Boolean(email);
+  // A lead whose identity fields are all cleared is anonymous again.
+  const becomesAnonymous = existing.type === "lead" && !email && !name && !phone;
   await db.contact.update({
     where: { id: contactId },
     data: {
-      name: data.name.trim() || null,
+      name,
       email,
-      phone: data.phone.trim() || null,
+      phone,
       ...(becomesLead ? { type: "lead" } : {}),
+      ...(becomesAnonymous ? { type: "anonymous" } : {}),
     },
   });
   if (becomesLead) {
@@ -469,7 +488,13 @@ export interface ExportOptions extends ContactListOptions {
 }
 
 function csvField(value: string): string {
-  return /[",\n\r]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+  // Spreadsheet formula injection: a cell starting with = + - @ or a tab/CR is
+  // evaluated by Excel/Sheets even when quoted — neutralise with a leading
+  // apostrophe (the standard mitigation; the value still reads correctly).
+  const safe = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+  return /[",\n\r']/.test(safe) || safe !== value
+    ? `"${safe.replace(/"/g, '""')}"`
+    : safe;
 }
 
 /** Build the export CSV (UTF-8). scope "page" re-slices the same filtered +
@@ -561,6 +586,10 @@ export async function contactDetail(
   });
   if (!contact) return null;
 
+  // Header count is the true total; the list below is capped at 20.
+  const conversationCount = await db.conversation.count({
+    where: { shopId, contactId, isTest: false },
+  });
   const conversations = await db.conversation.findMany({
     where: { shopId, contactId, isTest: false },
     orderBy: { lastMessageAt: "desc" },
@@ -580,26 +609,34 @@ export async function contactDetail(
   // added_to_cart beacons are attributed via the sessionId/conversationId the
   // widget sends with the cart snapshot (stored into the payload since
   // 2026-08-14 — older events carry no identity and can't be shown).
-  const atcConditions: Prisma.AnalyticsEventWhereInput[] = [
-    ...convoIds.map((id) => ({
-      payload: { path: ["conversationId"], equals: id } as Prisma.JsonFilter,
-    })),
+  //
+  // PERF (QA pass): these two lookups used Prisma's `payload: { path, equals }`
+  // filter, which compiles to `payload#>>'{key}' = $n` — unindexable, so both
+  // scanned every event of that type (measured 161 ms and 2 627 ms at 150k
+  // events). Written as jsonb containment (`@>`) they hit
+  // analytics_events_payload_gin (migration 20260821140000): 3.7 ms and 1.0 ms.
+  const atcContainment: Prisma.Sql[] = [
+    ...convoIds.map(
+      (id) => Prisma.sql`"payload" @> jsonb_build_object('conversationId', ${id}::text)`,
+    ),
     ...(contact.sessionId
-      ? [{ payload: { path: ["sessionId"], equals: contact.sessionId } as Prisma.JsonFilter }]
+      ? [Prisma.sql`"payload" @> jsonb_build_object('sessionId', ${contact.sessionId}::text)`]
       : []),
   ];
 
   const [previews, handoverMessages, cardMessages, cartEvents, conversionEvents, assigneeNames] =
     await Promise.all([
-    Promise.all(
-      conversations.map((c) =>
-        db.message.findFirst({
-          where: { shopId, conversationId: c.id, role: { in: ["in", "out"] } },
-          orderBy: { createdAt: "desc" },
-          select: { content: true },
-        }),
-      ),
-    ),
+    // One DISTINCT ON pass instead of one findFirst per conversation (was 20
+    // round-trips per contact-detail open).
+    convoIds.length
+      ? db.$queryRaw<{ conversationId: string; content: string }[]>`
+          SELECT DISTINCT ON ("conversationId") "conversationId", "content"
+          FROM "messages"
+          WHERE "shopId" = ${shopId}
+            AND "conversationId" IN (${Prisma.join(convoIds)})
+            AND "role" IN ('in', 'out')
+          ORDER BY "conversationId", "createdAt" DESC`
+      : Promise.resolve([]),
     convoIds.length
       ? db.message.findMany({
           where: { shopId, conversationId: { in: convoIds }, sourceLayer: "handover" },
@@ -619,24 +656,18 @@ export async function contactDetail(
           select: { createdAt: true, productCards: true },
         })
       : Promise.resolve([]),
-    atcConditions.length
-      ? db.analyticsEvent.findMany({
-          where: { shopId, type: "added_to_cart", OR: atcConditions },
-          orderBy: { occurredAt: "desc" },
-          take: 20,
-          select: { occurredAt: true, payload: true },
-        })
+    atcContainment.length
+      ? db.$queryRaw<{ occurredAt: Date; payload: unknown }[]>`
+          SELECT "occurredAt", "payload" FROM "analytics_events"
+          WHERE "shopId" = ${shopId} AND "type" = 'added_to_cart'
+            AND (${Prisma.join(atcContainment, " OR ")})
+          ORDER BY "occurredAt" DESC LIMIT 20`
       : Promise.resolve([]),
-    db.analyticsEvent.findMany({
-      where: {
-        shopId,
-        type: "contact_converted",
-        payload: { path: ["contactId"], equals: contactId },
-      },
-      orderBy: { occurredAt: "desc" },
-      take: 10,
-      select: { occurredAt: true, payload: true },
-    }),
+    db.$queryRaw<{ occurredAt: Date; payload: unknown }[]>`
+      SELECT "occurredAt", "payload" FROM "analytics_events"
+      WHERE "shopId" = ${shopId} AND "type" = 'contact_converted'
+        AND "payload" @> jsonb_build_object('contactId', ${contactId}::text)
+      ORDER BY "occurredAt" DESC LIMIT 10`,
     assigneeNameMap(shopId),
   ]);
 
@@ -687,17 +718,18 @@ export async function contactDetail(
   }
   activities.sort((a, b) => b.at.getTime() - a.at.getTime());
 
+  const previewByConvo = new Map(previews.map((p) => [p.conversationId, p.content]));
   return {
     contact: {
       ...contact,
       lastActivityAt: conversations[0]?.lastMessageAt ?? null,
-      conversationCount: conversations.length,
+      conversationCount,
     },
-    conversations: conversations.map((c, i) => ({
+    conversations: conversations.map((c) => ({
       id: c.id,
       status: c.status,
       lastMessageAt: c.lastMessageAt,
-      preview: (previews[i]?.content ?? "").slice(0, 120),
+      preview: (previewByConvo.get(c.id) ?? "").slice(0, 120),
     })),
     activities: activities.slice(0, 50),
   };

@@ -1,5 +1,11 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
+# 🚨 SUBMISSION GATE — application_url / redirect_urls / app_proxy.url below are a
+# DEV TUNNEL. `automatically_update_urls_on_dev = true` rewrites them on every
+# `npm run dev`, so running dev and then `npm run deploy` would publish a dead
+# tunnel host. Before submitting: point every URL at the production host (valid
+# TLS, App Store req 3.1.1), set automatically_update_urls_on_dev = false, and
+# deploy from a clean checkout.
 client_id = "d8b180fa8bf4edbda15692d2652516d7"
 name = "chat-convert"
 application_url = "https://stop-connecting-magical-gospel.trycloudflare.com"
@@ -54,13 +60,33 @@ api_version = "2026-07"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+#
+# 🚨 SUBMISSION GATE — PROTECTED CUSTOMER DATA (LEVEL 2).
+# read_customers / write_customers / read_orders put this app at PCD **level 2**
+# (it reads order email/phone/shipping-address in app/routes/proxy.order-track.tsx
+# and creates customer records in app/lib/contacts/contacts.server.ts). Before
+# submitting a PUBLIC app you MUST request protected-customer-data access AND the
+# specific fields in the Partner Dashboard, implement the level 1 + level 2
+# requirements, and take part in data-protection reviews.
+# https://shopify.dev/docs/apps/launch/protected-customer-data
+#
+# Per-scope justification (copy into the App Store listing form):
+#   read_products            catalog mirror that grounds every AI recommendation
+#   read_content             required by the metafield_definitions/* webhooks that
+#                            keep the Manage-metafields catalog live
+#   read_discounts           discount sync (training data + realtime webhooks)
+#   read_legal_policies      policy knowledge connector (merchant content)
+#   read_online_store_pages  pages knowledge connector (merchant content)
+#   read_orders              PCD-2 · in-widget order-status lookup for shoppers
+#   read_customers           PCD-2 · match chat contacts to existing customers
+#   write_customers          PCD-2 · merchant-initiated "convert contact to customer"
+#   write_app_proxy          storefront widget transport (/apps/ccwidget)
+#   write_files              merchant logo/icon uploads (Shopify Files staged uploads)
 scopes = "read_content,read_customers,write_customers,read_discounts,read_legal_policies,read_online_store_pages,read_orders,read_products,write_app_proxy,write_files"
 
 [auth]
 redirect_urls = [
-  "https://stop-connecting-magical-gospel.trycloudflare.com/auth/callback",
-  "https://stop-connecting-magical-gospel.trycloudflare.com/auth/login",
-  "https://stop-connecting-magical-gospel.trycloudflare.com/api/auth"
+  "https://stop-connecting-magical-gospel.trycloudflare.com/auth/callback"
 ]
 
 [app_proxy]

@@ -96,6 +96,9 @@ Budget: a normal turn ≈ 2 LLM chat calls + 1–2 embedding calls + a few DB/Sh
 | 16 | `16-settings.md` | Settings (general, availability, survey, tracking) |
 | 17 | `17-compliance-gdpr.md` | GDPR, retention, app review |
 | 18 | `18-web-app-team.md` | Standalone web app, team logins (roles), browser push notifications, live inbox feed |
+| 19 | `19-platform-admin.md` | Platform admin panel (operator dashboard): global AI model settings + editable plan matrix + enforcement switch, DB admin accounts |
+| 20 | `20-mobile-responsive.md` | Mobile responsiveness: 768px breakpoint, web-shell drawer nav, inbox pane switching, touch reordering (desktop unchanged) |
+| 21 | `21-logging-observability.md` | Operator error/warning log (`app_logs`) + `/platform/logs`: cross-tenant triage window, 14-day retention, PII-safe write seam |
 
 ## Suggested build order (after Phase 0 foundation)
 

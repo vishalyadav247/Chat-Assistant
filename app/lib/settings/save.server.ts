@@ -4,14 +4,9 @@ import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
 import { invalidateShopConfig } from "../config/shop-config.server";
 import { uploadImage } from "../files.server";
-import {
-  availabilitySchema,
-  surveySchema,
-  shopSettingsSchema,
-  type ShopSettingsData,
-} from "./schemas";
+import { shopSettingsSchema, zodMessage, type ShopSettingsData } from "./schemas";
 import { validate17TrackKey } from "../tracking/seventeen-track.server";
-import { DATE_FORMATS, DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, TIME_FORMATS } from "../format/datetime";
+import { DATE_FORMATS, TIME_FORMATS } from "../format/datetime";
 
 // Settings save workflow (spec 16): one intent per tab/card. Every intent
 // zod-parses the incoming slice, merges it onto the current settings blob,
@@ -25,27 +20,159 @@ export interface SettingsActionResult {
   logoUrl?: string;
 }
 
+// SAVE-path schemas are STRICT (no `.catch`): the lenient schemas in
+// ./schemas exist so stored blobs always parse on READ, but on save a
+// silently-coerced value would make the UI appear to accept input it then
+// reverts. Invalid payloads return a friendly error instead (see zodMessage).
+const maxText = (n: number, what: string) =>
+  z.string().max(n, `${what} must be ${n} characters or fewer`);
+
 const generalPayload = z.object({
-  name: z.string().max(100).catch(""),
-  dateFormat: z.enum(DATE_FORMATS).catch(DEFAULT_DATE_FORMAT),
-  timeFormat: z.enum(TIME_FORMATS).catch(DEFAULT_TIME_FORMAT),
-  theme: shopSettingsSchema.shape.theme,
-  inbox: shopSettingsSchema.shape.inbox,
+  name: maxText(100, "Store name"),
+  dateFormat: z.enum(DATE_FORMATS),
+  timeFormat: z.enum(TIME_FORMATS),
+  theme: z.enum(["auto", "dawn", "refresh", "craft", "custom"]),
+  inbox: z.object({
+    autoResolve: z.boolean(),
+    after: z.number().int().min(1, "Auto-resolve delay must be at least 1"),
+    unit: z.enum(["minute", "hour", "day"]),
+  }),
 });
 
 const chatboxPayload = z.object({
-  cartDrawer: shopSettingsSchema.shape.cartDrawer,
-  orderTracking: shopSettingsSchema.shape.orderTracking,
+  cartDrawer: z.boolean(),
+  orderTracking: z.object({
+    mode: z.enum(["default", "custom", "integration"]),
+    customUrl: maxText(500, "Custom tracking URL"),
+    provider: z.enum(["17track"]),
+  }),
 });
+
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+const YMD = /^\d{4}-\d{2}-\d{2}$/;
+const hhmm = (what: string) => z.string().regex(HHMM, `${what} must be a time like 09:00`);
+const toMinutes = (hhmmValue: string) => {
+  const [h, m] = hhmmValue.split(":").map(Number);
+  return h * 60 + m;
+};
+/** Minutes spanned by from→to; a `to` at or before `from` wraps past midnight. */
+const spanMinutes = (from: string, to: string) => (toMinutes(to) - toMinutes(from) + 1440) % 1440;
+
+const strictAvailabilitySchema = z
+  .object({
+    mode: z.enum(["always", "custom"]),
+    days: z.array(
+      z.object({
+        day: z.number().int().min(0).max(6),
+        enabled: z.boolean(),
+        from: hhmm("Opening time"),
+        to: hhmm("Closing time"),
+      }),
+    ),
+    onlineStatusMode: z.enum(["working_hours", "working_hours_or_agent", "agent_during_hours"]),
+    breaks: z.object({
+      enabled: z.boolean(),
+      ranges: z.array(z.object({ from: hhmm("Break start"), to: hhmm("Break end") })),
+    }),
+    holidays: z.object({
+      enabled: z.boolean(),
+      items: z.array(
+        z.object({
+          name: maxText(100, "Holiday name"),
+          from: z.string().regex(YMD, "Holiday start must be a date"),
+          to: z.string().regex(YMD, "Holiday end must be a date"),
+        }),
+      ),
+    }),
+    messages: z.object({
+      online: maxText(120, "Online status message"),
+      offline: maxText(120, "Offline status message"),
+      break: maxText(120, "Break status message"),
+      holiday: maxText(120, "Holiday status message"),
+    }),
+  })
+  .superRefine((a, ctx) => {
+    const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const enabledDays = a.mode === "custom" ? a.days.filter((d) => d.enabled) : [];
+    for (const d of enabledDays) {
+      if (d.from === d.to) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["days"],
+          message: `${DAY_NAMES[d.day]}: opening and closing time can't be the same`,
+        });
+      }
+    }
+    if (a.mode === "custom" && enabledDays.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["days"],
+        message: "Enable at least one working day, or switch to 24 hours / 7 days",
+      });
+    }
+    if (a.breaks.enabled) {
+      a.breaks.ranges.forEach((r, i) => {
+        const length = spanMinutes(r.from, r.to);
+        if (length === 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["breaks"],
+            message: `Break ${i + 1}: start and end time can't be the same`,
+          });
+          return;
+        }
+        // A break must sit inside every enabled day's working hours
+        // (overnight windows are unwrapped onto a 0–2880 minute axis).
+        for (const d of enabledDays) {
+          const open = toMinutes(d.from);
+          const close = open + spanMinutes(d.from, d.to);
+          let start = toMinutes(r.from);
+          if (start < open) start += 1440;
+          if (start < open || start + length > close) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["breaks"],
+              message: `Break ${i + 1} (${r.from}–${r.to}) falls outside ${DAY_NAMES[d.day]}'s working hours (${d.from}–${d.to})`,
+            });
+            break;
+          }
+        }
+      });
+    }
+    if (a.holidays.enabled) {
+      a.holidays.items.forEach((h, i) => {
+        if (h.to < h.from) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["holidays"],
+            message: `Holiday ${i + 1}${h.name ? ` (${h.name})` : ""}: end date is before the start date`,
+          });
+        }
+      });
+    }
+  });
 
 const availabilityPayload = z.object({
-  availability: availabilitySchema,
-  timezone: z.string().min(1).max(64),
+  availability: strictAvailabilitySchema,
+  timezone: z.string().min(1, "Choose a time zone").max(64),
 });
 
-const surveyPayload = z.object({ survey: surveySchema });
+const surveyPayload = z.object({
+  survey: z.object({
+    format: z.enum(["stars", "emoji"]),
+    intro: maxText(200, "Survey intro"),
+    thanks: maxText(200, "Thank you message"),
+    triggerOnResolve: z.boolean(),
+    triggerKeywords: z.object({
+      enabled: z.boolean(),
+      keywords: z.array(maxText(50, "Each keyword")),
+    }),
+  }),
+});
 
-const privacyPayload = z.object({ retentionDays: shopSettingsSchema.shape.retentionDays });
+const privacyPayload = z.object({
+  retentionDays: z.union([z.literal(0), z.literal(7), z.literal(30), z.literal(60), z.literal(90)]),
+});
 
 /** Load + parse the shop's settings blob (defaults when no row exists yet). */
 export async function loadShopSettings(shopId: string): Promise<ShopSettingsData> {
@@ -169,6 +296,10 @@ export async function applySettingsIntent(args: {
       }
     }
   } catch (error) {
+    if (error instanceof z.ZodError) return { ok: false, intent, error: zodMessage(error) };
+    if (error instanceof SyntaxError) {
+      return { ok: false, intent, error: "Couldn't read the settings payload — please reload and try again." };
+    }
     return {
       ok: false,
       intent,

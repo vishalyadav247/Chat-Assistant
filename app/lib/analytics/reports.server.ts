@@ -51,23 +51,48 @@ function windowDays(range: AnalyticsRange, periodsBack = 0): Date[] {
 async function countersForDays(shopId: string, days: Date[]): Promise<Map<string, DayCounters>> {
   requireShopId(shopId);
   if (days.length === 0) return new Map();
+  const sorted = [...days].sort((a, b) => a.getTime() - b.getTime());
   const rows = await db.metricsDaily.findMany({
-    where: { shopId, date: { gte: days[0], lte: days[days.length - 1] } },
+    where: { shopId, date: { gte: sorted[0], lte: sorted[sorted.length - 1] } },
     select: { date: true, counters: true },
   });
   const map = new Map<string, DayCounters>();
   for (const row of rows) {
     map.set(isoDate(row.date), { ...emptyCounters(), ...(row.counters as object) });
   }
+  // Days needing a live rollup: today (always fresh) + any day with no row.
+  // A cold 12m window is up to 730 of them, so they run in batches instead of
+  // one-at-a-time (sequential awaits made the first load take ~10s).
   const todayKey = isoDate(utcDay(new Date()));
+  const pending = new Map<string, Date>();
   for (const day of days) {
     const key = isoDate(day);
-    if (key === todayKey || !map.has(key)) {
-      map.set(key, await rollupDay(shopId, day));
-    }
+    if (key === todayKey || !map.has(key)) pending.set(key, day);
+  }
+  const missing = [...pending.values()];
+  const BACKFILL_CHUNK = 30;
+  for (let i = 0; i < missing.length; i += BACKFILL_CHUNK) {
+    const chunk = missing.slice(i, i + BACKFILL_CHUNK);
+    const counters = await Promise.all(chunk.map((day) => rollupDay(shopId, day)));
+    chunk.forEach((day, index) => map.set(isoDate(day), counters[index]));
   }
   return map;
 }
+
+/**
+ * One counters map per request, covering the current AND previous period —
+ * every ranged widget on the Analytics page reads the same window, so building
+ * it once means today is rolled up once instead of per widget. Pass the result
+ * to the report functions below; omit it and each one builds its own.
+ */
+export async function analyticsCounters(
+  shopId: string,
+  range: AnalyticsRange,
+): Promise<Map<string, DayCounters>> {
+  return countersForDays(shopId, [...windowDays(range, 1), ...windowDays(range)]);
+}
+
+export type AnalyticsCounters = Map<string, DayCounters>;
 
 function sumCounters(map: Map<string, DayCounters>, days: Date[]): DayCounters {
   const total = emptyCounters();

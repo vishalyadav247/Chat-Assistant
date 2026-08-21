@@ -5,7 +5,7 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
 import { hasFeature } from "../lib/billing/plans.server";
-import { resolveAvailability } from "../lib/settings/availability.server";
+import { resolveAvailabilityFor } from "../lib/settings/availability.server";
 import { loadShopSettings } from "../lib/settings/save.server";
 import {
   applyChatboxIntent,
@@ -54,7 +54,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   ]);
 
   const plan = shop?.plan ?? "free";
-  const availability = resolveAvailability(shopSettings.availability, shop?.timezone || "UTC");
+  const availability = await resolveAvailabilityFor(shopId, shopSettings.availability, shop?.timezone || "UTC");
   const categoryName = new Map(categories.map((c) => [c.id, c.name]));
 
   return {
@@ -196,6 +196,7 @@ export default function ChatboxPage() {
         <TabPills tabs={TABS} active={tab} onChange={setTab} />
 
         <div
+          className="cc-split"
           style={{
             display: "grid",
             gridTemplateColumns: "minmax(0, 1fr) 340px",

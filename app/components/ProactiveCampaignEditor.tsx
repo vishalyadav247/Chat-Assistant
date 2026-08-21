@@ -68,6 +68,18 @@ export function ProactiveCampaignEditor(props: {
     setTrigger({ pageTypes: next });
   };
 
+  // Mirrors the strict save-path rule (campaigns.server.ts): only relative
+  // paths or http(s) links, and "Open a link" needs one.
+  const ctaUrl = draft.settings.ctaUrl;
+  const ctaUrlError =
+    draft.settings.ctaAction !== "link"
+      ? undefined
+      : ctaUrl.trim() === ""
+        ? "Add the link the button should open"
+        : /^(\/|https?:\/\/)/i.test(ctaUrl)
+          ? undefined
+          : "Link URL must start with / or http(s)://";
+
   const showCartFields = isCartTemplate(draft.templateType) || draft.settings.trigger.pageTypes.includes("cart");
   const showDiscountCode = draft.templateType === "cart_booster" || draft.settings.ctaAction === "apply_code";
 
@@ -227,6 +239,7 @@ export function ProactiveCampaignEditor(props: {
               value={draft.settings.ctaUrl}
               maxLength={500}
               placeholder="/checkout"
+              error={ctaUrlError}
               onInput={(e) => setSettings({ ctaUrl: e.currentTarget.value })}
             />
           ) : null}

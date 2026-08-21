@@ -1,73 +1,395 @@
-.index {
-  align-items: center;
-  display: flex;
-  justify-content: center;
-  height: 100%;
-  width: 100%;
-  text-align: center;
-  padding: 1rem;
-}
+/* Public landing page. Standalone CSS (this route renders outside the admin, so
+   no Polaris) — but the palette is the app's: BRAND.accent #6d3bf5 and the hero
+   gradient from app/components/ui/tokens.ts. Keep the two in step. */
 
-.heading,
-.text {
-  padding: 0;
+:global(html),
+:global(body) {
   margin: 0;
+  padding: 0;
 }
 
-.text {
-  font-size: 1.2rem;
-  padding-bottom: 2rem;
+.page {
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 28px 20px 56px;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: #1f1f27;
+  background:
+    radial-gradient(760px 420px at 8% -6%, rgba(109, 59, 245, 0.13), transparent 62%),
+    radial-gradient(680px 400px at 96% 2%, rgba(59, 130, 246, 0.12), transparent 60%),
+    #f6f6f9;
+  -webkit-font-smoothing: antialiased;
 }
 
-.content {
-  display: grid;
-  gap: 2rem;
-}
-
-.form {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
+.shell {
+  max-width: 1020px;
   margin: 0 auto;
-  gap: 1rem;
-}
-
-.label {
   display: grid;
-  gap: 0.2rem;
-  max-width: 20rem;
-  text-align: left;
-  font-size: 1rem;
+  gap: 20px;
 }
 
-.input {
-  padding: 0.4rem;
-}
+/* ── Top bar ─────────────────────────────────────────────────────────────── */
 
-.button {
-  padding: 0.4rem;
-}
-
-.list {
-  list-style: none;
-  padding: 0;
-  padding-top: 3rem;
-  margin: 0;
+.topbar {
   display: flex;
-  gap: 2rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 4px 6px;
 }
 
-.list > li {
-  max-width: 20rem;
-  text-align: left;
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
 }
 
-@media only screen and (max-width: 50rem) {
-  .list {
-    display: block;
+.brandMark {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #6d3bf5, #3b82f6);
+  color: #fff;
+  font-weight: 800;
+  font-size: 17px;
+  letter-spacing: -0.02em;
+  box-shadow: 0 4px 12px rgba(109, 59, 245, 0.28);
+}
+
+.brandName {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.topPill {
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid rgba(20, 20, 25, 0.08);
+  font-size: 13px;
+  font-weight: 600;
+  color: #4a4a53;
+  box-shadow: 0 1px 2px rgba(20, 20, 25, 0.05);
+}
+
+/* ── Hero ────────────────────────────────────────────────────────────────── */
+
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 390px;
+  gap: 40px;
+  align-items: center;
+  padding: 48px;
+  border-radius: 22px;
+  background: linear-gradient(120deg, #4c1d95 0%, #6d3bf5 46%, #3b82f6 100%);
+  box-shadow: 0 18px 44px rgba(60, 30, 140, 0.24);
+}
+
+.heroCopy {
+  display: grid;
+  gap: 18px;
+  align-content: center;
+}
+
+.heroBadge {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.heroHeading {
+  margin: 0;
+  color: #fff;
+  font-size: clamp(1.9rem, 3.6vw, 2.55rem);
+  line-height: 1.16;
+  letter-spacing: -0.02em;
+  font-weight: 800;
+  max-width: 17ch;
+}
+
+.heroText {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 15.5px;
+  line-height: 1.62;
+  max-width: 46ch;
+}
+
+.heroCard {
+  background: #fff;
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 12px 30px rgba(20, 20, 40, 0.18);
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.cardSub {
+  margin: 6px 0 18px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: #61616b;
+}
+
+.cardNote {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #f6f5fb;
+  border: 1px solid rgba(109, 59, 245, 0.12);
+  font-size: 13px;
+  line-height: 1.55;
+  color: #4a4a53;
+}
+
+.cardHint {
+  margin: 12px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #78787f;
+}
+
+.cardDivider {
+  height: 1px;
+  margin: 18px 0 14px;
+  background: rgba(20, 20, 25, 0.09);
+}
+
+.cardFine {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 12.5px;
+  color: #78787f;
+}
+
+.cardFine svg {
+  flex-shrink: 0;
+  color: #6d3bf5;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+
+.primaryButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 20px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #6d3bf5, #3b82f6);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 650;
+  text-decoration: none;
+  box-shadow: 0 4px 14px rgba(109, 59, 245, 0.3);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.primaryButton:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 7px 20px rgba(109, 59, 245, 0.38);
+}
+
+.primaryButton:focus-visible {
+  outline: 2px solid #1f1f27;
+  outline-offset: 2px;
+}
+
+/* ── Feature cards ───────────────────────────────────────────────────────── */
+
+.features {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(268px, 1fr));
+  gap: 16px;
+}
+
+.featureCard {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding: 22px;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow:
+    0 1px 2px rgba(20, 20, 25, 0.06),
+    0 0 0 1px rgba(20, 20, 25, 0.04);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.featureCard:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 10px 26px rgba(20, 20, 25, 0.09),
+    0 0 0 1px rgba(20, 20, 25, 0.05);
+}
+
+.featureIcon {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 4px;
+}
+
+.violet {
+  background: #efeafe;
+  color: #6d3bf5;
+}
+.blue {
+  background: #dbeafe;
+  color: #1e40af;
+}
+.aqua {
+  background: #d5f3f1;
+  color: #0f766e;
+}
+.amber {
+  background: #fdecc8;
+  color: #8a5a00;
+}
+.rose {
+  background: #fdeef1;
+  color: #be123c;
+}
+.green {
+  background: #d7f8e6;
+  color: #0c5132;
+}
+
+.featureTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.featureBody {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: #5a5a63;
+}
+
+/* ── CTA band ────────────────────────────────────────────────────────────── */
+
+.band {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 26px 28px;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow:
+    0 1px 2px rgba(20, 20, 25, 0.06),
+    0 0 0 1px rgba(20, 20, 25, 0.04);
+}
+
+.band .primaryButton {
+  width: auto;
+  flex-shrink: 0;
+}
+
+.bandTitle {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.bandSub {
+  margin: 6px 0 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: #61616b;
+  max-width: 58ch;
+}
+
+/* ── Trust strip ─────────────────────────────────────────────────────────── */
+
+.trust {
+  justify-self: center;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin: 8px 0 0;
+  padding: 11px 20px;
+  border-radius: 999px;
+  background: rgba(109, 59, 245, 0.07);
+  color: #4a3a72;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.trust svg {
+  color: #6d3bf5;
+  flex-shrink: 0;
+}
+
+.trustDot {
+  color: #a2a2ab;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+
+@media (max-width: 900px) {
+  .hero {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 28px;
+    padding: 32px 24px;
   }
 
-  .list > li {
-    padding-bottom: 1rem;
+  .heroHeading {
+    max-width: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .page {
+    padding: 20px 14px 40px;
+  }
+
+  .hero {
+    border-radius: 18px;
+    padding: 26px 20px;
+  }
+
+  .heroCard {
+    padding: 20px;
+  }
+
+  .band {
+    padding: 22px 20px;
+  }
+
+  .band .primaryButton {
+    width: 100%;
   }
 }

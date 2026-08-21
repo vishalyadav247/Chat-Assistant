@@ -100,11 +100,15 @@
   }
 
   function formatPrice(price, currency) {
+    // A missing price is unknown, not free — rendering "$0.00" was worse than
+    // rendering nothing (QA D18). Currency is the shop's; the number format
+    // follows the shopper's locale, which is what they expect to read.
+    if (price == null || price === "" || isNaN(Number(price))) return "";
     try {
       return new Intl.NumberFormat(undefined, {
         style: "currency",
         currency: currency || "USD",
-      }).format(price);
+      }).format(Number(price));
     } catch (e) {
       return (currency || "USD") + " " + Number(price).toFixed(2);
     }
@@ -314,36 +318,46 @@
       var featured = (config.featuredFaqs || []).slice();
       if (featured.length > 0) {
         renderList(featured);
-        var clientFilter = function (q) {
-          return featured.filter(function (f) { return f.question.toLowerCase().indexOf(q) !== -1; });
-        };
-        var searchSeq = 0;
-        var searchTimer = null;
-        input.addEventListener("input", function () {
-          var q = input.value.trim().toLowerCase();
-          if (searchTimer) clearTimeout(searchTimer);
-          if (!q) {
-            searchSeq++;
-            renderList(featured);
-            return;
-          }
-          // Instant client filter over featured, then (debounced) the server
-          // search across ALL published FAQs replaces it when it lands.
-          renderList(clientFilter(q));
-          if (!cb || !cb.onFaqSearch) return;
-          var seq = ++searchSeq;
-          searchTimer = setTimeout(function () {
-            cb.onFaqSearch(q).then(function (faqs) {
-              if (seq !== searchSeq || !faqs) return; // stale or failed → keep client results
-              renderList(faqs);
-            });
-          }, 250);
-        });
       } else {
         var noneYet = el("div", "cw-row-sub");
         noneYet.textContent = "No featured questions yet.";
         list.appendChild(noneYet);
       }
+      // The search listener is registered even with zero featured FAQs — it
+      // used to live inside the `featured.length > 0` branch, so a shop that
+      // published FAQs without featuring any showed a dead search box (QA
+      // D14). The server search covers ALL published FAQs.
+      var clientFilter = function (q) {
+        return featured.filter(function (f) { return f.question.toLowerCase().indexOf(q) !== -1; });
+      };
+      var searchSeq = 0;
+      var searchTimer = null;
+      input.addEventListener("input", function () {
+        var q = input.value.trim().toLowerCase();
+        if (searchTimer) clearTimeout(searchTimer);
+        if (!q) {
+          searchSeq++;
+          if (featured.length > 0) renderList(featured);
+          else {
+            list.innerHTML = "";
+            var empty = el("div", "cw-row-sub");
+            empty.textContent = "No featured questions yet.";
+            list.appendChild(empty);
+          }
+          return;
+        }
+        // Instant client filter over featured, then (debounced) the server
+        // search across ALL published FAQs replaces it when it lands.
+        renderList(clientFilter(q));
+        if (!cb || !cb.onFaqSearch) return;
+        var seq = ++searchSeq;
+        searchTimer = setTimeout(function () {
+          cb.onFaqSearch(q).then(function (faqs) {
+            if (seq !== searchSeq || !faqs) return; // stale or failed → keep client results
+            renderList(faqs);
+          });
+        }, 250);
+      });
       faqBlk.appendChild(list);
       home.appendChild(faqBlk);
     }
@@ -657,7 +671,7 @@
           contactInput.focus();
           return;
         }
-        if (current.method === "phone" && contact.replace(/\D/g, "").length < 7) {
+        if (current.method === "phone" && contact.replace(/\D/g, "").length < 10) {
           err.textContent = "Please enter a valid phone number.";
           err.style.display = "";
           contactInput.focus();

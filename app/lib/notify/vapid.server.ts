@@ -1,6 +1,7 @@
 import webpush from "web-push";
 import db from "../../db.server";
 import { env } from "../env.server";
+import { logError } from "../log.server";
 
 // VAPID keys for Web Push (spec 18). Zero-config: if VAPID_PUBLIC_KEY /
 // VAPID_PRIVATE_KEY aren't in the environment, a key pair is generated once
@@ -62,7 +63,7 @@ export async function getVapidPublicKey(): Promise<string> {
   try {
     return (await getVapidKeys()).publicKey;
   } catch (error) {
-    console.error("vapid_keys_unavailable", error);
+    logError("vapid_keys_unavailable", error);
     return "";
   }
 }

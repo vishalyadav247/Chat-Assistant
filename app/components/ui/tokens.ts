@@ -76,6 +76,12 @@ export const SCROLLBAR_CSS = `
 .cc-scroll::-webkit-scrollbar-thumb:hover{background:#adadb8;}
 `;
 
+/** The app's single responsive breakpoint (spec 19). Desktop layouts are
+ *  untouched ≥769px; phones/small tablets get additive rules ≤768px. */
+export const BP_MOBILE = 768;
+/** Media query string for matchMedia / CSS — keep in sync with BP_MOBILE. */
+export const MOBILE_MEDIA = `(max-width: ${BP_MOBILE}px)`;
+
 /** Muted text colors (the design's lightened ink ramp). */
 export const INK = {
   strong: "var(--s-color-text, #2e2e37)",

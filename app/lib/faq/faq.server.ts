@@ -4,6 +4,7 @@ import { syncFaqKnowledge } from "../ingestion/knowledge-ingest.server";
 import { CSV_ROW_CAP, splitCsv } from "../ingestion/sources.server";
 import { sanitizeHtml } from "../sanitize.server";
 import { requireShopId } from "../tenancy.server";
+import { logError } from "../log.server";
 
 // FAQ CRUD server logic (spec 07). Every function takes a TRUSTED shopId
 // (from authenticate.admin) as its first argument and scopes every query.
@@ -409,6 +410,11 @@ export async function placeFaq(
 export interface FaqImportResult {
   imported: number;
   badRows: { line: number; reason: string }[];
+  /** True when the first row was consumed as a column header (QA D7 — the
+   *  merchant can tell a dropped row from a header at a glance). */
+  headerSkipped: boolean;
+  /** Rows skipped because an FAQ with the same question already exists. */
+  skipped: number;
 }
 
 /**
@@ -425,15 +431,19 @@ export async function importFaqCsv(shopId: string, csvText: string): Promise<Faq
   }
   const records = splitCsv(csvText);
   const badRows: FaqImportResult["badRows"] = [];
-  if (records.length === 0) return { imported: 0, badRows };
+  if (records.length === 0) {
+    return { imported: 0, badRows, headerSkipped: false, skipped: 0 };
+  }
 
+  // EXACT header tokens only. Substring matching ate real Q&A rows whose
+  // question merely contained the word "question" (QA D7).
   const header = records[0].map((cell) => cell.trim().toLowerCase());
-  const qCol = header.findIndex((cell) => /question/.test(cell));
-  const aCol = header.findIndex((cell) => /answer/.test(cell));
+  const qCol = header.findIndex((cell) => cell === "question" || cell === "q");
+  const aCol = header.findIndex((cell) => cell === "answer" || cell === "a");
   const hadHeader = qCol >= 0 && aCol >= 0 && qCol !== aCol;
-  const catCol = hadHeader ? header.findIndex((cell) => /category/.test(cell)) : -1;
-  const statusCol = hadHeader ? header.findIndex((cell) => /status/.test(cell)) : -1;
-  const featCol = hadHeader ? header.findIndex((cell) => /featured/.test(cell)) : -1;
+  const catCol = hadHeader ? header.findIndex((cell) => cell === "category") : -1;
+  const statusCol = hadHeader ? header.findIndex((cell) => cell === "status") : -1;
+  const featCol = hadHeader ? header.findIndex((cell) => cell === "featured") : -1;
   const questionCol = hadHeader ? qCol : 0;
   const answerCol = hadHeader ? aCol : 1;
 
@@ -463,13 +473,24 @@ export async function importFaqCsv(shopId: string, csvText: string): Promise<Faq
     return position;
   };
 
+  // Re-importing an export used to duplicate every row — skip questions the
+  // shop already has, and questions repeated within the file (QA D12c).
+  const existingFaqs = await db.faq.findMany({ where: { shopId }, select: { question: true } });
+  const seenQuestions = new Set(existingFaqs.map((f) => f.question.trim().toLowerCase()));
+
   let imported = 0;
+  let skipped = 0;
   for (let i = 0; i < data.length; i++) {
     const line = i + lineOffset;
     const question = (data[i][questionCol] ?? "").trim();
     const answer = (data[i][answerCol] ?? "").trim();
     if (!question || !answer) {
       badRows.push({ line, reason: !question ? "missing question" : "missing answer" });
+      continue;
+    }
+    const questionKey = question.slice(0, 500).trim().toLowerCase();
+    if (seenQuestions.has(questionKey)) {
+      skipped++;
       continue;
     }
     if (imported >= CSV_ROW_CAP) {
@@ -511,11 +532,12 @@ export async function importFaqCsv(shopId: string, csvText: string): Promise<Faq
         position: await nextPosition(categoryId),
       },
     });
+    seenQuestions.add(questionKey);
     imported++;
   }
 
   if (imported > 0) await syncFaqKnowledgeSafe(shopId);
-  return { imported, badRows };
+  return { imported, badRows, headerSkipped: hadHeader, skipped };
 }
 
 /**
@@ -556,6 +578,6 @@ async function syncFaqKnowledgeSafe(shopId: string): Promise<void> {
   try {
     await syncFaqKnowledge(shopId);
   } catch (error) {
-    console.error("faq_knowledge_sync_error", shopId, error);
+    logError("faq_knowledge_sync_error", error, { shopId });
   }
 }

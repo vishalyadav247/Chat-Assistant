@@ -168,7 +168,7 @@ export function ChatboxGeneral(props: {
           // (visible field labels off — they floated mid-row and misaligned
           // everything) | delete. The value input flexes to fill the card.
           <div key={method.type} data-drag-row {...methodDrag.rowProps(index)}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 0" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 0", flexWrap: "wrap" }}>
               <DragHandle
                 label={`Reorder ${CONTACT_LABELS[method.type]}`}
                 drag={methodDrag.handleProps(index)}

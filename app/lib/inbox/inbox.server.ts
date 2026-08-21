@@ -3,6 +3,7 @@ import db from "../../db.server";
 import { recordEvent } from "../analytics/events.server";
 import { getShopConfig } from "../config/shop-config.server";
 import { notifyMerchantHandover } from "../notify.server";
+import { touchAgentPresence } from "../settings/availability.server";
 import { shopSettingsSchema } from "../settings/schemas";
 import { requireShopId } from "../tenancy.server";
 
@@ -32,6 +33,11 @@ export interface InboxListRow {
 /** All non-test conversations for the shop, newest first, with contact name + last-message preview. */
 export async function listConversations(shopId: string): Promise<InboxListRow[]> {
   requireShopId(shopId);
+  // "Agent online" (spec 16) = an admin session active in the inbox. The list
+  // loader runs on every inbox render and on the SSE/30s revalidation, so it is
+  // the heartbeat; the widget status line and executeHandover read it back
+  // through isAgentOnline(). Shopper-facing functions below never stamp it.
+  touchAgentPresence(shopId);
   const rows = await db.conversation.findMany({
     where: { shopId, isTest: false },
     orderBy: { lastMessageAt: "desc" },
@@ -122,6 +128,7 @@ export async function getConversationDetail(
   conversationId: string,
 ): Promise<InboxConversationDetail | null> {
   requireShopId(shopId);
+  touchAgentPresence(shopId);
   const convo = await db.conversation.findFirst({
     where: { id: conversationId, shopId, isTest: false },
   });
@@ -179,8 +186,11 @@ export async function sendAgentReply(
   content: string,
 ): Promise<boolean> {
   requireShopId(shopId);
+  touchAgentPresence(shopId);
   const updated = await db.conversation.updateMany({
-    where: { id: conversationId, shopId },
+    // Blocked visitors can't be replied to (the UI disables the composer; the
+    // action path must agree).
+    where: { id: conversationId, shopId, blocked: false },
     data: { mode: "human", status: "open", endedAt: null, lastMessageAt: new Date() },
   });
   if (updated.count === 0) return false;
@@ -198,11 +208,15 @@ export async function setResolved(
   resolved: boolean,
 ): Promise<boolean> {
   requireShopId(shopId);
+  touchAgentPresence(shopId);
   const updated = await db.conversation.updateMany({
     where: { id: conversationId, shopId },
     data: resolved
-      ? { status: "resolved", mode: "ai", endedAt: new Date() }
-      : { status: "open", endedAt: null },
+      ? { status: "resolved", mode: "ai", endedAt: new Date(), unread: false }
+      // Reopen hands the thread back to the AI. Resolve already parks mode at
+      // "ai", so this is the invariant made explicit rather than assumed of
+      // every row that ever reaches "resolved" (seeds, imports, older builds).
+      : { status: "open", mode: "ai", endedAt: null },
   });
   if (updated.count === 0) return false;
   if (resolved) {
@@ -226,6 +240,7 @@ export async function setStarred(
   starred: boolean,
 ): Promise<boolean> {
   requireShopId(shopId);
+  touchAgentPresence(shopId);
   const updated = await db.conversation.updateMany({
     where: { id: conversationId, shopId },
     data: { starred },
@@ -235,6 +250,7 @@ export async function setStarred(
 
 export async function markRead(shopId: string, conversationId: string): Promise<boolean> {
   requireShopId(shopId);
+  touchAgentPresence(shopId);
   const updated = await db.conversation.updateMany({
     where: { id: conversationId, shopId },
     data: { unread: false },
@@ -266,6 +282,7 @@ export async function deleteConversation(shopId: string, conversationId: string)
   });
   if (!owned) return false;
   await db.message.deleteMany({ where: { shopId, conversationId } });
+  await db.unresolvedQuestion.deleteMany({ where: { shopId, conversationId } });
   await db.conversation.deleteMany({ where: { id: conversationId, shopId } });
   return true;
 }
@@ -310,7 +327,7 @@ export async function autoResolveInactive(now: Date = new Date()): Promise<numbe
     for (const convo of stale) {
       const updated = await db.conversation.updateMany({
         where: { id: convo.id, shopId: shop.id, status: "open" },
-        data: { status: "resolved", mode: "ai", endedAt: now },
+        data: { status: "resolved", mode: "ai", endedAt: now, unread: false },
       });
       if (updated.count === 0) continue;
       await db.message.create({
@@ -335,6 +352,7 @@ export interface WidgetThreadState {
   messages: { id: string; role: string; author: string; content: string; createdAt: Date }[];
   mode: string;
   status: string;
+  blocked: boolean;
 }
 
 /**
@@ -353,7 +371,7 @@ export async function getWidgetThreadState(
   const convo = await db.conversation.findFirst({
     // sessionId binds the lookup to the caller's own widget session (C1).
     where: { id: conversationId, shopId, ...(sessionId ? { sessionId } : {}) },
-    select: { mode: true, status: true },
+    select: { mode: true, status: true, blocked: true },
   });
   if (!convo) return null;
 
@@ -377,7 +395,7 @@ export async function getWidgetThreadState(
     });
   }
 
-  return { messages, mode: convo.mode, status: convo.status };
+  return { messages, mode: convo.mode, status: convo.status, blocked: convo.blocked };
 }
 
 export interface WidgetHistoryMessage {
@@ -398,16 +416,24 @@ export async function getWidgetThreadHistory(
   shopId: string,
   conversationId: string,
   sessionId: string,
-): Promise<{ messages: WidgetHistoryMessage[]; mode: string; status: string } | null> {
+): Promise<{
+  messages: WidgetHistoryMessage[];
+  mode: string;
+  status: string;
+  blocked: boolean;
+} | null> {
   requireShopId(shopId);
   const convo = await db.conversation.findFirst({
     where: { id: conversationId, shopId, sessionId },
-    select: { mode: true, status: true },
+    select: { mode: true, status: true, blocked: true },
   });
   if (!convo) return null;
 
   const messages = await db.message.findMany({
-    where: { shopId, conversationId, role: { in: ["in", "out"] } },
+    // "sys" included so handover/resolve notices survive a page navigation —
+    // the poll returns them, so omitting them here made them vanish on
+    // restore (QA D10).
+    where: { shopId, conversationId, role: { in: ["in", "out", "sys"] } },
     orderBy: { createdAt: "asc" },
     take: 100,
     select: {
@@ -419,7 +445,7 @@ export async function getWidgetThreadHistory(
       createdAt: true,
     },
   });
-  return { messages, mode: convo.mode, status: convo.status };
+  return { messages, mode: convo.mode, status: convo.status, blocked: convo.blocked };
 }
 
 // ── Leave-a-message / collect-email form (proxy.handover-form) ──────────────

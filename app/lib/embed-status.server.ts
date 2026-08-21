@@ -1,5 +1,7 @@
 import { unauthenticated } from "../shopify.server";
 import { assertShopDomain } from "./tenancy.server";
+import { runtimeConfig } from "./platform/runtime-config.server";
+import { logError } from "./log.server";
 
 // Theme app-embed detection (spec 13): reads the published (MAIN) theme's
 // config/settings_data.json via the Admin GraphQL theme files API and looks
@@ -87,7 +89,7 @@ export async function getEmbedStatus(shopDomain: string): Promise<EmbedStatus> {
   // The themes query needs read_themes, which the app deliberately doesn't
   // request yet — skip the guaranteed-to-fail Admin call (rate-limit + log
   // noise, review m3) until the flag is enabled alongside the scope.
-  if (process.env.EMBED_STATUS_ENABLED !== "1") return "unknown";
+  if (!runtimeConfig().embedStatusEnabled) return "unknown";
   const hit = cache().get(shopDomain);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.status;
 
@@ -103,7 +105,7 @@ export async function getEmbedStatus(shopDomain: string): Promise<EmbedStatus> {
     // Missing scope / no MAIN theme / non-text body → stays "unknown".
   } catch (error) {
     // Scope errors, throttles, JSON parse failures — all resolve to "unknown".
-    console.error("embed_status_error", shopDomain, error);
+    logError("embed_status_error", error, { shopDomain });
     status = "unknown";
   }
 

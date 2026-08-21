@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useIsMobile } from "../lib/ui/use-mobile";
 import type { MetafieldDefinitionRow } from "../lib/ingestion/metafields.server";
 import type { ProductDetail, ProductRow, TrainingActionResult } from "../routes/app.ai-agent.training";
 import { DataTable } from "./DataTable";
@@ -41,6 +42,7 @@ export function TrainingProductsTab(props: {
   metafieldQuota: number;
   metafieldSyncAt: string | null;
 }) {
+  const isMobile = useIsMobile();
   const { submit, pendingIntent } = useTrainingFetcher();
   const syncWatch = useSyncWatcher(props.lastSyncedAt, "Products synced");
   const [subTab, setSubTab] = useState<SubTab>("all");
@@ -278,7 +280,8 @@ export function TrainingProductsTab(props: {
               )}
             </ViewRow>
             <ViewRow label="Vendor">{detail.vendor || "—"}</ViewRow>
-            <ViewRow label="FAQs">{String(detail.faqCount)}</ViewRow>
+            {/* No product↔FAQ association exists (FAQs live under categories),
+                so the old row always showed a hard-coded 0 (QA D12d). */}
             <ViewRow label="Description">{detail.description || "—"}</ViewRow>
 
             <s-heading>Tags</s-heading>
@@ -322,8 +325,8 @@ export function TrainingProductsTab(props: {
                 {detail.metafields.map((m, index) => (
                   <s-grid
                     key={`${m.label}-${index}`}
-                    gridTemplateColumns="140px 1fr auto"
-                    gap="base"
+                    gridTemplateColumns={isMobile ? "100px minmax(0,1fr) auto" : "140px 1fr auto"}
+                    gap={isMobile ? "small-200" : "base"}
                     alignItems="start"
                   >
                     <s-text color="subdued" type="strong">
@@ -354,9 +357,10 @@ export function TrainingProductsTab(props: {
 }
 
 function ViewRow(props: { label: string; children: React.ReactNode }) {
+  const isMobile = useIsMobile();
   return (
     <s-stack gap="small-200">
-      <s-grid gridTemplateColumns="140px 1fr" gap="base" alignItems="start">
+      <s-grid gridTemplateColumns={isMobile ? "110px minmax(0,1fr)" : "140px 1fr"} gap="base" alignItems="start">
         <s-text color="subdued" type="strong">
           {props.label}
         </s-text>

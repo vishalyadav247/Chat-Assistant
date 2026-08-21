@@ -11,7 +11,7 @@ import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
 import { env } from "../lib/env.server";
 import { reviewFallbackUrl } from "../lib/review";
-import { resolveAvailability } from "../lib/settings/availability.server";
+import { resolveAvailabilityFor } from "../lib/settings/availability.server";
 import { applySettingsIntent, loadShopSettings } from "../lib/settings/save.server";
 import {
   downloadDataRequest,
@@ -64,7 +64,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const ownerMember = members.find((m) => m.role === "owner") ?? null;
 
   const timezone = shop?.timezone || "UTC";
-  const preview = resolveAvailability(settings.availability, timezone);
+  const preview = await resolveAvailabilityFor(shopId, settings.availability, timezone);
   // Pre-formatted dates follow the shop's global date format (Store information).
   const dtPrefs = { dateFormat: settings.storeInfo.dateFormat, timeFormat: settings.storeInfo.timeFormat, timeZone: timezone };
   const formatDate = (date: Date) => formatDateWithPrefs(date, dtPrefs);
@@ -123,6 +123,32 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { shopId, shopDomain } = access;
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
+  // The SaveBar submits every dirty tab at once (the draft spans all views),
+  // so one round-trip can carry several slices. Each is applied in order —
+  // applySettingsIntent re-reads the blob per call, so merges never clobber.
+  if (intent === "save-settings") {
+    let slices: Array<{ intent: string; payload: unknown }> = [];
+    try {
+      slices = JSON.parse(String(formData.get("payload") ?? "[]"));
+    } catch {
+      return { ok: false as const, intent, error: "Couldn't read the settings payload." };
+    }
+    if (!Array.isArray(slices) || slices.length === 0) {
+      return { ok: false as const, intent, error: "Nothing to save." };
+    }
+    for (const slice of slices) {
+      const sliceForm = new FormData();
+      sliceForm.set("intent", String(slice?.intent ?? ""));
+      sliceForm.set("payload", JSON.stringify(slice?.payload ?? {}));
+      const result = await applySettingsIntent({
+        shopId,
+        shopDomain: shopDomain,
+        formData: sliceForm,
+      });
+      if (!result.ok) return { ...result, intent };
+    }
+    return { ok: true as const, intent };
+  }
   if (isTeamIntent(intent)) {
     let raw: unknown = {};
     try {
@@ -227,59 +253,110 @@ export default function SettingsPage() {
 
   const [draft, setDraft] = useState<ShopSettingsData>(data.settings);
   const [timezone, setTimezone] = useState(data.timezone);
+
+  // Reset the draft only when the SAVED blob changes (save / reload) — logo
+  // upload, team invites and data-request downloads revalidate the loader
+  // without touching these fields, and must not wipe in-progress edits
+  // (same guard as app.chatbox.tsx). logoUrl is excluded here because it IS
+  // persisted by its own fetcher; it is merged into the draft below.
+  const savedJson = useMemo(
+    () =>
+      JSON.stringify({
+        settings: { ...data.settings, storeInfo: { ...data.settings.storeInfo, logoUrl: null } },
+        timezone: data.timezone,
+      }),
+    [data.settings, data.timezone],
+  );
+  const lastSaved = useRef(savedJson);
   useEffect(() => {
+    if (lastSaved.current === savedJson) return;
+    lastSaved.current = savedJson;
+    setDraft(data.settings);
+    setTimezone(data.timezone);
+  }, [savedJson, data.settings, data.timezone]);
+
+  // Logo upload / remove persist immediately (SettingsGeneral's own fetcher):
+  // merge just that one field so the rest of the draft survives.
+  const savedLogoUrl = data.settings.storeInfo.logoUrl;
+  useEffect(() => {
+    setDraft((d) =>
+      d.storeInfo.logoUrl === savedLogoUrl
+        ? d
+        : { ...d, storeInfo: { ...d.storeInfo, logoUrl: savedLogoUrl } },
+    );
+  }, [savedLogoUrl]);
+
+  const saving = fetcher.state !== "idle";
+  // Dirty across EVERY slice, not just the visible tab: switching tabs must
+  // not hide (and then silently drop) another tab's unsaved edits.
+  const dirtyViews = useMemo(
+    () =>
+      VIEWS.filter(
+        (v) =>
+          JSON.stringify(sliceFor(v, draft, timezone)) !==
+          JSON.stringify(sliceFor(v, data.settings, data.timezone)),
+      ),
+    [draft, timezone, data.settings, data.timezone],
+  );
+  const dirty = dirtyViews.length > 0;
+
+  const save = useCallback(() => {
+    if (dirtyViews.length === 0) return;
+    fetcher.submit(
+      {
+        intent: "save-settings",
+        payload: JSON.stringify(
+          dirtyViews.map((v) => ({
+            intent: INTENTS[v],
+            payload: sliceFor(v, draft, timezone),
+          })),
+        ),
+      },
+      { method: "post" },
+    );
+  }, [fetcher, dirtyViews, draft, timezone]);
+
+  const discard = useCallback(() => {
     setDraft(data.settings);
     setTimezone(data.timezone);
   }, [data.settings, data.timezone]);
 
-  const saving = fetcher.state !== "idle";
-  const dirty = useMemo(
-    () =>
-      JSON.stringify(sliceFor(view, draft, timezone)) !==
-      JSON.stringify(sliceFor(view, data.settings, data.timezone)),
-    [view, draft, timezone, data.settings, data.timezone],
+  const discardView = useCallback(
+    (view: View) => {
+      const init = data.settings;
+      setDraft((current) => {
+        switch (view) {
+          case "general":
+            return {
+              ...current,
+              theme: init.theme,
+              inbox: init.inbox,
+              storeInfo: {
+                ...current.storeInfo,
+                name: init.storeInfo.name,
+                dateFormat: init.storeInfo.dateFormat,
+                timeFormat: init.storeInfo.timeFormat,
+              },
+            };
+          case "chatbox":
+            return { ...current, cartDrawer: init.cartDrawer, orderTracking: init.orderTracking };
+          case "availability":
+            return { ...current, availability: init.availability };
+          case "survey":
+            return { ...current, survey: init.survey };
+          case "privacy":
+            return { ...current, retentionDays: init.retentionDays };
+        }
+      });
+      if (view === "availability") setTimezone(data.timezone);
+    },
+    [data.settings, data.timezone],
   );
 
-  const save = useCallback(() => {
-    fetcher.submit(
-      { intent: INTENTS[view], payload: JSON.stringify(sliceFor(view, draft, timezone)) },
-      { method: "post" },
-    );
-  }, [fetcher, view, draft, timezone]);
-
-  const discard = useCallback(() => {
-    const init = data.settings;
-    setDraft((current) => {
-      switch (view) {
-        case "general":
-          return {
-            ...current,
-            theme: init.theme,
-            inbox: init.inbox,
-            storeInfo: {
-              ...current.storeInfo,
-              name: init.storeInfo.name,
-              dateFormat: init.storeInfo.dateFormat,
-              timeFormat: init.storeInfo.timeFormat,
-            },
-          };
-        case "chatbox":
-          return { ...current, cartDrawer: init.cartDrawer, orderTracking: init.orderTracking };
-        case "availability":
-          return { ...current, availability: init.availability };
-        case "survey":
-          return { ...current, survey: init.survey };
-        case "privacy":
-          return { ...current, retentionDays: init.retentionDays };
-      }
-    });
-    if (view === "availability") setTimezone(data.timezone);
-  }, [view, data.settings, data.timezone]);
-
   const cancelSubView = useCallback(() => {
-    discard();
+    discardView(view);
     go("chatbox");
-  }, [discard, go]);
+  }, [discardView, view, go]);
 
   // Data-request export round-trip → client-side download. Same pattern as the
   // contacts CSV export (app.contacts.tsx): in the embedded admin only

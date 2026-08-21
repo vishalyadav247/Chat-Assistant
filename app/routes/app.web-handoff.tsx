@@ -2,6 +2,7 @@ import type { ActionFunctionArgs, HeadersFunction } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { requireAdminSurface } from "../lib/access.server";
 import { ensureOwnerMember, mintHandoffToken, webBaseUrl } from "../lib/team/team.server";
+import { logError } from "../lib/log.server";
 
 // Admin → web handoff (spec 18). Only reachable from the embedded admin
 // (authenticate.admin behind requireAdminSurface): creates/refreshes the owner
@@ -15,7 +16,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const token = await mintHandoffToken(access.shopId, owner.id, request.headers.get("user-agent"));
     return { ok: true as const, url: `${webBaseUrl()}/web/handoff?t=${encodeURIComponent(token)}` };
   } catch (error) {
-    console.error("web_handoff_error", error);
+    logError("web_handoff_error", error);
     return { ok: false as const, error: "Couldn't prepare the web session. Try again." };
   }
 };

@@ -3,7 +3,8 @@ import db from "../db.server";
 import { authenticate } from "../shopify.server";
 import { enqueue } from "../lib/jobs/queue.server";
 import { JOBS } from "../lib/jobs/handlers.server";
-import { resolveShopId } from "../lib/tenancy.server";
+import { invalidateShopConfig } from "../lib/config/shop-config.server";
+import { logWarn } from "../lib/log.server";
 
 // Mandatory GDPR compliance webhooks (app review requirement).
 // authenticate.webhook rejects invalid HMAC with 401 automatically; valid
@@ -13,9 +14,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   switch (topic) {
     case "CUSTOMERS_DATA_REQUEST": {
-      const shopId = await resolveShopId(shop);
+      // QA D11: non-creating lookup — a webhook for a shop we have no row for
+      // (never installed / already purged) holds nothing to export.
+      const shopRow = await db.shop.findUnique({ where: { domain: shop }, select: { id: true } });
+      if (!shopRow) {
+        logWarn("customers_data_request_unknown_shop", undefined, { shopDomain: shop });
+        break;
+      }
+      const shopId = shopRow.id;
       const p = payload as { customer?: { email?: string } };
-      const customerEmail = p.customer?.email ?? "";
+      const customerEmail = (p.customer?.email ?? "").trim();
+      if (!customerEmail) {
+        // Nothing to match a contact on — an empty-email DataRequest row would
+        // be unfulfillable. Log (no PII) so the SLA clock is still visible.
+        logWarn("customers_data_request_missing_email", undefined, { shopId });
+        break;
+      }
       // Review m2: Shopify redelivers on timeout — don't stack duplicate
       // pending requests for the same customer (no dedicated id column;
       // a recent pending row for the same email is the same request).
@@ -57,10 +71,27 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       if (shopRow && !shopRow.uninstalledAt) {
         const liveSessions = await db.session.count({ where: { shop } });
         if (liveSessions === 0) {
+          // Sessions are gone too — kill them explicitly in case app/uninstalled
+          // never arrived (they hold the revoked offline token + owner PII).
+          await db.session.deleteMany({ where: { shop } });
+          // Billing (QA D6): this branch only runs when app/uninstalled was
+          // MISSED, so nothing has reset the plan yet. Shopify cancels every
+          // app subscription on uninstall, so the stored subscription is dead —
+          // leaving `plan` on a paid tier would hand the merchant that tier for
+          // free the moment they reinstall inside the 7-day grace window.
           await db.shop.update({
             where: { id: shopRow.id },
-            data: { uninstalledAt: new Date() },
+            data: {
+              uninstalledAt: new Date(),
+              plan: "free",
+              planStatus: "none",
+              subscriptionId: null,
+              billingInterval: null,
+              trialEndsAt: null,
+              usageLineItemId: null,
+            },
           });
+          invalidateShopConfig(shopRow.id);
         }
       }
       break;

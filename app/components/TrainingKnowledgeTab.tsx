@@ -93,13 +93,35 @@ export function TrainingKnowledgeTab(props: {
   const [policySelection, setPolicySelection] = useState<Set<string>>(new Set());
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
+  // Last server-CONFIRMED policy selection — the revert target when an
+  // optimistic toggle is rejected (QA D8). A ref, so it can't go stale
+  // between a save and the next toggle.
+  const confirmedPolicies = useRef<string[]>([]);
+  const pendingPolicies = useRef<string[]>([]);
+
   const { submit, busy } = useTrainingFetcher((result: TrainingActionResult) => {
     if (result.intent === "policies-list" && result.ok && result.policies) {
       setPolicies(result.policies);
       setPolicySelection(new Set(result.policies.selectedTypes));
+      confirmedPolicies.current = result.policies.selectedTypes;
       return;
     }
-    if (!result.ok) return;
+    if (!result.ok) {
+      // The policies switch flips optimistically; a rejected save (quota, no
+      // matching pages) must put it back or the UI lies about what's
+      // connected and the "N of M pages used" meter drifts.
+      if (result.intent === "policies-save") {
+        setPolicySelection(new Set(confirmedPolicies.current));
+      }
+      return;
+    }
+    if (result.intent === "policies-save") {
+      confirmedPolicies.current = pendingPolicies.current;
+      setPolicies((prev) =>
+        prev ? { ...prev, selectedTypes: pendingPolicies.current } : prev,
+      );
+      return;
+    }
     switch (result.intent) {
       case "source-add-manual":
       case "source-update":
@@ -149,7 +171,8 @@ export function TrainingKnowledgeTab(props: {
   };
 
   const savePolicies = (nextSelection: Set<string>) => {
-    submit("policies-save", { payload: JSON.stringify({ types: Array.from(nextSelection) }) });
+    pendingPolicies.current = Array.from(nextSelection);
+    submit("policies-save", { payload: JSON.stringify({ types: pendingPolicies.current }) });
   };
 
   const openEdit = (source: SourceRow) => {
@@ -708,7 +731,7 @@ export function TrainingKnowledgeTab(props: {
           >
             <input
               type="file"
-              accept=".txt,.json,.pdf,.docx"
+              accept=".txt,.json"
               aria-label="Choose a file"
               onChange={(e) => onPickFile(e.currentTarget.files?.[0] ?? null)}
             />
@@ -716,7 +739,7 @@ export function TrainingKnowledgeTab(props: {
           </div>
           <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, lineHeight: 1.9 }}>
             <li>Supported formats today: .txt, .json</li>
-            <li>.pdf and .docx are listed but the parser is pending — they&apos;ll save with an error</li>
+            <li>.pdf and .docx aren&apos;t supported yet — the parser is still pending</li>
             <li>Maximum file size: 2MB</li>
           </ul>
           {fileError ? <s-text tone="critical">{fileError}</s-text> : null}

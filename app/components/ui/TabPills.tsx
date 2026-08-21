@@ -14,6 +14,7 @@ export function TabPills<T extends string>(props: {
   return (
     <div
       role="tablist"
+      className="cc-tabpills"
       style={{
         display: "inline-flex",
         gap: SPACE.xs,

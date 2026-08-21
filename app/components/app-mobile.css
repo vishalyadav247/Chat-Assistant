@@ -1,0 +1,148 @@
+/* Global mobile rules (spec 19). Loaded for every /app page on BOTH surfaces
+   via app.tsx `links`. Every rule is gated behind @media so desktop rendering
+   (≥769px, fine pointer) is byte-identical. Opt-in classes:
+     .cc-split       — editor + fixed side-panel grid; stacks to one column
+     .cc-mobile-only — rendered only ≤768px
+     .cc-desktop-only— hidden ≤768px
+     .cc-reorder-btns— DragHandle's visible up/down fallback on touch devices
+   !important is required: the layouts these classes attach to are React inline
+   styles, which otherwise always win over a linked stylesheet. */
+
+@media (min-width: 769px) {
+  .cc-mobile-only {
+    display: none !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .cc-desktop-only {
+    display: none !important;
+  }
+
+  /* Safety net: a stray wide element must scroll inside its own container,
+     never pan the whole document. */
+  html,
+  body {
+    overflow-x: hidden;
+  }
+
+  .cc-split {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .cc-split > * {
+    position: static !important;
+    max-width: 100% !important;
+  }
+
+  /* AI test console chat card: full 560px doesn't fit a phone viewport. */
+  .cc-testchat {
+    height: min(560px, 70dvh) !important;
+  }
+
+  /* iOS Safari zooms the page when a focused control's font is <16px. */
+  input:not([type="checkbox"]):not([type="radio"]),
+  textarea,
+  select {
+    font-size: 16px;
+  }
+
+  /* KPI tiles: stacked single column of flat compact tiles (Chatty
+     reference dashboard.png / analytics.png). */
+  .cc-statgrid {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 10px !important;
+  }
+  .cc-stattile {
+    padding: 11px 14px 10px !important;
+    border-radius: 12px !important;
+    gap: 5px !important;
+  }
+  .cc-stattile-value {
+    font-size: 21px !important;
+    letter-spacing: -0.4px !important;
+  }
+
+  /* Tab pills: one horizontally-scrollable row (Chatty tabs pattern) instead
+     of wrapping into a tall block. */
+  .cc-tabpills {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    width: auto !important;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .cc-tabpills::-webkit-scrollbar {
+    display: none;
+  }
+  .cc-tabpills > button {
+    flex: none;
+    white-space: nowrap;
+  }
+
+  /* Plan cards: swipeable snap carousel with a peeking next card
+     (Chatty reference plans.png). */
+  .cc-plan-carousel {
+    grid-template-columns: none !important;
+    grid-auto-flow: column;
+    grid-auto-columns: 82%;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    gap: 10px !important;
+    padding: 2px 2px 6px;
+  }
+  .cc-plan-carousel::-webkit-scrollbar {
+    display: none;
+  }
+  .cc-plan-carousel > * {
+    scroll-snap-align: center;
+  }
+
+  /* Analytics line chart: pan instead of shrinking axis labels to ~4px. */
+  .cc-chart-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .cc-chart-scroll > svg {
+    min-width: 640px;
+  }
+
+  /* Contact detail panel: header action buttons may exceed a phone width. */
+  .cc-panel-head {
+    flex-wrap: wrap;
+  }
+
+  /* DataTable footer: the desktop 1fr/auto/1fr grid overflows a phone —
+     center the pager and let the per-page cluster wrap under it. */
+  .dt-pager {
+    display: flex !important;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+  }
+  .dt-pager-spacer,
+  .dt-pp-label {
+    display: none !important;
+  }
+  .dt-pager-end {
+    white-space: normal !important;
+    flex-wrap: wrap;
+  }
+}
+
+/* Touch devices can't use HTML5 drag — reveal the up/down fallback buttons
+   that mirror the DragHandle's existing ArrowUp/ArrowDown keyboard support. */
+.cc-reorder-btns {
+  display: none;
+}
+@media (pointer: coarse) {
+  .cc-reorder-btns {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+  }
+}

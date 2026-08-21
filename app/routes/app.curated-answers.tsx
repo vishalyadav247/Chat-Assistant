@@ -12,6 +12,8 @@ import {
   saveCuratedAnswer,
 } from "../lib/curated/save.server";
 import { revalidateCuratedStock } from "../lib/curated/revalidate.server";
+import { NOT_TEST_EVENT } from "../lib/analytics/events.server";
+import { isPurchasable } from "../lib/search/product-search.server";
 import { StatGrid, StatTile } from "../components/ui/StatTile";
 import { QuotaMeter } from "../components/QuotaMeter";
 import { DataTable } from "../components/DataTable";
@@ -61,6 +63,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         shopId,
         type: { in: ["curated_served", "turn_completed"] },
         occurredAt: { gte: monthStart },
+        // Test-AI turns must not move merchant KPIs (QA D3).
+        ...NOT_TEST_EVENT,
       },
       _count: { _all: true },
     }),
@@ -71,13 +75,28 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const products = gids.length
     ? await db.product.findMany({
         where: { shopId, shopifyProductId: { in: gids } },
-        select: { shopifyProductId: true, title: true, imageUrl: true, stock: true },
+        select: {
+          shopifyProductId: true,
+          title: true,
+          imageUrl: true,
+          stock: true,
+          variants: true,
+        },
       })
     : [];
-  const productMeta: Record<string, { title: string; imageUrl: string | null; stock: number }> =
-    {};
+  // "Out of stock" must mean what the pipeline means (QA D4): a product with
+  // stock 0 but an available variant IS still served, so it is not dead stock.
+  const productMeta: Record<
+    string,
+    { title: string; imageUrl: string | null; stock: number; purchasable: boolean }
+  > = {};
   for (const p of products) {
-    productMeta[p.shopifyProductId] = { title: p.title, imageUrl: p.imageUrl, stock: p.stock };
+    productMeta[p.shopifyProductId] = {
+      title: p.title,
+      imageUrl: p.imageUrl,
+      stock: p.stock,
+      purchasable: isPurchasable(p),
+    };
   }
 
   const countOf = (type: string) =>
@@ -171,12 +190,16 @@ export default function CuratedAnswersPage() {
   const [baseline, setBaseline] = useState<string>(() => JSON.stringify(emptyDraft()));
   const [browseOpen, setBrowseOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Save errors live in state, not in fetcher.data: a derived banner survives
+  // into the NEXT draft the merchant opens because fetcher.data sticks around
+  // (QA D12f). Cleared whenever an editor is (re-)opened.
+  const [saveError, setSaveError] = useState<{ error?: string; code?: string } | null>(null);
   const [extraMeta, setExtraMeta] = useState<Record<string, BrowseItemMeta>>({});
 
   const meta = useMemo(
     () => ({ ...extraMeta, ...data.productMeta }) as Record<
       string,
-      BrowseItemMeta & { stock?: number }
+      BrowseItemMeta & { stock?: number; purchasable?: boolean }
     >,
     [data.productMeta, extraMeta],
   );
@@ -192,6 +215,7 @@ export default function CuratedAnswersPage() {
     setDraft(next);
     setBaseline(JSON.stringify(next));
     setConfirmDelete(false);
+    setSaveError(null);
     setView("editor");
   };
 
@@ -208,6 +232,7 @@ export default function CuratedAnswersPage() {
     setDraft(next);
     setBaseline(JSON.stringify(next));
     setConfirmDelete(false);
+    setSaveError(null);
     setView("editor");
   };
 
@@ -218,6 +243,7 @@ export default function CuratedAnswersPage() {
       shopify.toast.show("Add a shopper question before saving", { isError: true });
       return;
     }
+    setSaveError(null);
     fetcher.submit(
       { intent: "save", payload: JSON.stringify({ ...draft, id: draft.id ?? undefined }) },
       { method: "post" },
@@ -255,6 +281,9 @@ export default function CuratedAnswersPage() {
     if (fetcher.state !== "idle" || !fetcher.data || processed.current === fetcher.data) return;
     processed.current = fetcher.data;
     const result = fetcher.data;
+    if (result.intent === "save") {
+      setSaveError(result.ok ? null : { error: result.error, code: result.code });
+    }
     if (result.intent === "save" && result.ok) {
       shopify.toast.show(
         result.warning === "embedding_failed"
@@ -273,11 +302,6 @@ export default function CuratedAnswersPage() {
       );
     }
   }, [fetcher.state, fetcher.data, shopify]);
-
-  const saveError =
-    fetcher.state === "idle" && fetcher.data?.intent === "save" && !fetcher.data.ok
-      ? fetcher.data
-      : null;
 
   const suggestionsCard = (
     <s-section heading="Suggestions">
@@ -447,6 +471,7 @@ export default function CuratedAnswersPage() {
               <s-heading>{draft.id ? "Edit curated answer" : "Add curated answer"}</s-heading>
             </s-stack>
           <div
+            className="cc-split"
             style={{
               display: "grid",
               gridTemplateColumns: "minmax(0, 1fr) 300px",
@@ -533,7 +558,9 @@ export default function CuratedAnswersPage() {
                     <div>
                       {draft.productIds.map((gid) => {
                         const m = meta[gid];
-                        const outOfStock = typeof m?.stock === "number" && m.stock <= 0;
+                        // Shared purchasable predicate (QA D4) — stock 0 with an
+                        // available variant is NOT out of stock.
+                        const outOfStock = m ? m.purchasable === false : false;
                         return (
                           <div
                             key={gid}
@@ -617,6 +644,8 @@ export default function CuratedAnswersPage() {
         open={browseOpen}
         onClose={() => setBrowseOpen(false)}
         selectedIds={draft.productIds}
+        // Mirrors curatedAnswerInput.productIds.max(20) (save.server.ts).
+        maxSelected={20}
         onConfirm={(ids, newMeta) => {
           setDraft((d) => ({ ...d, productIds: ids }));
           if (newMeta) setExtraMeta((prev) => ({ ...prev, ...newMeta }));

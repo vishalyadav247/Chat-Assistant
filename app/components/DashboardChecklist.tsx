@@ -48,14 +48,23 @@ export function DashboardChecklist(props: {
                         step.state === "done"
                           ? "success"
                           : step.state === "unknown"
-                            ? "warning"
+                            ? "info"
                             : "neutral"
                       }
                     >
-                      {step.state === "done" ? "Done" : step.state === "unknown" ? "Verify" : "To do"}
+                      {step.state === "done" ? "Done" : step.state === "unknown" ? "Info" : "To do"}
                     </s-badge>
                     {step.state === "done" ? (
                       <s-text tone="neutral">{step.label}</s-text>
+                    ) : step.state === "unknown" ? (
+                      // Not counted in the progress ring — can't be verified
+                      // without the read_themes scope (dashboard.server.ts).
+                      <s-stack gap="small-300">
+                        <s-text>{step.label}</s-text>
+                        <s-text tone="neutral">
+                          Can&apos;t verify automatically — check in Theme editor
+                        </s-text>
+                      </s-stack>
                     ) : (
                       <s-text>{step.label}</s-text>
                     )}

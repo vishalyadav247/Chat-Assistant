@@ -58,7 +58,9 @@ type JobHandler = (jobs: Array<{ data: never }>) => Promise<void>;
 
 async function main() {
   const { default: db } = await import("../app/db.server");
-  const { registerHandlers, cleanupShop, JOBS } = await import("../app/lib/jobs/handlers.server");
+  const { registerHandlers, cleanupShop, countShopRows, JOBS } = await import(
+    "../app/lib/jobs/handlers.server"
+  );
   const { buildDataRequestExport, downloadDataRequest, pendingDataRequests } = await import(
     "../app/lib/compliance/data-request.server"
   );
@@ -77,7 +79,9 @@ async function main() {
   await registerHandlers(stubBoss as never);
   const customerRedact = handlers.get(JOBS.customerRedact);
   const retentionPurge = handlers.get(JOBS.retentionPurge);
-  if (!customerRedact || !retentionPurge) {
+  const catalogSync = handlers.get(JOBS.catalogSync);
+  const metafieldDefinitionsSync = handlers.get(JOBS.metafieldDefinitionsSync);
+  if (!customerRedact || !retentionPurge || !catalogSync || !metafieldDefinitionsSync) {
     throw new Error("failed to capture job handlers from registerHandlers()");
   }
 
@@ -102,6 +106,16 @@ async function main() {
     data: { id: `verify-compliance-session-${a}`, shop: DOMAIN_A, state: "t", accessToken: "t" },
   });
   await db.product.create({ data: { shopId: a, shopifyProductId: "gid://p/1", title: "Test product" } });
+  await db.productMetafieldDefinition.create({
+    data: {
+      shopId: a,
+      ownerType: "PRODUCT",
+      namespace: "verify",
+      key: "compliance",
+      name: "Verify",
+      type: "single_line_text_field",
+    },
+  });
   await db.collection.create({ data: { shopId: a, shopifyCollectionId: "gid://c/1", title: "Test collection" } });
   await db.discount.create({ data: { shopId: a, shopifyDiscountId: "gid://d/1", title: "Test discount" } });
   await db.syncState.create({ data: { shopId: a } });
@@ -137,6 +151,20 @@ async function main() {
   await db.metricsDaily.create({ data: { shopId: a, date: new Date(), counters: {} } });
   await db.campaign.create({ data: { shopId: a, name: "Test campaign", templateType: "welcome" } });
   await db.planUsage.create({ data: { shopId: a, periodStart: new Date() } });
+  await db.llmUsageDaily.create({
+    data: { shopId: a, date: new Date(), model: "gpt-4o-mini", purpose: "reply", calls: 1, promptTokens: 10 },
+  });
+  // Spec 21: the operator log is shop-attributed, so it must die with the shop.
+  await db.appLog.create({
+    data: { shopId: a, level: "error", event: "test_event_error", message: "seeded by verify-compliance" },
+  });
+  // Spec 15: promo redemptions are shop-scoped — they must not survive a purge.
+  const promoCode = await db.promoCode.create({
+    data: { code: `VERIFY-COMPLIANCE-${Date.now()}`, kind: "percent", value: 10, plans: [], intervals: [] },
+  });
+  await db.promoRedemption.create({
+    data: { shopId: a, promoCodeId: promoCode.id, plan: "pro", interval: "monthly", status: "redeemed" },
+  });
 
   const seedCustomer = async (email: string, secret: string, extra?: { shopifyCustomerId?: string }) => {
     const contact = await db.contact.create({
@@ -287,6 +315,10 @@ async function main() {
   // Every shop-scoped model in prisma/schema.prisma, enumerated explicitly.
   const domainTableCounts: Array<[string, number]> = [
     ["products", await db.product.count({ where: { shopId: a } })],
+    [
+      "product_metafield_definitions",
+      await db.productMetafieldDefinition.count({ where: { shopId: a } }),
+    ],
     ["collections", await db.collection.count({ where: { shopId: a } })],
     ["discounts", await db.discount.count({ where: { shopId: a } })],
     ["sync_states", await db.syncState.count({ where: { shopId: a } })],
@@ -311,11 +343,15 @@ async function main() {
     ["metrics_daily", await db.metricsDaily.count({ where: { shopId: a } })],
     ["campaigns", await db.campaign.count({ where: { shopId: a } })],
     ["plan_usage", await db.planUsage.count({ where: { shopId: a } })],
+    ["llm_usage_daily", await db.llmUsageDaily.count({ where: { shopId: a } })],
+    ["app_logs", await db.appLog.count({ where: { shopId: a } })],
     ["data_requests", await db.dataRequest.count({ where: { shopId: a } })],
     // Team logins for the standalone web app (spec 18).
     ["team_members", await db.teamMember.count({ where: { shopId: a } })],
     ["team_sessions", await db.teamSession.count({ where: { shopId: a } })],
     ["push_subscriptions", await db.pushSubscription.count({ where: { shopId: a } })],
+    // Promo redemptions (spec 15) hold a maxRedemptions slot — they must go too.
+    ["promo_redemptions", await db.promoRedemption.count({ where: { shopId: a } })],
     // sessions are keyed by shop domain, not shopId — they hold the offline token.
     ["sessions", await db.session.count({ where: { shop: DOMAIN_A } })],
   ];
@@ -331,6 +367,12 @@ async function main() {
     leftover === 0,
     domainTableCounts.map(([t, c]) => `${t}:${c}`).join(" "),
   );
+  // The purge's OWN zero-row assertion (D11c) must agree with the script's.
+  check(
+    "countShopRows() reports no leftovers after cleanupShop",
+    (await countShopRows(a, DOMAIN_A)).length === 0,
+    JSON.stringify(await countShopRows(a, DOMAIN_A)),
+  );
   check(
     "shop row kept, uninstalledAt set",
     (await db.shop.findUnique({ where: { id: a } }))?.uninstalledAt !== null,
@@ -345,10 +387,27 @@ async function main() {
       (await db.dataRequest.count({ where: { shopId: b } })) === 1,
   );
 
+  // ── 5. webhook-driven jobs never materialise a Shop row (QA D11a) ─────────
+  console.log("\n5. unknown-shop webhook jobs must not create a Shop row…");
+  const UNKNOWN_DOMAIN = "verify-compliance-unknown.myshopify.com";
+  await db.shop.deleteMany({ where: { domain: UNKNOWN_DOMAIN } });
+  await customerRedact([
+    { data: { shopDomain: UNKNOWN_DOMAIN, customerEmail: "nobody@example.com" } as never },
+  ]);
+  await catalogSync([{ data: { shopDomain: UNKNOWN_DOMAIN } as never }]);
+  await metafieldDefinitionsSync([{ data: { shopDomain: UNKNOWN_DOMAIN } as never }]);
+  check(
+    "no Shop row created for an unknown domain",
+    (await db.shop.count({ where: { domain: UNKNOWN_DOMAIN } })) === 0,
+  );
+
   // ── Cleanup all throwaway rows (including audit logs from this run) ───────
   console.log("\nCleaning up throwaway shops…");
   await cleanupShop(DOMAIN_B);
+  await db.promoRedemption.deleteMany({ where: { shopId: { in: [a, b] } } });
+  await db.promoCode.deleteMany({ where: { id: promoCode.id } });
   await db.redactLog.deleteMany({ where: { shopId: { in: [a, b] } } });
+  await db.appLog.deleteMany({ where: { shopId: { in: [a, b] } } });
   await db.shop.deleteMany({ where: { id: { in: [a, b] } } });
 
   console.log(`\n${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`}`);

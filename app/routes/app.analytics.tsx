@@ -173,7 +173,7 @@ export default function AnalyticsPage() {
   };
 
   return (
-    <s-page heading="Analytics" inlineSize="large">
+    <s-page heading="Analytics">
       <s-button
         slot="primary-action"
         variant="primary"

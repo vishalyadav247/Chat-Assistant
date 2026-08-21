@@ -3,6 +3,7 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { z } from "zod";
 import db from "../db.server";
 import { requireWebSurface } from "../lib/access.server";
+import { hasFeature } from "../lib/billing/plans.server";
 
 // Web Push subscription store (spec 18). Web surface only — the browser posts
 // PushSubscription.toJSON() after permission is granted; DELETE drops it.
@@ -37,6 +38,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const endpoint = typeof body?.endpoint === "string" ? body.endpoint : "";
     if (endpoint) await db.pushSubscription.deleteMany({ where: { shopId, memberId: member.id, endpoint } });
     return { ok: true };
+  }
+
+  // Browser push is a Basic+ feature (spec 15). DELETE stays ungated above so a
+  // downgraded shop can always unsubscribe an existing browser; only NEW
+  // subscriptions are blocked (spec 15 downgrade rule).
+  const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
+  if (!hasFeature(shop?.plan ?? "free", "push_notifications")) {
+    return new Response("not available on this plan", { status: 403 });
   }
 
   const parsed = subscriptionSchema.safeParse(body);

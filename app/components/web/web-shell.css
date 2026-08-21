@@ -1,6 +1,11 @@
 /* Standalone web shell (spec 18). ChatConvert-branded chrome around the same
-   /app pages that render inside the Shopify admin. Deliberately distinct from
-   the admin (dark rail, brand accent) — see Polaris license note in spec 18. */
+   /app pages that render inside the Shopify admin. Distinct from the admin
+   (own rail + brand accent) — see Polaris license note in spec 18.
+   Rail switched dark → LIGHT on 2026-08-20 (user: "nav bar is looking dirty,
+   I need light color bg"); shared by the web app and the /platform console. */
+body{
+  margin: 0;
+}
 
 .ccws-shell {
   display: grid;
@@ -16,8 +21,9 @@
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: #14141a;
-  color: #e6e6ea;
+  background: #ffffff;
+  color: #3a3a44;
+  border-right: 1px solid #e5e5ea;
   padding: 14px 10px;
   box-sizing: border-box;
 }
@@ -51,12 +57,12 @@
 .ccws-brandName {
   font-weight: 700;
   font-size: 14px;
-  color: #fff;
+  color: #1a1a1e;
 }
 
 .ccws-brandShop {
   font-size: 11.5px;
-  color: #9a9aa6;
+  color: #6f6a7d;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -76,7 +82,7 @@
   gap: 8px;
   padding: 8px 10px;
   border-radius: 8px;
-  color: #c9c9d2;
+  color: #4a4a53;
   text-decoration: none;
   font-size: 13px;
   font-weight: 500;
@@ -84,13 +90,32 @@
 }
 
 .ccws-navItem:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: #fff;
+  background: #f4f3f8;
+  color: #1a1a1e;
+}
+
+.ccws-navMain {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* Icons appear only in the mobile drawer — the desktop rail stays text-only. */
+.ccws-navIcon {
+  display: none;
+}
+
+.ccws-navLabel {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ccws-navItemActive {
-  background: rgba(109, 59, 245, 0.28);
-  color: #fff;
+  background: #efe8ff;
+  color: #5b2fd0;
+  font-weight: 600;
 }
 
 .ccws-badge {
@@ -107,7 +132,7 @@
 }
 
 .ccws-railFooter {
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid #ececf1;
   padding-top: 10px;
   display: flex;
   flex-direction: column;
@@ -120,7 +145,7 @@
   gap: 10px;
   padding: 8px 10px;
   border-radius: 8px;
-  color: #e6e6ea;
+  color: #3a3a44;
   text-decoration: none;
   background: transparent;
   border: 0;
@@ -131,15 +156,15 @@
 }
 
 .ccws-user:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: #f4f3f8;
 }
 
 .ccws-avatar {
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: #2a2a33;
-  color: #fff;
+  background: #efe8ff;
+  color: #5b2fd0;
   display: grid;
   place-items: center;
   font-size: 11px;
@@ -163,7 +188,7 @@
 
 .ccws-userRole {
   font-size: 11px;
-  color: #9a9aa6;
+  color: #6f6a7d;
   text-transform: capitalize;
 }
 
@@ -171,7 +196,7 @@
   display: block;
   padding: 6px 10px;
   border-radius: 8px;
-  color: #b3b3bf;
+  color: #6f6a7d;
   font-size: 12.5px;
   text-decoration: none;
   background: transparent;
@@ -183,8 +208,8 @@
 }
 
 .ccws-railLink:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: #fff;
+  background: #f4f3f8;
+  color: #1a1a1e;
 }
 
 .ccws-main {
@@ -238,26 +263,329 @@
   min-width: 0;
 }
 
+/* ── Mobile shell (spec 19): sticky top bar + slide-in drawer ≤900px ── */
+
+.ccws-topbar,
+.ccws-scrim,
+.ccws-railClose {
+  display: none;
+}
+
 @media (max-width: 900px) {
   .ccws-shell {
     grid-template-columns: 1fr;
   }
+
+  .ccws-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 90;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: calc(54px + env(safe-area-inset-top, 0px));
+    padding: env(safe-area-inset-top, 0px) 12px 0;
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+    background: #ffffff;
+    color: #1a1a1e;
+    border-bottom: 1px solid #e5e5ea;
+  }
+
+  .ccws-topbarText {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.2;
+    min-width: 0;
+  }
+
+  .ccws-topbarShop {
+    font-size: 10.5px;
+    color: #6f6a7d;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 150px;
+  }
+
+  .ccws-topbarAvatar {
+    margin-left: auto;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #6d3bf5, #3b82f6);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    display: grid;
+    place-items: center;
+    text-decoration: none;
+    flex: none;
+  }
+
+  .ccws-topbarInbox {
+    margin-left: auto;
+  }
+
+  .ccws-topbarInbox + .ccws-topbarAvatar {
+    margin-left: 0;
+  }
+
+  /* Light drawer (Chatty reference main_nav.png): canvas panel, dark text,
+     active row = white card. The DESKTOP rail keeps its dark theme — these
+     overrides live only in this mobile block. */
   .ccws-rail {
-    position: static;
-    height: auto;
-    flex-direction: row;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 6px;
+    background: #f6f6f7;
+    color: #1a1a1e;
   }
-  .ccws-nav {
-    flex-direction: row;
-    flex-wrap: wrap;
+
+  .ccws-brandName {
+    color: #1a1a1e;
   }
+
+  .ccws-brandShop {
+    color: #6b6b73;
+  }
+
+  .ccws-navItem {
+    color: #3a3a42;
+  }
+
+  .ccws-navItem:hover {
+    background: rgba(20, 20, 25, 0.05);
+    color: #1a1a1e;
+  }
+
+  .ccws-navItemActive {
+    background: #fff;
+    color: #1a1a1e;
+    box-shadow: 0 1px 4px rgba(20, 20, 25, 0.12), 0 0 0 1px rgba(20, 20, 25, 0.03);
+    font-weight: 650;
+  }
+
+  .ccws-navItemActive:hover {
+    background: #fff;
+  }
+
+  .ccws-navIcon {
+    background: transparent;
+    color: #5a5a63;
+    width: 24px;
+    height: 24px;
+  }
+
+  .ccws-navItemActive .ccws-navIcon {
+    background: transparent;
+    color: #6d3bf5;
+  }
+
+  .ccws-railClose {
+    color: #5a5a63;
+  }
+
+  .ccws-railClose:active {
+    background: rgba(20, 20, 25, 0.06);
+  }
+
   .ccws-railFooter {
-    border-top: 0;
-    padding-top: 0;
-    flex-direction: row;
+    border-top: 1px solid rgba(20, 20, 25, 0.08);
+  }
+
+  .ccws-user {
+    color: #1a1a1e;
+  }
+
+  .ccws-user:hover {
+    background: rgba(20, 20, 25, 0.05);
+  }
+
+  .ccws-userRole {
+    color: #6b6b73;
+  }
+
+  .ccws-avatar {
+    background: #e4e4ea;
+    color: #3a3a42;
+  }
+
+  .ccws-railLink {
+    color: #4a4a53;
+  }
+
+  .ccws-railLink:hover {
+    background: rgba(20, 20, 25, 0.05);
+    color: #1a1a1e;
+  }
+
+  .ccws-menuBtn {
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    margin-left: -8px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: #e6e6ea;
+    cursor: pointer;
+  }
+
+  .ccws-menuBtn:active {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .ccws-topbarName {
+    font-weight: 700;
+    font-size: 14.5px;
+  }
+
+  .ccws-topbarInbox {
+    margin-left: auto;
+    display: inline-flex;
     align-items: center;
+    gap: 7px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+    font-size: 12.5px;
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .ccws-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    border: 0;
+    padding: 0;
+    background: rgba(14, 14, 20, 0.55);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    cursor: pointer;
+  }
+
+  .ccws-rail {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 110;
+    width: min(300px, 86vw);
+    height: 100dvh;
+    padding-top: max(14px, env(safe-area-inset-top));
+    padding-left: max(12px, env(safe-area-inset-left));
+    border-radius: 0 20px 20px 0;
+    transform: translateX(-100%);
+    /* visibility flips only AFTER the slide-out finishes (no instant pop). */
+    transition:
+      transform 0.28s cubic-bezier(0.32, 0.72, 0.33, 1),
+      visibility 0s 0.28s;
+    visibility: hidden;
+  }
+
+  .ccws-railOpen {
+    transform: none;
+    visibility: visible;
+    transition:
+      transform 0.28s cubic-bezier(0.32, 0.72, 0.33, 1),
+      visibility 0s 0s;
+    box-shadow: 0 0 60px rgba(0, 0, 0, 0.45);
+  }
+
+  /* Body scroll lock while the drawer is open (class set by WebShell). */
+  html.ccws-drawerLock,
+  html.ccws-drawerLock body {
+    overflow: hidden;
+    overscroll-behavior: contain;
+  }
+
+  /* App-like drawer items: 44px touch targets, icon chips, roomier type. */
+  .ccws-nav {
+    gap: 3px;
+    overflow-y: auto;
+  }
+
+  .ccws-navItem {
+    min-height: 44px;
+    padding: 0 12px;
+    border-radius: 12px;
+    font-size: 14px;
+  }
+
+  /* No chip behind the icon — the active state is carried by the card
+     (white background + shadow) and the icon colour alone. */
+  .ccws-navIcon {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 9px;
+    background: transparent;
+    color: #5a5a63;
+    flex: none;
+  }
+
+  .ccws-navItemActive .ccws-navIcon {
+    background: transparent;
+    color: #6d3bf5;
+  }
+
+  .ccws-railFooter {
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .ccws-user {
+    min-height: 48px;
+  }
+
+  .ccws-railClose {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    margin-left: auto;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: #c9c9d2;
+    cursor: pointer;
+  }
+
+  .ccws-railClose:active {
+    background: rgba(255, 255, 255, 0.1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ccws-rail {
+    transition: none;
+  }
+}
+
+@media (max-width: 768px) {
+  /* Page gutters: Polaris s-page (display:contents) provides none at phone
+     widths, so cards would run edge-to-edge. 14px keeps card edges just
+     left of the s-page heading's own 24px indent — the Chatty look. */
+  .ccws-content {
+    padding: 0 14px calc(20px + env(safe-area-inset-bottom, 0px));
+    box-sizing: border-box;
+  }
+
+  /* Compact notice: on a phone the push offer must not eat a third of the
+     viewport — slim pill, actions inline under the copy. */
+  .ccws-notice {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    margin: 10px 12px 0;
+    padding: 10px 12px;
+    border-radius: 12px;
+    font-size: 12.5px;
+    line-height: 1.45;
+  }
+
+  .ccws-noticeButton {
+    padding: 7px 14px;
+    border-radius: 9px;
   }
 }

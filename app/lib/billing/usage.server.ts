@@ -2,6 +2,7 @@ import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
 import { displayQuota, getQuota, overageRate } from "./plans.server";
 import { reportOverageUsage } from "./usage-records.server";
+import { logError } from "../log.server";
 
 // Conversation metering (spec 15 rules — the billing FAQ is the contract):
 // 1 AI conversation = one shopper session regardless of message count; a new
@@ -27,6 +28,22 @@ export function currentPeriodStart(now = new Date()): Date {
 }
 
 /**
+ * Whether conversations beyond the allowance can be BILLED for this shop.
+ * Requires a plan overage rate AND a monthly subscription with a usage line
+ * item: yearly subscriptions cannot carry usage lines (Shopify rejects them,
+ * QA D1), so they hard-cap at quota exactly like Free.
+ */
+export function overageBillable(shop: {
+  plan: string;
+  billingInterval: string | null;
+  usageLineItemId: string | null;
+}): boolean {
+  if (overageRate(shop.plan) === null) return false;
+  if (shop.billingInterval === "yearly") return false;
+  return Boolean(shop.usageLineItemId);
+}
+
+/**
  * Tick the conversation meter for an AI-handled message. Callers pass the
  * conversation row's lastMessageAt BEFORE this message, plus whether the
  * conversation has already been counted this session (metering is stored on
@@ -36,13 +53,21 @@ export async function tickConversation(args: {
   shopId: string;
   conversationId: string;
   isTest?: boolean;
+  /** The conversation's `lastMessageAt` BEFORE the current turn stamped it.
+   *  The caller (pipeline) always updates that column first, so reading it
+   *  here would compare now-vs-now and never expire a session (QA D13). */
+  previousLastMessageAt?: Date | null;
 }): Promise<UsageResult> {
   const shopId = requireShopId(args.shopId);
 
-  const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
+  const shop = await db.shop.findUnique({
+    where: { id: shopId },
+    select: { plan: true, billingInterval: true, usageLineItemId: true },
+  });
   const plan = shop?.plan ?? "free";
   const quota = displayQuota(plan, "conversations");
   const enforcedQuota = getQuota(plan, "conversations");
+  const billable = shop ? overageBillable(shop) : false;
 
   const noTick = async (): Promise<UsageResult> => {
     const usage = await currentUsage(shopId);
@@ -68,15 +93,14 @@ export async function tickConversation(args: {
   // row IS a session (widget rotates sessionId after 30-min inactivity), but
   // guard the rule here too in case a stale conversation is resumed.
   const now = new Date();
-  if (
-    convo.meteredAt &&
-    now.getTime() - convo.lastMessageAt.getTime() < SESSION_INACTIVITY_MS
-  ) {
+  // Prefer the caller's pre-update timestamp; fall back to the stored column
+  // for callers that don't have it (the row is then usually already stamped).
+  const lastActivity = args.previousLastMessageAt ?? convo.lastMessageAt;
+  if (convo.meteredAt && now.getTime() - lastActivity.getTime() < SESSION_INACTIVITY_MS) {
     return noTick();
   }
-  if (convo.meteredAt && now.getTime() - convo.lastMessageAt.getTime() >= SESSION_INACTIVITY_MS) {
-    // Session expired but same conversation row resumed → counts as a new conversation.
-  }
+  // Otherwise: either never metered, or the session expired and this same
+  // conversation row was resumed → counts as a new billable conversation.
 
   const periodStart = currentPeriodStart(now);
   const usage = await db.planUsage.upsert({
@@ -91,7 +115,7 @@ export async function tickConversation(args: {
 
   const withinQuota = usage.conversationCount <= enforcedQuota;
   let overageRecorded = false;
-  if (!withinQuota && overageRate(plan) !== null) {
+  if (!withinQuota && billable) {
     await db.planUsage.update({
       where: { shopId_periodStart: { shopId, periodStart } },
       data: { overageCount: { increment: 1 } },
@@ -101,7 +125,7 @@ export async function tickConversation(args: {
     reportOverageUsage(
       shopId,
       `Extra AI conversation beyond the ${quota.toLocaleString("en-US")}/month plan allowance`,
-    ).catch((error) => console.error("overage_usage_record_error", error));
+    ).catch((error) => logError("overage_usage_record_error", error));
   }
 
   return {
@@ -117,13 +141,18 @@ export async function tickConversation(args: {
 /** Whether the AI should still reply for this shop (Free at cap → stop). Open mode: always true. */
 export async function aiAllowed(shopId: string): Promise<boolean> {
   requireShopId(shopId);
-  const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
+  const shop = await db.shop.findUnique({
+    where: { id: shopId },
+    select: { plan: true, billingInterval: true, usageLineItemId: true },
+  });
   const plan = shop?.plan ?? "free";
   const enforcedQuota = getQuota(plan, "conversations");
   if (enforcedQuota === Number.MAX_SAFE_INTEGER) return true;
   const usage = await currentUsage(shopId);
   if (usage < enforcedQuota) return true;
-  return overageRate(plan) !== null; // paid plans keep replying on overage
+  // Monthly paid plans keep replying on (billable) overage; Free and yearly
+  // subscriptions (no usage line, QA D1) stop at the cap.
+  return shop ? overageBillable(shop) : false;
 }
 
 export async function currentUsage(shopId: string): Promise<number> {

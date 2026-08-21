@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import db from "../../db.server";
 import { toSqlVector } from "../embeddings/embedding.server";
 import { requireShopId } from "../tenancy.server";
+import { logError } from "../log.server";
 
 // Hybrid product search — the accuracy core (spec 03 / PRODUCTION-BUILD-SPEC §8).
 // Keyword (weighted tsvector: title A, type/vendor/tags B, description C) and
@@ -69,6 +70,34 @@ const PURCHASABLE = Prisma.sql`("stock" > 0 OR EXISTS (
 
 function stockCondition(excludeOutOfStock: boolean): Prisma.Sql {
   return excludeOutOfStock ? PURCHASABLE : Prisma.sql`TRUE`;
+}
+
+// ── Shared purchasable predicate (QA D4) ────────────────────────────────────
+// The SQL above is the canonical definition; these two exports mirror it for
+// Prisma-client queries and for in-memory row checks so the admin UI ("Out of
+// stock" badges, stock labels) and the curated stock revalidator agree with
+// what the runtime actually serves. Runtime is the source of truth: a product
+// with stock 0 but an available variant IS purchasable.
+
+/** Prisma `where` equivalent of PURCHASABLE (jsonb `@>` containment). */
+export function purchasableWhere(excludeOutOfStock: boolean): Prisma.ProductWhereInput {
+  if (!excludeOutOfStock) return {};
+  return {
+    OR: [{ stock: { gt: 0 } }, { variants: { array_contains: [{ available: true }] } }],
+  };
+}
+
+/** In-memory equivalent of PURCHASABLE for an already-loaded product row. */
+export function isPurchasable(product: {
+  stock?: number | null;
+  variants?: unknown;
+}): boolean {
+  if ((product.stock ?? 0) > 0) return true;
+  const variants = product.variants;
+  return (
+    Array.isArray(variants) &&
+    variants.some((v) => Boolean((v as { available?: unknown } | null)?.available))
+  );
 }
 
 const BASE_COLUMNS = Prisma.sql`"id", "shopifyProductId", "title", "price"::float8 AS price, "stock",
@@ -225,9 +254,31 @@ async function shopLexicon(shopId: string): Promise<{ words: Set<string>; list: 
     WHERE p."shopId" = ${shopId} AND p."learnEnabled" = true AND length(w) >= 3`);
   const list = rows.map((r) => r.word);
   const entry = { at: Date.now(), words: new Set(list), list };
+  // delete-then-set keeps Map insertion order == least-recently-refreshed first.
+  global.lexiconCache.delete(shopId);
   global.lexiconCache.set(shopId, entry);
-  if (global.lexiconCache.size > 500) global.lexiconCache.clear();
+  evictLexicon(global.lexiconCache);
   return entry;
+}
+
+/** Hard cap on cached shop lexicons. The previous rule (`clear()` at 500) threw
+ *  away EVERY tenant's lexicon whenever the 501st shop chatted, so all of them
+ *  re-ran the full-catalog ts_stat scan on their next turn — a self-inflicted
+ *  thundering herd. Expire first, then drop the oldest entries only. */
+const LEXICON_MAX_ENTRIES = 500;
+
+function evictLexicon(
+  store: Map<string, { at: number; words: Set<string>; list: string[] }>,
+): void {
+  if (store.size <= LEXICON_MAX_ENTRIES) return;
+  const now = Date.now();
+  for (const [key, entry] of store) {
+    if (now - entry.at >= LEXICON_TTL_MS) store.delete(key);
+  }
+  if (store.size <= LEXICON_MAX_ENTRIES) return;
+  for (const key of [...store.keys()].slice(0, store.size - LEXICON_MAX_ENTRIES)) {
+    store.delete(key);
+  }
 }
 
 function trigrams(word: string): Set<string> {
@@ -297,7 +348,7 @@ async function keywordSearch(
     shopId,
     messageTerms(message, new Set(routerTerms), priceMax),
   ).catch((error) => {
-    console.error("term_correction_error", error);
+    logError("term_correction_error", error, { shopId });
     return messageTerms(message, new Set(routerTerms), priceMax);
   });
   // Adjacent shopper words ("ruling number", "number 8") as phrases: a product

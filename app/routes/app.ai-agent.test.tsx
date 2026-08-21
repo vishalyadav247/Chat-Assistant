@@ -1,11 +1,14 @@
+import { useEffect, useState } from "react";
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { useLoaderData, useNavigate, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import db from "../db.server";
 import { recordEvent } from "../lib/analytics/events.server";
+import { PipelineFlowGuide, type FlowConfig } from "../components/PipelineFlowGuide";
 import { TestAiConsole } from "../components/TestAiConsole";
 import { PageHeader } from "../components/ui/PageHeader";
 import { requireShopAccess } from "../lib/access.server";
+import { getShopConfig } from "../lib/config/shop-config.server";
 import { routeError } from "../lib/ui/route-error";
 
 // Test AI (spec 08, design ai-agent.html #viewTest): merchant chat console
@@ -31,7 +34,8 @@ export interface TestActionResult {
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { shopId } = await requireShopAccess(request, { permission: "ai_agent" });
 
-  const [persona, faqs, shop] = await Promise.all([
+  const [config, persona, faqs, shop] = await Promise.all([
+    getShopConfig(shopId),
     db.persona.findUnique({ where: { shopId }, select: { welcomeMessage: true } }),
     db.faq.findMany({
       where: { shopId, status: "published" },
@@ -46,10 +50,27 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     persona?.welcomeMessage?.trim() ||
     "Hello 👋 I'm the ChatConvert AI agent, here to help you find what you're looking for. How can I help you?";
 
+  // The walkthrough quotes THIS shop live thresholds, so a value changed in
+  // Instructions is reflected here with no second source of truth.
+  const flow: FlowConfig = {
+    aiEnabled: config.aiEnabled,
+    bannedTopicCount: (config.guardrails?.bannedTopics ?? []).filter((t) => t.trim()).length,
+    bannedMatchThreshold: config.guardrails?.bannedMatchThreshold ?? 0.35,
+    handoverIntentRules: config.handover.intentRules.length,
+    curatedMatchThreshold: config.guardrails?.curatedMatchThreshold ?? 0.8,
+    curatedBorderline: config.guardrails?.curatedBorderline ?? 0.65,
+    minMeaningScore: config.guardrails?.minMeaningScore ?? 0.3,
+    answerOnlyFromKnowledge: config.guardrails?.answerOnlyFromKnowledge ?? true,
+    learnProducts: config.settings.learn.products,
+    learnDiscounts: config.settings.learn.discounts,
+    excludeOutOfStock: config.settings.recommendationRules.excludeOutOfStock,
+  };
+
   return {
     welcome,
     faqChips: faqs.map((f) => ({ id: f.id, question: f.question })),
     currency: shop?.currency ?? "USD",
+    flow,
   };
 };
 
@@ -99,7 +120,7 @@ export default function TestAiPage() {
   const navigate = useNavigate();
 
   return (
-    <s-page heading="Test AI">
+    <s-page heading="Test AI" inlineSize="large">
       <s-stack gap="base">
         <PageHeader
           backTo="/app/ai-agent"
@@ -114,6 +135,8 @@ export default function TestAiPage() {
             </s-stack>
           }
         />
+        <ImproveAiBanner />
+        <PipelineFlowGuide config={data.flow} />
         <TestAiConsole welcome={data.welcome} faqChips={data.faqChips} currency={data.currency} />
       </s-stack>
     </s-page>
@@ -127,3 +150,41 @@ export function ErrorBoundary() {
 export const headers: HeadersFunction = (headersArgs) => {
   return boundary.headers(headersArgs);
 };
+
+const GUIDE_KEY = "chatconvert-test-ai-guide-dismissed";
+
+/** Page-level nudge, dismissed per browser. Starts hidden and appears only
+ *  after the effect confirms it was not dismissed — never flashes on reload. */
+function ImproveAiBanner() {
+  const [dismissed, setDismissed] = useState(true);
+
+  useEffect(() => {
+    try {
+      setDismissed(localStorage.getItem(GUIDE_KEY) === "1");
+    } catch {
+      setDismissed(false); // private mode — show it
+    }
+  }, []);
+
+  if (dismissed) return null;
+
+  return (
+    <s-banner
+      tone="info"
+      heading="Improve your AI"
+      dismissible
+      onDismiss={() => {
+        setDismissed(true);
+        try {
+          localStorage.setItem(GUIDE_KEY, "1");
+        } catch {
+          /* private mode */
+        }
+      }}
+    >
+      <s-paragraph>
+        Keep adding more data sources to enhance AI&apos;s capabilities, quality and efficiency.
+      </s-paragraph>
+    </s-banner>
+  );
+}

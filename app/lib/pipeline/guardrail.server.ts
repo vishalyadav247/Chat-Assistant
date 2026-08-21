@@ -2,6 +2,7 @@ import type { Guardrails } from "@prisma/client";
 import { recordEvent } from "../analytics/events.server";
 import { embedTexts } from "../embeddings/embedding.server";
 import { getLlmProvider } from "../llm/index.server";
+import { logError } from "../log.server";
 
 // 3-layer guardrail (spec 03 step 2): keyword scan → moderation → embedding
 // similarity. Layers a+c are cheap/local; moderation is started by the caller
@@ -35,14 +36,14 @@ export function keywordScan(message: string, bannedTopics: string[]): GuardrailH
 /** Layer b: moderation API — call started by the orchestrator in parallel with the router. */
 export async function moderationCheck(shopId: string, message: string): Promise<GuardrailHit | null> {
   try {
-    const flagged = await getLlmProvider().moderate(message);
+    const flagged = await getLlmProvider().moderate(message, { shopId });
     if (flagged.length > 0) {
       return { topic: flagged[0], layer: "moderation", score: 1 };
     }
     return null;
   } catch (error) {
     // Fail open — but never silently.
-    console.error("moderation_error", error);
+    logError("moderation_error", error, { shopId });
     await recordEvent(shopId, "moderation_error", { message: String(error).slice(0, 200) });
     return null;
   }
@@ -71,7 +72,7 @@ export async function meaningScan(
   const cacheKey = `${shopId}:${topics.join("|")}`;
   let vectors = global.bannedVectorCache.get(cacheKey);
   if (!vectors) {
-    vectors = await embedTexts(topics.map((t) => `a message about ${t}`));
+    vectors = await embedTexts(topics.map((t) => `a message about ${t}`), { shopId });
     global.bannedVectorCache.set(cacheKey, vectors);
     // Bound the cache (topics change → old keys accumulate).
     if (global.bannedVectorCache.size > 500) global.bannedVectorCache.clear();

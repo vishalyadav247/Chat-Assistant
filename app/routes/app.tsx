@@ -16,34 +16,41 @@ import { getDateTimePrefs } from "../lib/format/prefs.server";
 import { getVapidPublicKey } from "../lib/notify/vapid.server";
 import { DateTimeProvider } from "../lib/format/context";
 import { NavigateBridge, SurfaceProvider } from "../lib/ui/surface";
+import { AppLoading } from "../components/AppLoading";
 import { ReviewPrompt } from "../components/ReviewPrompt";
 import { WebShell } from "../components/web/WebShell";
 import { routeError } from "../lib/ui/route-error";
 import webShellStylesHref from "../components/web/web-shell.css?url";
+import appMobileStylesHref from "../components/app-mobile.css?url";
+import appLoadingStylesHref from "../components/app-loading.css?url";
 
 // Layout for every /app/* page on BOTH surfaces (spec 18):
 //   admin → App Bridge + <s-app-nav> (unchanged embedded experience)
 //   web   → ChatConvert shell (no App Bridge), role-filtered nav, push prompt
 
-const NAV: Array<{ href: string; label: string; permission: Permission }> = [
-  { href: "/app", label: "Dashboard", permission: "dashboard" },
-  { href: "/app/inbox", label: "Inbox", permission: "inbox" },
-  { href: "/app/contacts", label: "Contacts", permission: "contacts" },
-  { href: "/app/chatbox", label: "Chatbox", permission: "chatbox" },
-  { href: "/app/ai-agent", label: "AI Agent", permission: "ai_agent" },
+// icon: Polaris icon name, shown only in the web shell's mobile drawer
+// (spec 20) — the desktop rail and admin <s-app-nav> stay text-only.
+const NAV: Array<{ href: string; label: string; permission: Permission; icon: string }> = [
+  { href: "/app", label: "Dashboard", permission: "dashboard", icon: "home" },
+  { href: "/app/inbox", label: "Inbox", permission: "inbox", icon: "chat" },
+  { href: "/app/contacts", label: "Contacts", permission: "contacts", icon: "person" },
+  { href: "/app/chatbox", label: "Chatbox", permission: "chatbox", icon: "text-block" },
+  { href: "/app/ai-agent", label: "AI Agent", permission: "ai_agent", icon: "wand" },
   {
     href: "/app/proactive-chat",
     label: "Proactive Chat",
     permission: "proactive",
+    icon: "megaphone",
   },
   {
     href: "/app/curated-answers",
     label: "Curated Answers",
     permission: "curated",
+    icon: "book-open",
   },
-  { href: "/app/analytics", label: "Analytics", permission: "analytics" },
-  { href: "/app/plan-usage", label: "Plan & Usage", permission: "plan" },
-  { href: "/app/settings", label: "Settings", permission: "settings" },
+  { href: "/app/analytics", label: "Analytics", permission: "analytics", icon: "chart-line" },
+  { href: "/app/plan-usage", label: "Plan & Usage", permission: "plan", icon: "credit-card" },
+  { href: "/app/settings", label: "Settings", permission: "settings", icon: "settings" },
 ];
 
 // Served as a <link> (not a CSS module) so the stylesheet survives a client
@@ -51,6 +58,8 @@ const NAV: Array<{ href: string; label: string; permission: Permission }> = [
 // otherwise drop Vite's injected styles and unstyle the web shell.
 export const links: LinksFunction = () => [
   { rel: "stylesheet", href: webShellStylesHref },
+  { rel: "stylesheet", href: appMobileStylesHref },
+  { rel: "stylesheet", href: appLoadingStylesHref },
 ];
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -80,6 +89,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     db.conversation.count({
       where: {
         shopId: access.shopId,
+        isTest: false,
         unread: true,
         status: "open",
         blocked: false,
@@ -97,6 +107,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       (item) => ({
         href: item.href,
         label: item.label,
+        icon: item.icon,
         badge: item.href === "/app/inbox" && unread > 0 ? unread : undefined,
       }),
     ),
@@ -113,42 +124,48 @@ export default function App() {
 
   if (data.surface === "web") {
     return (
-      <AppProvider embedded={false}>
-        <SurfaceProvider surface="web">
-          <DateTimeProvider prefs={data.dateTimePrefs}>
-            <NavigateBridge />
-            <WebShell
-              shopName={data.shopName}
-              shopDomain={data.shopDomain}
-              member={data.member}
-              nav={data.nav}
-              vapidPublicKey={data.vapidPublicKey}
-              pushWanted={data.pushWanted}
-            >
-              <Outlet />
-            </WebShell>
-          </DateTimeProvider>
-        </SurfaceProvider>
-      </AppProvider>
+      <>
+        <AppLoading />
+        <AppProvider embedded={false}>
+          <SurfaceProvider surface="web">
+            <DateTimeProvider prefs={data.dateTimePrefs}>
+              <NavigateBridge />
+              <WebShell
+                shopName={data.shopName}
+                shopDomain={data.shopDomain}
+                member={data.member}
+                nav={data.nav}
+                vapidPublicKey={data.vapidPublicKey}
+                pushWanted={data.pushWanted}
+              >
+                <Outlet />
+              </WebShell>
+            </DateTimeProvider>
+          </SurfaceProvider>
+        </AppProvider>
+      </>
     );
   }
 
   return (
-    <AppProvider embedded apiKey={data.apiKey}>
-      <SurfaceProvider surface="admin">
-        <DateTimeProvider prefs={data.dateTimePrefs}>
-          <s-app-nav>
-            {NAV.map((item) => (
-              <s-link key={item.href} href={item.href}>
-                {item.label}
-              </s-link>
-            ))}
-          </s-app-nav>
-          <ReviewPrompt eligible={data.reviewPromptEligible} />
-          <Outlet />
-        </DateTimeProvider>
-      </SurfaceProvider>
-    </AppProvider>
+    <>
+      <AppLoading />
+      <AppProvider embedded apiKey={data.apiKey}>
+        <SurfaceProvider surface="admin">
+          <DateTimeProvider prefs={data.dateTimePrefs}>
+            <s-app-nav>
+              {NAV.map((item) => (
+                <s-link key={item.href} href={item.href}>
+                  {item.label}
+                </s-link>
+              ))}
+            </s-app-nav>
+            <ReviewPrompt eligible={data.reviewPromptEligible} />
+            <Outlet />
+          </DateTimeProvider>
+        </SurfaceProvider>
+      </AppProvider>
+    </>
   );
 }
 

@@ -3,8 +3,16 @@ import type { Prisma } from "@prisma/client";
 import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
 import { invalidateShopConfig } from "../config/shop-config.server";
-import { requirePlan } from "../billing/plans.server";
 import { handoverConfigSchema, shopSettingsSchema, type HandoverConfigData } from "../settings/schemas";
+import { requirePlan, type GatedFeature } from "../billing/plans.server";
+
+/** Plan gate for savers that don't already receive the shop's plan (spec 15).
+ *  One indexed lookup; throws PlanGateError, which the instructions route maps
+ *  to an upgrade banner. */
+async function requireShopFeature(shopId: string, feature: GatedFeature): Promise<void> {
+  const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
+  requirePlan(shop?.plan ?? "free", feature);
+}
 
 // Instructions save workflow (spec 08): General tab → Persona + Guardrails,
 // Product recommendations tab → Recommendation / CustomRecommendation /
@@ -69,17 +77,19 @@ const crossSellSchema = z.object({
 
 export async function saveGeneralInstructions(
   shopId: string,
-  plan: string,
   raw: unknown,
 ): Promise<void> {
   requireShopId(shopId);
   const data = generalSchema.parse(raw);
 
-  // Plan gate (spec 08 AC2): auto-detect language is Plus-only. Open mode is
-  // currently active (plans.server.ts), but the seam rejects server-side the
-  // moment enforcement flips on.
   if (data.autoDetectLanguage) {
-    requirePlan(plan, "auto_detect_language");
+    const current = await db.persona.findUnique({
+      where: { shopId },
+      select: { autoDetectLanguage: true },
+    });
+    // Only the OFF→ON transition is gated: a shop that downgrades keeps the
+    // setting it already had and can still save everything else on this page.
+    if (!current?.autoDetectLanguage) await requireShopFeature(shopId, "multi_language");
   }
 
   const personaData = {
@@ -156,6 +166,7 @@ export async function deleteRecommendation(shopId: string, id: string): Promise<
 
 export async function saveCustomRecommendation(shopId: string, raw: unknown): Promise<string> {
   requireShopId(shopId);
+  await requireShopFeature(shopId, "custom_recommendations");
   const data = customRecommendationSchema.parse(raw);
   if (data.productIds.length === 0 && data.collectionIds.length === 0) {
     throw new Error("Add at least one product or collection");
@@ -197,6 +208,7 @@ export async function deleteCustomRecommendation(shopId: string, id: string): Pr
 
 export async function saveCrossSellPair(shopId: string, raw: unknown): Promise<void> {
   requireShopId(shopId);
+  await requireShopFeature(shopId, "custom_recommendations");
   const data = crossSellSchema.parse(raw);
   const companionIds = [...new Set(data.companionIds.filter((id) => id !== data.productId))];
   if (companionIds.length === 0) throw new Error("Pick at least one companion product");
@@ -231,10 +243,80 @@ export async function saveRecommendationRules(shopId: string, raw: unknown): Pro
   invalidateShopConfig(shopId);
 }
 
+// Strict (non-catching) mirror of handoverConfigSchema's limits. The canonical
+// schema `.catch()`es every field, which silently replaces an over-limit value
+// (21st intent rule, 151-char topic, 301-char message) with its default while
+// the UI toasts "saved" (QA D2). Validate the merchant's payload against THIS
+// first so the save fails loudly with a friendly message; the canonical schema
+// still shapes what is persisted.
+const msg300 = z.string().max(300, "must be 300 characters or fewer");
+const strictCollect = z.object({
+  orderNumber: z.boolean().optional(),
+  phone: z.boolean().optional(),
+  photoUpload: z.boolean().optional(),
+}).passthrough();
+const strictLeaveMessage = z.object({
+  replyTime: z.enum(["24h", "12h", "48h", "same_day"]).optional(),
+  collect: strictCollect.optional(),
+  formMessage: msg300.optional(),
+  postSubmitMessage: msg300.optional(),
+}).passthrough();
+const strictHandoverSchema = z.object({
+  triggers: z
+    .object({
+      cannotAnswer: z
+        .object({ enabled: z.boolean().optional(), threshold: z.number().int().min(1).max(10).optional() })
+        .optional(),
+      repeatedQuestion: z
+        .object({ enabled: z.boolean().optional(), threshold: z.number().int().min(2).max(10).optional() })
+        .optional(),
+      negativeSentiment: z.object({ enabled: z.boolean().optional() }).optional(),
+    })
+    .optional(),
+  intentRules: z
+    .array(
+      z.object({
+        topic: z.string().trim().min(1, "topic is required").max(150, "must be 150 characters or fewer"),
+      }),
+    )
+    .max(20, "you can add up to 20 intent rules")
+    .optional(),
+  destination: z.enum(["inbox", "collect_email", "contact_methods"]).optional(),
+  inbox: z
+    .object({
+      onlineAskMessage: msg300.optional(),
+      afterHandoverMessage: msg300.optional(),
+      offlineMode: z.enum(["leave_message", "contact_methods"]).optional(),
+      leaveMessage: strictLeaveMessage.optional(),
+      aiWhileWaiting: z.enum(["never", "outside_hours", "always"]).optional(),
+    })
+    .optional(),
+  collectEmail: strictLeaveMessage.optional(),
+  contactMethods: z.object({ message: msg300.optional() }).optional(),
+});
+
+const HANDOVER_FIELD_LABELS: Record<string, string> = {
+  intentRules: "Intent rules",
+  topic: "Topic name",
+  onlineAskMessage: "Ask before connecting",
+  afterHandoverMessage: "After the chat is handed over",
+  formMessage: "Message shown with the form",
+  postSubmitMessage: "Message shown after the form is submitted",
+  message: "Message shown with the contact methods",
+  threshold: "Threshold",
+};
+
 export async function saveHandoverConfig(shopId: string, raw: unknown): Promise<HandoverConfigData> {
   requireShopId(shopId);
-  // Strict shape: the canonical handoverConfigSchema `.catch()`es every field,
-  // so unknown/invalid input degrades to defaults rather than persisting junk.
+  const strict = strictHandoverSchema.safeParse(raw);
+  if (!strict.success) {
+    const issue = strict.error.issues[0];
+    const field = [...issue.path].reverse().find((p) => typeof p === "string") as string | undefined;
+    const label = (field && HANDOVER_FIELD_LABELS[field]) ?? field ?? "Handover settings";
+    throw new Error(`${label}: ${issue.message}`);
+  }
+  // Canonical shape (frozen, app/lib/settings/schemas.ts) decides what is
+  // persisted — after the strict pass above it no longer needs to `.catch()`.
   const config = handoverConfigSchema.parse(raw);
   await db.handoverConfig.upsert({
     where: { shopId },

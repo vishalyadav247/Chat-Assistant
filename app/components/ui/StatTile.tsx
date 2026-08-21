@@ -83,7 +83,7 @@ export function StatTile(props: {
 
   return (
     <div
-      className={elevated ? "ccstat-elevated" : undefined}
+      className={elevated ? "cc-stattile ccstat-elevated" : "cc-stattile"}
       style={{
         padding: "14px 14px 12px",
         borderRadius: elevated ? RADIUS.card : 14,
@@ -128,6 +128,7 @@ export function StatTile(props: {
       </div>
 
       <span
+        className="cc-stattile-value"
         style={{
           fontSize: 25,
           fontWeight: 750,
@@ -217,6 +218,7 @@ const ELEVATED_HOVER_CSS = `
 export function StatGrid(props: { children: React.ReactNode; columns?: number }) {
   return (
     <div
+      className="cc-statgrid"
       style={{
         display: "grid",
         gridTemplateColumns: props.columns

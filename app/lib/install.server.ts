@@ -2,6 +2,7 @@ import db from "../db.server";
 import { enqueue } from "./jobs/queue.server";
 import { JOBS } from "./jobs/handlers.server";
 import { resolveShopId } from "./tenancy.server";
+import { logError } from "./log.server";
 
 // Install/afterAuth bootstrap (specs 02/08): shop row, default persona +
 // guardrails + seeded app recommendations, initial catalog sync. Idempotent —
@@ -16,6 +17,13 @@ const DEFAULT_GUARDRAILS = {
 
 export async function onShopAuthenticated(shopDomain: string): Promise<void> {
   try {
+    // Capture the pre-auth state: a reinstall inside the grace window keeps
+    // its rows but missed every webhook while uninstalled (QA D12).
+    const before = await db.shop.findUnique({
+      where: { domain: shopDomain },
+      select: { uninstalledAt: true },
+    });
+    const wasUninstalled = Boolean(before?.uninstalledAt);
     const shopId = await resolveShopId(shopDomain);
     await db.shop.update({ where: { id: shopId }, data: { uninstalledAt: null } });
 
@@ -71,15 +79,16 @@ export async function onShopAuthenticated(shopDomain: string): Promise<void> {
       });
     }
 
-    // Initial sync — only when never synced (webhooks + daily reconcile keep it fresh).
+    // Initial sync — when never synced (webhooks + daily reconcile keep it
+    // fresh) OR on reinstall after an uninstall (catalog changed unobserved).
     const syncState = await db.syncState.findUnique({ where: { shopId } });
-    if (!syncState?.productSyncAt) {
+    if (!syncState?.productSyncAt || wasUninstalled) {
       await enqueue(JOBS.catalogSync, { shopDomain });
       await enqueue(JOBS.collectionSync, { shopDomain });
       await enqueue(JOBS.discountSync, { shopDomain });
     }
   } catch (error) {
     // afterAuth must never break the OAuth flow.
-    console.error("after_auth_error", error);
+    logError("after_auth_error", error);
   }
 }

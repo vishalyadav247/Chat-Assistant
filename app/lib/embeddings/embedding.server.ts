@@ -1,7 +1,11 @@
 import { getLlmProvider } from "../llm/index.server";
+import type { ShopContext } from "../llm/types";
 
 // Central embedding utilities. All vector writes/reads use toSqlVector() + raw SQL —
 // the Prisma client cannot touch Unsupported("vector") columns.
+// `ctx` carries the owning shop so embedding tokens land in that merchant's
+// usage row (spec 19). It is REQUIRED so the compiler catches any call site
+// that would otherwise consume tokens anonymously.
 
 export const EMBEDDING_DIMENSIONS = 1536;
 
@@ -13,12 +17,12 @@ export function toSqlVector(vector: number[]): string {
   return `[${vector.join(",")}]`;
 }
 
-export async function embedText(text: string): Promise<number[]> {
-  return getLlmProvider().embed(truncateForEmbedding(text));
+export async function embedText(text: string, ctx: ShopContext): Promise<number[]> {
+  return getLlmProvider().embed(truncateForEmbedding(text), ctx);
 }
 
-export async function embedTexts(texts: string[]): Promise<number[][]> {
-  return getLlmProvider().embedBatch(texts.map(truncateForEmbedding));
+export async function embedTexts(texts: string[], ctx: ShopContext): Promise<number[][]> {
+  return getLlmProvider().embedBatch(texts.map(truncateForEmbedding), ctx);
 }
 
 // text-embedding-3-small caps at 8191 tokens; stay far under with a char bound.

@@ -1,5 +1,9 @@
 node_modules
 build
+.cache
 public/build
-*/*.yml
+extensions/*/dist
+.react-router
 .shopify
+.claude
+*/*.yml

@@ -11,6 +11,15 @@ const hexColor = z
   .regex(/^#[0-9a-fA-F]{6}$/)
   .catch("#6d3bf5");
 
+/** ZodError → one friendly line ("messages.online: Online status message must be…").
+ *  Raw ZodError JSON must never reach a merchant-facing banner. */
+export function zodMessage(error: z.ZodError): string {
+  const issue = error.issues[0];
+  if (!issue) return "Invalid settings payload";
+  const path = issue.path.filter((p) => typeof p === "string").join(".");
+  return path ? `${path}: ${issue.message}` : issue.message;
+}
+
 // ── Widget settings (spec 06) ───────────────────────────────────────────────
 
 export const contactMethodSchema = z.object({
@@ -79,7 +88,13 @@ export const widgetSettingsSchema = z.object({
       colorMode: z.enum(["solid", "gradient"]).catch("gradient"),
       solid: hexColor,
       gradient: z
-        .object({ start: hexColor, end: hexColor.catch("#3b82f6") })
+        .object({
+          start: hexColor,
+          end: z
+            .string()
+            .regex(/^#[0-9a-fA-F]{6}$/)
+            .catch("#3b82f6"),
+        })
         .catch({ start: "#6d3bf5", end: "#3b82f6" }),
       launcher: z
         .object({

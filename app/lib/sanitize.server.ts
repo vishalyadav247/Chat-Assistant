@@ -53,7 +53,14 @@ export function sanitizeHtml(input: string): string {
   return html;
 }
 
-/** Plain-text strip for search/embedding contexts. */
+/** Plain-text strip for search/embedding contexts. Script/style BODIES go too
+ *  — tag-only stripping kept "x" from `<script>x</script>` and fed it into
+ *  embeddings and merchant-visible text (QA D12h). */
 export function stripToText(html: string): string {
-  return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  return html
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }

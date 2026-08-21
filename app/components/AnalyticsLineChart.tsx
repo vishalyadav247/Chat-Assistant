@@ -129,7 +129,10 @@ export function AnalyticsLineChart(props: {
             </s-stack>
           </s-box>
         ) : (
-          <div style={{ position: "relative" }}>
+          // .cc-chart-scroll (app-mobile.css): on phones the SVG keeps a
+          // legible minimum width and pans horizontally instead of scaling
+          // its labels below readability.
+          <div className="cc-chart-scroll" style={{ position: "relative" }}>
             <svg
               viewBox={`0 0 ${W} ${H}`}
               style={{ width: "100%", height: "auto", display: "block" }}

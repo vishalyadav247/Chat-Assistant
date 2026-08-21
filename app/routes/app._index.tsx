@@ -13,6 +13,7 @@ import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
 import { enqueue } from "../lib/jobs/queue.server";
 import { JOBS } from "../lib/jobs/handlers.server";
+import { invalidateShopConfig } from "../lib/config/shop-config.server";
 import {
   DASHBOARD_RANGES,
   dashboardMetrics,
@@ -30,6 +31,7 @@ import { currentUsage } from "../lib/billing/usage.server";
 import { getQuota } from "../lib/billing/plans.server";
 import { requireShopAccess } from "../lib/access.server";
 import { routeError } from "../lib/ui/route-error";
+import { logError } from "../lib/log.server";
 
 // Dashboard (spec 13, design dashboard.html): greeting hero, overview KPIs
 // with range/compare, 6-step setup checklist with progress ring, live
@@ -104,9 +106,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           },
           select: shopSelect,
         });
+        // shop-config caches name/timezone/currency for 60s. Without this the
+        // backfilled identity is invisible to the widget and to every
+        // date-formatting call for up to a minute (QA cache audit).
+        invalidateShopConfig(shopId);
       }
     } catch (error) {
-      console.error("dashboard_shop_info_error", error);
+      logError("dashboard_shop_info_error", error);
     }
   }
 
@@ -235,7 +241,7 @@ export default function DashboardPage() {
   ) : null;
 
   return (
-    <s-page heading="Home" inlineSize="large">
+    <s-page heading="Home">
       <s-stack gap="base">
         <DashboardHero
           greeting={data.greeting}

@@ -112,7 +112,11 @@ export async function dashboardMetrics(
   const liveSince = new Date(now.getTime() - LIVE_WINDOW_MS);
 
   const unit: BucketUnit = range === "12m" ? "month" : "day";
-  const bucketCount = unit === "day" ? days : 13;
+  // The window is rolling (from = now − N days), so it touches N+1 calendar
+  // days: the partial first day through today. Buckets start at midnight of
+  // `from` and the SQL still filters `>= from`, so the series sums to the KPI
+  // total and today's activity lands in the last bucket. 12m: 13 month buckets.
+  const bucketCount = unit === "day" ? days + 1 : 13;
 
   const [current, previous, live, resolved, atcCurrent, atcPrevious, convSeries, cartSeries] =
     await Promise.all([
@@ -190,16 +194,21 @@ export async function setupChecklist(
       db.campaign.count({ where: { shopId, status: "active" } }),
     ]);
 
+  // Same deep link as Settings → General "Turn on": activateAppId pre-selects
+  // the chat-widget app embed in the theme editor.
+  const apiKey = process.env.SHOPIFY_API_KEY || "";
+  const themeEditorUrl = `https://${shopDomain}/admin/themes/current/editor?context=apps${
+    apiKey ? `&activateAppId=${apiKey}/chat-widget` : ""
+  }`;
+
   const steps: ChecklistStep[] = [
     {
       id: "embed",
       label: "Embed app to your theme",
       state: embedStatus === "on" ? "done" : embedStatus === "off" ? "todo" : "unknown",
       href: "/app/settings?tab=general",
-      linkLabel: embedStatus === "unknown" ? "Verify in theme editor" : "Settings",
-      ...(embedStatus === "unknown"
-        ? { externalUrl: `https://${shopDomain}/admin/themes/current/editor?context=apps` }
-        : {}),
+      linkLabel: embedStatus === "unknown" ? "Check in Theme editor" : "Settings",
+      ...(embedStatus === "unknown" ? { externalUrl: themeEditorUrl } : {}),
     },
     {
       id: "widget",
@@ -238,10 +247,14 @@ export async function setupChecklist(
     },
   ];
 
+  // An "unknown" embed status (no read_themes) can't be completed from here,
+  // so it is excluded from the progress total (N of 5) and rendered as an
+  // informational row instead of an incomplete step.
+  const countable = steps.filter((step) => step.state !== "unknown");
   return {
     steps,
-    completed: steps.filter((step) => step.state === "done").length,
-    total: steps.length,
+    completed: countable.filter((step) => step.state === "done").length,
+    total: countable.length,
     embedStatus,
   };
 }
@@ -276,6 +289,7 @@ export async function liveFeed(shopId: string): Promise<LiveFeedItem[]> {
   if (convos.length === 0) return [];
 
   const contactIds = [...new Set(convos.flatMap((c) => (c.contactId ? [c.contactId] : [])))];
+  const convoIds = convos.map((c) => c.id);
   const [contacts, lastShopperMessages] = await Promise.all([
     contactIds.length > 0
       ? db.contact.findMany({
@@ -283,21 +297,19 @@ export async function liveFeed(shopId: string): Promise<LiveFeedItem[]> {
           select: { id: true, name: true },
         })
       : Promise.resolve([]),
-    Promise.all(
-      convos.map((convo) =>
-        db.message.findFirst({
-          where: { shopId, conversationId: convo.id, role: "in" },
-          orderBy: { createdAt: "desc" },
-          select: { conversationId: true, content: true },
-        }),
-      ),
-    ),
+    // One DISTINCT ON pass rather than a findFirst per conversation — the feed
+    // re-renders on every dashboard poll, so N+1 here is N+1 per poll.
+    db.$queryRaw<{ conversationId: string; content: string }[]>`
+      SELECT DISTINCT ON ("conversationId") "conversationId", "content"
+      FROM "messages"
+      WHERE "shopId" = ${shopId}
+        AND "conversationId" IN (${Prisma.join(convoIds)})
+        AND "role" = 'in'
+      ORDER BY "conversationId", "createdAt" DESC`,
   ]);
 
   const nameById = new Map(contacts.map((c) => [c.id, c.name]));
-  const previewByConvo = new Map(
-    lastShopperMessages.flatMap((m) => (m ? [[m.conversationId, m.content] as const] : [])),
-  );
+  const previewByConvo = new Map(lastShopperMessages.map((m) => [m.conversationId, m.content]));
   const liveSince = Date.now() - LIVE_WINDOW_MS;
 
   return convos.map((convo) => {

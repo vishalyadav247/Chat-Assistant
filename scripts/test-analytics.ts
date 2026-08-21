@@ -47,7 +47,10 @@ async function main() {
 
   const stale = await db.shop.findUnique({ where: { domain: TEST_DOMAIN } });
   if (stale) await cleanup(stale.id);
-  const shop = await db.shop.create({ data: { domain: TEST_DOMAIN } });
+  // Plus, because the CSV-export assertions below exercise a Pluslevel gated
+  // feature and plan enforcement is live (2026-08-21). The gate itself is
+  // asserted from both sides in section 9.
+  const shop = await db.shop.create({ data: { domain: TEST_DOMAIN, plan: "plus" } });
   const shopId = shop.id;
   console.log(`test shop ${TEST_DOMAIN} (${shopId})`);
 
@@ -328,16 +331,34 @@ async function main() {
     dayARow !== undefined && dayARow.includes(",3,2,1,1,1,1,3,1,1,2,1,1,"),
     dayARow,
   );
-  // Plan gate: exportConversationsCsv/exportAnalyticsCsv call requirePlan(plan,
-  // "exports") via requireExports() — open enforcement passes (asserted by the
-  // calls above succeeding on a free shop); when ENFORCEMENT flips to
-  // "enforced" the same call throws PlanGateError (route action maps it to the
-  // locked response). Condition verified by code path, mode is a build-time const.
+  // Plan gate, asserted from BOTH sides rather than by inspection.
+  // exportConversationsCsv/exportAnalyticsCsv call requirePlan(plan, "exports")
+  // via requireExports(). The calls above already prove it passes on Plus;
+  // here we drop the same shop to Free and prove the identical call is refused,
+  // then restore it. (Before 2026-08-21 enforcement defaulted to "open" and this
+  // section could only assert the mode constant.)
   const { hasFeature, planEnforcementMode } = await import("../app/lib/billing/plans.server");
-  check(
-    "open mode: hasFeature(free, exports) passes",
-    planEnforcementMode() === "open" && hasFeature("free", "exports"),
-  );
+  const enforced = planEnforcementMode() === "enforced";
+  check("enforcement is live", enforced, planEnforcementMode());
+  check("plus has exports", hasFeature("plus", "exports"));
+
+  await db.shop.update({ where: { id: shopId }, data: { plan: "free" } });
+  let refused = false;
+  try {
+    await exportConversationsCsv(shopId);
+  } catch (error) {
+    refused = (error as Error).message === "plan_gate:exports";
+  }
+  check("free shop is refused the conversations export", enforced ? refused : !refused);
+
+  let refusedAnalytics = false;
+  try {
+    await exportAnalyticsCsv(shopId, "7d");
+  } catch (error) {
+    refusedAnalytics = (error as Error).message === "plan_gate:exports";
+  }
+  check("free shop is refused the analytics export", enforced ? refusedAnalytics : !refusedAnalytics);
+  await db.shop.update({ where: { id: shopId }, data: { plan: "plus" } });
 
   // ── Cleanup ───────────────────────────────────────────────────────────────
   await cleanup(shopId);

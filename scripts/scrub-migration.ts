@@ -18,6 +18,7 @@ const PROTECTED_INDEXES = [
   "curated_answers_embedding_hnsw",
   "recommendations_embedding_hnsw",
   "products_search_text_gin",
+  "analytics_events_payload_gin",
 ];
 
 function newestMigrationDir(): string | null {

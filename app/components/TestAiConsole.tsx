@@ -1,15 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { useFetcher } from "react-router";
+import type { TraceStep, TraceSummary } from "../lib/pipeline/trace-types";
 import type { ReviewSourceData, TestActionResult } from "../routes/app.ai-agent.test";
-import { BRAND } from "./ui/tokens";
+import { TurnInspector } from "./TurnInspector";
+import { BRAND, INK, SCROLLBAR_CSS, SPACE } from "./ui/tokens";
 
 // Test AI console (spec 08, design ai-agent.html #viewTest). Streams the real
 // pipeline via POST /api/test-chat and parses the SSE frames from the fetch
 // stream inline (the storefront widget has its own parser in extensions/ —
 // admin code cannot import extension assets, so this tiny parser is local).
-// After each reply the console fetches the saved Message row's debug data
-// (sourceLayer / intent / productCards) through the route action ("source"
-// intent) for the per-reply "Review source" panel.
+// Each reply carries two kinds of evidence. The decision trace arrives on the
+// stream itself (a "trace" frame behind "done", api.test-chat.tsx) and shows
+// every layer the pipeline walked; the saved Message row is fetched through the
+// route action ("source" intent) and shows what was actually persisted. Both
+// render in the Turn inspector below the console.
 
 interface ProductCardData {
   shopifyProductId: string;
@@ -25,6 +29,7 @@ type Frame =
   | { type: "message"; text: string }
   | { type: "cards"; cards: ProductCardData[] }
   | { type: "done"; outcome: string; conversationId: string }
+  | { type: "trace"; steps: TraceStep[]; summary: TraceSummary }
   | { type: "error"; message: string };
 
 interface ChatEntry {
@@ -34,7 +39,11 @@ interface ChatEntry {
   streaming?: boolean;
   cards?: ProductCardData[];
   source?: ReviewSourceData | null;
-  sourceOpen?: boolean;
+  /** The shopper message this turn answered — the inspector's header. */
+  question?: string;
+  /** Decision trace for this turn (Test AI only; arrives behind the done frame). */
+  trace?: TraceStep[];
+  traceSummary?: TraceSummary;
   feedback?: number;
   seeded?: boolean; // welcome bubble — no review source / feedback
 }
@@ -44,8 +53,6 @@ const CANNED_CHIPS = [
   "Do you ship to Canada?",
   "keep my hands warm under $30",
 ];
-
-const GUIDE_KEY = "chatconvert-test-ai-guide-dismissed";
 
 const uid = () => `e${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
 const newSessionId = () =>
@@ -76,16 +83,6 @@ async function streamSse(res: Response, onFrame: (frame: Frame) => void): Promis
   }
 }
 
-function describeIntent(intent: unknown): string {
-  if (!intent || typeof intent !== "object") return "—";
-  const routed = intent as { intent?: string; keywords?: string[]; price_max?: number | null };
-  const parts: string[] = [];
-  if (routed.intent) parts.push(routed.intent);
-  if (routed.keywords?.length) parts.push(`keywords: ${routed.keywords.join(", ")}`);
-  if (routed.price_max != null) parts.push(`price max: ${routed.price_max}`);
-  return parts.length ? parts.join(" · ") : "—";
-}
-
 export function TestAiConsole(props: {
   welcome: string;
   faqChips: { id: string; question: string }[];
@@ -98,21 +95,15 @@ export function TestAiConsole(props: {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [faqOpen, setFaqOpen] = useState(false);
-  const [guideDismissed, setGuideDismissed] = useState(true);
+  // Which reply the Turn inspector is showing. Set automatically to the newest
+  // reply as its trace lands, so the panel always reflects the last thing sent.
+  const [inspectId, setInspectId] = useState("");
   const conversationIdRef = useRef<string>("");
   const pendingSourceRef = useRef<string>("");
   const bodyRef = useRef<HTMLDivElement>(null);
 
   const sourceFetcher = useFetcher<TestActionResult>();
   const feedbackFetcher = useFetcher<TestActionResult>();
-
-  useEffect(() => {
-    try {
-      setGuideDismissed(localStorage.getItem(GUIDE_KEY) === "1");
-    } catch {
-      setGuideDismissed(false);
-    }
-  }, []);
 
   // Attach fetched review-source data to the reply that requested it.
   useEffect(() => {
@@ -144,7 +135,7 @@ export function TestAiConsole(props: {
     setEntries((prev) => [
       ...prev,
       { id: uid(), role: "user", text: message },
-      { id: botId, role: "bot", text: "", streaming: true },
+      { id: botId, role: "bot", text: "", streaming: true, question: message },
     ]);
     setSending(true);
     let doneConversationId = "";
@@ -170,6 +161,9 @@ export function TestAiConsole(props: {
             conversationIdRef.current = frame.conversationId;
             doneConversationId = frame.conversationId;
           }
+        } else if (frame.type === "trace") {
+          patchEntry(botId, { trace: frame.steps, traceSummary: frame.summary });
+          setInspectId(botId);
         } else if (frame.type === "error") {
           patchEntry(botId, (e) => ({
             ...e,
@@ -183,6 +177,15 @@ export function TestAiConsole(props: {
       patchEntry(botId, { streaming: false });
       setSending(false);
       if (doneConversationId) {
+        // One fetcher serves one request: submitting again supersedes any
+        // in-flight source fetch, so settle the previous bubble instead of
+        // leaving it on "Loading source…" forever (QA D12g).
+        const superseded = pendingSourceRef.current;
+        if (superseded && superseded !== botId) {
+          setEntries((prev) =>
+            prev.map((e) => (e.id === superseded && e.source === undefined ? { ...e, source: null } : e)),
+          );
+        }
         pendingSourceRef.current = botId;
         sourceFetcher.submit(
           { intent: "source", conversationId: doneConversationId },
@@ -196,6 +199,7 @@ export function TestAiConsole(props: {
     setSessionId(newSessionId());
     conversationIdRef.current = "";
     pendingSourceRef.current = "";
+    setInspectId("");
     setEntries([{ id: "welcome", role: "bot", text: props.welcome, seeded: true }]);
     setInput("");
     setFaqOpen(false);
@@ -213,19 +217,24 @@ export function TestAiConsole(props: {
     new Intl.NumberFormat(undefined, { style: "currency", currency: props.currency }).format(price);
 
   const noUserMessages = !entries.some((e) => e.role === "user");
+  const inspected = entries.find((e) => e.id === inspectId) ?? null;
 
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "minmax(0, 1fr) 280px",
-        gap: 16,
-        alignItems: "start",
-      }}
-    >
+    <s-stack gap="base">
+      <div
+        className="cc-split"
+        style={{
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1.15fr)",
+          gap: SPACE.base,
+          alignItems: "start",
+        }}
+      >
       {/* Chat card */}
       <s-box borderWidth="base" borderRadius="base">
-        <div style={{ display: "flex", flexDirection: "column", height: 560 }}>
+        {/* .cc-testchat shortens the card on phones (spec 19, app-mobile.css). */}
+        <style dangerouslySetInnerHTML={{ __html: SCROLLBAR_CSS }} />
+        <div className="cc-testchat" style={{ display: "flex", flexDirection: "column", height: 560 }}>
           <div
             style={{
               display: "flex",
@@ -241,9 +250,34 @@ export function TestAiConsole(props: {
             </s-button>
           </div>
 
-          <div ref={bodyRef} style={{ flex: 1, overflowY: "auto", padding: 16 }}>
-            <div style={{ textAlign: "center", margin: "4px 0 12px" }}>
-              <s-text tone="neutral">Today</s-text>
+          <div
+            ref={bodyRef}
+            className="cc-scroll"
+            style={{
+              flex: 1,
+              overflowY: "auto",
+              padding: 16,
+              backgroundColor: "#f7f6fd",
+              backgroundImage:
+                "radial-gradient(rgba(109, 59, 245, 0.055) 1px, transparent 1px)," +
+                "linear-gradient(180deg, rgba(109, 59, 245, 0.05) 0%, rgba(59, 130, 246, 0.05) 100%)",
+              backgroundSize: "18px 18px, 100% 100%",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "center", margin: "2px 0 14px" }}>
+              <span
+                style={{
+                  background: "rgba(255, 255, 255, 0.85)",
+                  border: `1px solid ${INK.borderSoft}`,
+                  borderRadius: 999,
+                  padding: "3px 12px",
+                  fontSize: 11.5,
+                  fontWeight: 600,
+                  color: INK.muted,
+                }}
+              >
+                Today
+              </span>
             </div>
 
             {entries.map((entry) => (
@@ -261,11 +295,13 @@ export function TestAiConsole(props: {
                       borderRadius: 14,
                       fontSize: 13.5,
                       whiteSpace: "pre-wrap",
-                      background:
-                        entry.role === "user"
-                          ? BRAND.gradient
-                          : "var(--s-color-bg-fill-secondary, #f1f1f1)",
+                      background: entry.role === "user" ? BRAND.gradient : "#fff",
                       color: entry.role === "user" ? "#fff" : "inherit",
+                      border: entry.role === "user" ? "none" : `1px solid ${INK.borderSoft}`,
+                      boxShadow:
+                        entry.role === "user"
+                          ? "0 2px 8px rgba(109, 59, 245, 0.24)"
+                          : "0 1px 2px rgba(20, 20, 25, 0.05)",
                     }}
                   >
                     {entry.streaming && !entry.text ? (
@@ -283,9 +319,11 @@ export function TestAiConsole(props: {
                         key={card.shopifyProductId}
                         style={{
                           width: 140,
-                          border: "1px solid var(--s-color-border, #e3e3e3)",
+                          background: "#fff",
+                          border: `1px solid ${INK.borderSoft}`,
                           borderRadius: 12,
                           overflow: "hidden",
+                          boxShadow: "0 1px 2px rgba(20, 20, 25, 0.05)",
                         }}
                       >
                         {card.imageUrl ? (
@@ -327,7 +365,7 @@ export function TestAiConsole(props: {
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       <button
                         type="button"
-                        onClick={() => patchEntry(entry.id, { sourceOpen: !entry.sourceOpen })}
+                        onClick={() => setInspectId((v) => (v === entry.id ? "" : entry.id))}
                         style={{
                           border: "none",
                           background: "none",
@@ -342,9 +380,9 @@ export function TestAiConsole(props: {
                           gap: 2,
                         }}
                       >
-                        Review source{" "}
+                        {inspectId === entry.id ? "Hide details" : "Why this reply?"}{" "}
                         <s-icon
-                          type={entry.sourceOpen ? "chevron-up" : "chevron-down"}
+                          type={inspectId === entry.id ? "chevron-up" : "chevron-down"}
                           size="small"
                         />
                       </button>
@@ -374,38 +412,6 @@ export function TestAiConsole(props: {
                         ))}
                       </span>
                     </div>
-                    {entry.sourceOpen ? (
-                      <div
-                        style={{
-                          marginTop: 6,
-                          padding: "10px 12px",
-                          borderRadius: 10,
-                          border: "1px solid var(--s-color-border, #e3e3e3)",
-                          fontSize: 12.5,
-                        }}
-                      >
-                        {entry.source ? (
-                          <s-stack gap="small">
-                            <div>
-                              <s-badge tone="info">{entry.source.sourceLayer ?? "unknown"}</s-badge>
-                            </div>
-                            <s-text tone="neutral">
-                              Intent: {describeIntent(entry.source.intent)}
-                            </s-text>
-                            {entry.source.productCards?.length ? (
-                              <s-text tone="neutral">
-                                Products used:{" "}
-                                {entry.source.productCards.map((c) => c.title).join(", ")}
-                              </s-text>
-                            ) : (
-                              <s-text tone="neutral">No products attached to this reply.</s-text>
-                            )}
-                          </s-stack>
-                        ) : (
-                          <s-text tone="neutral">Loading source…</s-text>
-                        )}
-                      </div>
-                    ) : null}
                   </div>
                 ) : null}
               </div>
@@ -489,40 +495,23 @@ export function TestAiConsole(props: {
         </div>
       </s-box>
 
-      {/* Side cards */}
-      <s-stack gap="base">
-        <s-section heading="Review sources">
-          <s-paragraph>
-            Click &apos;Review source&apos; on each AI response to view the layer, intent and data behind
-            the reply.
-          </s-paragraph>
-        </s-section>
-        {!guideDismissed ? (
-          <s-banner
-            tone="info"
-            heading="Improve your AI"
-            dismissible
-            onDismiss={() => {
-              setGuideDismissed(true);
-              try {
-                localStorage.setItem(GUIDE_KEY, "1");
-              } catch {
-                /* private mode */
+      {/* Inspector column — always mounted so the panel does not appear and
+          disappear under the cursor; it renders its own idle state. */}
+      <TurnInspector
+        scrollHeight={392}
+        turn={
+          inspected
+            ? {
+                question: inspected.question ?? "",
+                steps: inspected.trace ?? null,
+                summary: inspected.traceSummary ?? null,
+                source: inspected.source,
               }
-            }}
-          >
-            <s-paragraph>
-              Keep adding more data sources to enhance AI&apos;s capabilities, quality and efficiency.
-            </s-paragraph>
-          </s-banner>
-        ) : null}
-        <s-section>
-          <s-text tone="neutral">
-            Test conversations never count toward your plan&apos;s conversation quota.
-          </s-text>
-        </s-section>
-      </s-stack>
-    </div>
+            : null
+        }
+      />
+      </div>
+    </s-stack>
   );
 }
 
@@ -535,4 +524,5 @@ const chipStyle: React.CSSProperties = {
   borderRadius: 999,
   border: "1px solid var(--s-color-border, #d4d4d4)",
   background: "var(--s-color-bg, #fff)",
+  boxShadow: "0 1px 2px rgba(20, 20, 25, 0.05)",
 };

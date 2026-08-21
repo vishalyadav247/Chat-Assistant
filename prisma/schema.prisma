@@ -396,6 +396,14 @@ model Conversation {
 
   @@index([shopId, status, lastMessageAt])
   @@index([shopId, sessionId])
+  // Inbox list: shopId + isTest, newest first (the single most-run query in the
+  // app). The status index above cannot serve it — status sits between the two
+  // constrained columns, so the planner fell back to a full scan + top-N sort.
+  @@index([shopId, isTest, lastMessageAt])
+  // Analytics rollup / dashboard KPIs / conversation CSV all window on startedAt.
+  @@index([shopId, startedAt])
+  // Contacts list + contact detail count conversations per contact.
+  @@index([shopId, contactId])
   @@map("conversations")
 }
 
@@ -413,7 +421,11 @@ model Message {
   createdAt      DateTime  @default(now())
 
   @@index([conversationId, createdAt])
-  @@index([shopId])
+  // Supersedes the old bare @@index([shopId]) — same leading column, and it is
+  // the difference between a parallel seq scan of every message and an index
+  // range scan for the day-window (analytics rollup) and newest-first
+  // (top questions) reads.
+  @@index([shopId, createdAt])
   @@map("messages")
 }
 
@@ -489,6 +501,26 @@ model PlanUsage {
 
   @@unique([shopId, periodStart])
   @@map("plan_usage")
+}
+
+// Per-shop LLM token consumption, rolled up daily (spec 19 · platform usage
+// analytics). One row per shop × UTC day × model × purpose. Written
+// fire-and-forget from the LLM seam — never blocks a shopper's chat.
+model LlmUsageDaily {
+  id               String   @id @default(cuid())
+  shopId           String
+  date             DateTime @db.Date
+  model            String
+  purpose          String // router | reply | summary | moderation | embedding
+  calls            Int      @default(0)
+  promptTokens     Int      @default(0)
+  cachedTokens     Int      @default(0) // subset of promptTokens, billed cheaper
+  completionTokens Int      @default(0)
+  updatedAt        DateTime @updatedAt
+
+  @@unique([shopId, date, model, purpose])
+  @@index([date])
+  @@map("llm_usage_daily")
 }
 
 // ── Compliance (spec 17) ────────────────────────────────────────────────────
@@ -589,4 +621,105 @@ model AppSecret {
   createdAt DateTime @default(now())
 
   @@map("app_secrets")
+}
+
+// ── Platform admin panel (spec 19) — operator accounts, cross-tenant BY DESIGN ──
+// These tables belong to the company running the app, not to any shop.
+
+model PlatformAdmin {
+  id           String            @id @default(cuid())
+  email        String            @unique
+  name         String
+  passwordHash String
+  failedLogins Int               @default(0) // per-account lockout (parity with TeamMember)
+  lockedUntil  DateTime?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  sessions     PlatformSession[]
+
+  @@map("platform_admins")
+}
+
+model PlatformSession {
+  id         String        @id @default(cuid())
+  tokenHash  String        @unique // sha256 of the raw cookie token
+  adminId    String
+  admin      PlatformAdmin @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  expiresAt  DateTime
+  lastSeenAt DateTime      @default(now())
+  userAgent  String?
+  createdAt  DateTime      @default(now())
+
+  @@index([adminId])
+  @@index([expiresAt])
+  @@map("platform_sessions")
+}
+
+// ── Logging & observability (spec 21) ───────────────────────────────────────
+// Operator-only error/warning log, surfaced cross-tenant at /platform/logs.
+// Errors and warnings ONLY (never a row per request) and purged after 14 days
+// by the nightly retention job — those two rules are what keep this table in
+// Postgres instead of a paid log service. `shopId` is nullable by design: the
+// scheduler and boot path have no shop context, and attributing their failures
+// to an arbitrary shop would be worse than leaving them global.
+model AppLog {
+  id         String   @id @default(cuid())
+  level      String // error | warn
+  event      String // stable snake_case code, e.g. curated_revalidate_error
+  shopId     String? // null = system-wide
+  message    String // truncated to 1000 chars by the write seam
+  context    Json? // denylist-sanitised, capped at 2 KB — never shopper PII
+  occurredAt DateTime @default(now())
+
+  @@index([occurredAt])
+  @@index([shopId, occurredAt])
+  @@index([level, event, occurredAt])
+  @@map("app_logs")
+}
+
+// ── Promo codes (spec 15 · discount coupons) — operator-owned, cross-tenant BY DESIGN ──
+// Codes are created in the platform console and handed to merchants out of band
+// (mail/chat). Redemptions are per shop and feed the Shopify Billing API
+// `discount` on the recurring line of appSubscriptionCreate.
+
+model PromoCode {
+  id                String            @id @default(cuid())
+  code              String            @unique // stored upper-case, no spaces
+  description       String            @default("") // internal note ("Black Friday 2026")
+  kind              String // percent | fixed
+  value             Decimal // percent: 1–100, fixed: USD off per billing interval
+  durationIntervals Int? // billing intervals the discount lasts; null = forever
+  plans             String[]          @default([]) // paid plan ids; empty = any paid plan
+  intervals         String[]          @default([]) // monthly | yearly; empty = both
+  maxRedemptions    Int? // null = unlimited
+  expiresAt         DateTime?
+  active            Boolean           @default(true)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  redemptions       PromoRedemption[]
+
+  @@map("promo_codes")
+}
+
+model PromoRedemption {
+  id             String    @id @default(cuid())
+  shopId         String
+  promoCodeId    String
+  promoCode      PromoCode @relation(fields: [promoCodeId], references: [id], onDelete: Cascade)
+  subscriptionId String? // AppSubscription gid the discount was attached to
+  plan           String
+  interval       String
+  // pending (awaiting approval) | redeemed (live) | released (subscription ended)
+  status         String    @default("pending")
+  createdAt      DateTime  @default(now())
+  redeemedAt     DateTime?
+
+  // One row per shop per code: the row IS the shop's relationship with the
+  // code, and it follows the shop across plan changes (see promo-codes.server).
+  // It also makes the maxRedemptions reservation atomic — a concurrent second
+  // attempt by the same shop can never create a second row.
+  @@unique([shopId, promoCodeId])
+  @@index([promoCodeId, status])
+  @@index([subscriptionId])
+  @@map("promo_redemptions")
 }

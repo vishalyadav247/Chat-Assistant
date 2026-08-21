@@ -99,7 +99,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
   if (intent === "toggle") {
     const active = String(formData.get("active")) === "true";
-    return { intent: "toggle" as const, ok: await toggleCampaign(shopId, id, active) };
+    const toggled = await toggleCampaign(shopId, id, active);
+    if (typeof toggled === "object") {
+      return { intent: "toggle" as const, ok: false as const, error: toggled.error };
+    }
+    return { intent: "toggle" as const, ok: toggled };
   }
   if (intent === "reorder") {
     const direction = String(formData.get("direction")) === "up" ? ("up" as const) : ("down" as const);
@@ -133,9 +137,14 @@ export default function ProactiveChatPage() {
   const ctr = campaignCtr(totals.views, totals.clicks);
   const money = new Intl.NumberFormat(undefined, { style: "currency", currency: data.currency });
 
+  // Save errors belong to the draft that produced them — opening another
+  // campaign/template must not inherit the previous one's banner.
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   const startFromTemplate = (tpl: CampaignTemplate) => {
     const { name, ...settings } = tpl.defaults;
     const next: CampaignDraft = { id: null, templateType: tpl.type, name, status: "active", settings };
+    setSaveError(null);
     setDraft(next);
     setBaseline(JSON.stringify(next));
     setView("editor");
@@ -149,6 +158,7 @@ export default function ProactiveChatPage() {
       status: row.status === "active" ? "active" : "inactive",
       settings: row.settings,
     };
+    setSaveError(null);
     setDraft(next);
     setBaseline(JSON.stringify(next));
     setView("editor");
@@ -184,23 +194,30 @@ export default function ProactiveChatPage() {
     if (fetcher.state !== "idle" || !fetcher.data || processed.current === fetcher.data) return;
     processed.current = fetcher.data;
     const result = fetcher.data;
-    if (result.intent === "save" && result.ok) {
-      shopify.toast.show("Campaign saved");
-      setView("dashboard");
+    if (result.intent === "save") {
+      setSaveError(result.ok ? null : (result.error ?? "Couldn't save campaign"));
+      if (result.ok) {
+        shopify.toast.show("Campaign saved");
+        setView("dashboard");
+      }
     }
     if (result.intent === "duplicate") {
-      shopify.toast.show(result.ok ? "Campaign duplicated" : "Couldn't duplicate campaign");
+      if (result.ok) shopify.toast.show("Campaign duplicated");
+      else shopify.toast.show("Couldn't duplicate campaign", { isError: true });
     }
     if (result.intent === "delete") {
-      shopify.toast.show(result.ok ? "Campaign deleted" : "Couldn't delete campaign");
+      if (result.ok) shopify.toast.show("Campaign deleted");
+      else shopify.toast.show("Couldn't delete campaign", { isError: true });
       setPendingDelete(null);
     }
+    // Toggle / reorder used to fail silently — the row just snapped back.
+    if (result.intent === "toggle" && !result.ok) {
+      shopify.toast.show("Couldn't update the campaign — please try again", { isError: true });
+    }
+    if (result.intent === "reorder" && !result.ok) {
+      shopify.toast.show("Couldn't reorder the campaign — please try again", { isError: true });
+    }
   }, [fetcher.state, fetcher.data, shopify]);
-
-  const saveError =
-    fetcher.state === "idle" && fetcher.data?.intent === "save" && !fetcher.data.ok
-      ? (fetcher.data.error ?? "Couldn't save campaign")
-      : null;
 
   return (
     <s-page heading="Proactive Chat">
@@ -328,7 +345,10 @@ export default function ProactiveChatPage() {
               error={saveError}
               productMeta={data.productMeta}
               collectionMeta={data.collectionMeta}
-              onCancel={() => setView(draft.id ? "dashboard" : "picker")}
+              onCancel={() => {
+                setSaveError(null);
+                setView(draft.id ? "dashboard" : "picker");
+              }}
             />
           </>
         ) : null}

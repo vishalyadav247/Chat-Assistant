@@ -1,6 +1,7 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
+import { logError } from "../log.server";
 
 // Central analytics event recorder. The event-name union is the FULL vocabulary
 // declared up front (specs 02/03/06/09/10/12/13/14) — 13/14 aggregation depends
@@ -50,6 +51,24 @@ export type AnalyticsEventType =
   | "plan_changed"
   | "usage_cap_reached";
 
+/**
+ * `where` fragment for KPI readers: keep every event EXCEPT the ones the
+ * pipeline tagged `payload.isTest === true` (Test-AI turns, QA D3).
+ *
+ * A bare `NOT: { payload: { path: ["isTest"], equals: true } }` is WRONG on
+ * Postgres: `payload#>'{isTest}'` is SQL NULL when the key (or the whole
+ * payload) is absent, so `NOT (NULL = true)` is NULL and real events are
+ * dropped too (verified: 4 rows in, 1 out). The two null branches below put
+ * them back — verified 3 of 4 rows, the expected answer.
+ */
+export const NOT_TEST_EVENT: Prisma.AnalyticsEventWhereInput = {
+  OR: [
+    { payload: { equals: Prisma.DbNull } },
+    { payload: { path: ["isTest"], equals: Prisma.AnyNull } },
+    { NOT: { payload: { path: ["isTest"], equals: true } } },
+  ],
+};
+
 export async function recordEvent(
   shopId: string,
   type: AnalyticsEventType,
@@ -65,6 +84,6 @@ export async function recordEvent(
     });
   } catch (error) {
     // Analytics must never break the request path.
-    console.error("analytics_event_error", type, error);
+    logError("analytics_event_error", error, { type, shopId });
   }
 }

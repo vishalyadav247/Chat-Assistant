@@ -27,7 +27,13 @@ export function useInboxLive(onFrame: (frame: InboxLiveFrame) => void): void {
             headers: { Accept: "text/event-stream" },
             signal: controller.signal,
           });
-          if (!res.ok || !res.body) throw new Error(`events ${res.status}`);
+          // An expired web session answers with a redirect to the login page
+          // (fetch follows it → 200 HTML). Treat anything that isn't an event
+          // stream as a failure so the loop backs off instead of hammering.
+          const isStream = (res.headers.get("content-type") ?? "").startsWith("text/event-stream");
+          if (!res.ok || !res.body || res.redirected || !isStream) {
+            throw new Error(`events ${res.status}`);
+          }
           attempt = 0;
           const reader = res.body.getReader();
           const decoder = new TextDecoder();

@@ -16,6 +16,7 @@ export function InboxList({
   search,
   onSearch,
   onSelect,
+  onOpenFilters,
 }: {
   title: string;
   rows: InboxRow[];
@@ -27,12 +28,22 @@ export function InboxList({
   search: string;
   onSearch: (value: string) => void;
   onSelect: (row: InboxRow) => void;
+  /** Mobile only (spec 20): opens the filter slide-over panel. */
+  onOpenFilters: () => void;
 }) {
   const dt = useDateTime();
   return (
     <div className="cin-col cin-listcol">
       <div className="cin-list-top">
         <div className="cin-list-head">
+          <button
+            type="button"
+            className="cin-filbtn"
+            aria-label="Conversation filters"
+            onClick={onOpenFilters}
+          >
+            <s-icon type="filter" />
+          </button>
           <span className="cin-list-title">{title}</span>
           <button type="button" className="cin-unread-toggle" onClick={onToggleUnread}>
             Unread

@@ -16,10 +16,14 @@ function load<T>(file: string): T {
   return JSON.parse(readFileSync(join(DATA_DIR, file), "utf-8")) as T;
 }
 
+// Set once the dev shop exists so seeded embedding tokens are attributed to it
+// (spec 19 usage analytics); blank until then = simply not recorded.
+let seedShopId = "";
+
 async function embed(texts: string[]): Promise<number[][]> {
   if (process.env.OPENAI_API_KEY) {
     const { embedTexts } = await import("../app/lib/embeddings/embedding.server");
-    return embedTexts(texts);
+    return embedTexts(texts, { shopId: seedShopId });
   }
   const { pseudoEmbedding } = await import("../app/lib/embeddings/embedding.server");
   console.log("(no OPENAI_API_KEY — using deterministic pseudo-embeddings)");
@@ -37,6 +41,7 @@ async function main() {
     create: { domain: DEV_SHOP_DOMAIN, name: "Aura & Stone (dev)", currency: "USD", timezone: "America/New_York" },
   });
   const shopId = shop.id;
+  seedShopId = shopId;
   console.log(`shop: ${DEV_SHOP_DOMAIN} (${shopId})`);
 
   // ── persona + guardrails ──────────────────────────────────────────────────
@@ -79,6 +84,10 @@ async function main() {
   console.log("persona + guardrails seeded");
 
   // ── products ──────────────────────────────────────────────────────────────
+  // Product ids use the real Shopify gid shape. The demo ids used to be
+  // `gid://seed/Product/N`, which the productGid validator in
+  // app/lib/instructions/save.server.ts rejects — a seeded recommendation then
+  // could not be re-saved from the admin (QA D5).
   interface DemoProduct { title: string; type: string; price: number; stock: number; description: string }
   const products = load<DemoProduct[]>("products.json");
   // Same text formula as catalog sync (productEmbeddingText) so seed == production.
@@ -89,11 +98,11 @@ async function main() {
   for (let i = 0; i < products.length; i++) {
     const p = products[i];
     const row = await db.product.upsert({
-      where: { shopId_shopifyProductId: { shopId, shopifyProductId: `gid://seed/Product/${i + 1}` } },
+      where: { shopId_shopifyProductId: { shopId, shopifyProductId: `gid://shopify/Product/${i + 1}` } },
       update: { title: p.title, description: p.description, productType: p.type, price: p.price, stock: p.stock },
       create: {
         shopId,
-        shopifyProductId: `gid://seed/Product/${i + 1}`,
+        shopifyProductId: `gid://shopify/Product/${i + 1}`,
         title: p.title,
         description: p.description,
         productType: p.type,

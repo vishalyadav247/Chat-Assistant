@@ -2,6 +2,7 @@ import type { PgBoss } from "pg-boss";
 import db from "../../db.server";
 import type { Prisma } from "@prisma/client";
 import { requireShopId } from "../tenancy.server";
+import { logError } from "../log.server";
 
 // Nightly analytics rollup (spec 14). Aggregates one UTC day of conversation /
 // message / analytics-event activity into MetricsDaily.counters so range reads
@@ -212,7 +213,7 @@ export async function rollupAll(): Promise<void> {
       await rollupDay(shop.id, yesterday);
       await rollupDay(shop.id, now);
     } catch (error) {
-      console.error("analytics_rollup_error", shop.id, error);
+      logError("analytics_rollup_error", error, { shopId: shop.id });
     }
   }
 }

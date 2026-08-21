@@ -5,6 +5,7 @@ import { embedText, toSqlVector } from "../embeddings/embedding.server";
 import { requireShopId } from "../tenancy.server";
 import { getQuota } from "../billing/plans.server";
 import { recordEvent } from "../analytics/events.server";
+import { logError } from "../log.server";
 
 // Curated answers CRUD (spec 09). Rows are created/updated via the Prisma
 // client; the embedding column is Unsupported("vector") and is written ONLY
@@ -40,9 +41,13 @@ export type SaveCuratedResult =
   | { ok: true; id: string; warning?: "embedding_failed" }
   | { ok: false; error: string; code?: "cap" | "invalid" | "not_found" };
 
-/** Talking points are plain text, one per line — strip any HTML per line. */
+/** Talking points are plain text, one per line — strip any HTML per line.
+ *  Script/style bodies are dropped before tag stripping, which otherwise kept
+ *  their inner text (QA D12h). */
 function sanitizeTalkingPoints(input: string): string {
   return input
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
     .split(/\r?\n/)
     .map((line) => line.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim())
     .filter(Boolean)
@@ -120,13 +125,13 @@ export async function saveCuratedAnswer(
   // Embed question + synonyms; write via raw SQL, always shop-scoped.
   let warning: "embedding_failed" | undefined;
   try {
-    const vec = await embedText(`${data.question} ${data.synonyms.join(" ")}`.trim());
+    const vec = await embedText(`${data.question} ${data.synonyms.join(" ")}`.trim(), { shopId });
     await db.$executeRaw(Prisma.sql`
       UPDATE "curated_answers" SET "embedding" = ${toSqlVector(vec)}::vector
       WHERE "id" = ${id} AND "shopId" = ${shopId}
     `);
   } catch (error) {
-    console.error("curated_embedding_error", error);
+    logError("curated_embedding_error", error, { shopId });
     // Question/synonyms may have changed — a stale vector would mismatch, so null it.
     await db.$executeRaw(Prisma.sql`
       UPDATE "curated_answers" SET "embedding" = NULL

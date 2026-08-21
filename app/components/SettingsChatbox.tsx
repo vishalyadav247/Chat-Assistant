@@ -87,6 +87,7 @@ export function SettingsChatbox(props: {
         {props.orderTracking.mode === "custom" ? (
           <s-text-field
             label="Custom tracking URL"
+            maxLength={500}
             placeholder="www.delhivery.com/track-v2/package/"
             details="The tracking number is added to the end — or put {number} where it belongs in the URL."
             value={props.orderTracking.customUrl}

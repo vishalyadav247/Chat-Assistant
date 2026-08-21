@@ -1,8 +1,9 @@
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { useLoaderData, useNavigate, useRouteError, useSearchParams } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
+import { z } from "zod";
 import db from "../db.server";
-import { hasFeature, PlanGateError } from "../lib/billing/plans.server";
+import { PlanGateError } from "../lib/billing/plans.server";
 import {
   handoverConfigSchema,
   shopSettingsSchema,
@@ -94,9 +95,8 @@ export interface InstructionsActionResult {
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { shopId } = await requireShopAccess(request, { permission: "ai_agent" });
 
-  const [shop, persona, guardrails, handoverRow, settingsRow, recommendations, customRecs, pairs] =
+  const [persona, guardrails, handoverRow, settingsRow, recommendations, customRecs, pairs] =
     await Promise.all([
-      db.shop.findUnique({ where: { id: shopId }, select: { plan: true } }),
       db.persona.findUnique({ where: { shopId } }),
       db.guardrails.findUnique({ where: { shopId } }),
       db.handoverConfig.findUnique({ where: { shopId }, select: { config: true } }),
@@ -167,8 +167,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   return {
     general,
-    // Plus gate seam (open mode: enabled for all — plans.server.ts).
-    autoDetectLocked: !hasFeature(shop?.plan ?? "free", "auto_detect_language"),
     recommendations: recommendations.map((r) => ({ ...r, updatedAt: r.updatedAt.toISOString() })),
     customRecs: customRecs.map((r) => ({ ...r, updatedAt: r.updatedAt.toISOString() })),
     pairs,
@@ -194,8 +192,7 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<Instructi
   try {
     switch (intent) {
       case "save-general": {
-        const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
-        await saveGeneralInstructions(shopId, shop?.plan ?? "free", payload);
+        await saveGeneralInstructions(shopId, payload);
         return { ok: true, intent };
       }
       case "save-handover": {
@@ -254,6 +251,16 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<Instructi
   } catch (error) {
     if (error instanceof PlanGateError) {
       return { ok: false, intent, error: "Auto-detect language requires the Plus plan." };
+    }
+    if (error instanceof z.ZodError) {
+      // Friendly "field: message" instead of the raw issues JSON (QA D5) —
+      // same mapping as training.tsx's friendlyError.
+      const issue = error.issues[0];
+      return {
+        ok: false,
+        intent,
+        error: issue ? `${issue.path.join(".") || "input"}: ${issue.message}` : "Invalid input",
+      };
     }
     return {
       ok: false,
@@ -341,7 +348,7 @@ export default function InstructionsPage() {
         />
 
         {tab === "general" ? (
-          <InstructionsGeneralTab initial={data.general} autoDetectLocked={data.autoDetectLocked} />
+          <InstructionsGeneralTab initial={data.general} />
         ) : null}
         {tab === "recommendations" ? (
           <InstructionsRecommendationsTab

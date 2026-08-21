@@ -19,6 +19,8 @@ const EMOJI = ["😀", "😅", "👍", "🙏", "❤️", "🎉"];
 export function InboxThread({
   active,
   busy,
+  onBack,
+  onShowDetails,
   onStar,
   onResolveToggle,
   onSend,
@@ -27,6 +29,10 @@ export function InboxThread({
 }: {
   active: InboxDetail | null;
   busy: boolean;
+  /** Mobile only (spec 19): clears ?c= to return to the conversation list. */
+  onBack: () => void;
+  /** Opens the details slide-over where the Details column is hidden (<1241px). */
+  onShowDetails: () => void;
   onStar: () => void;
   onResolveToggle: () => void;
   onSend: (content: string) => void;
@@ -78,9 +84,25 @@ export function InboxThread({
   return (
     <div className="cin-col cin-threadcol">
       <div className="cin-th-head">
+        <button
+          type="button"
+          className="cin-back"
+          aria-label="Back to conversations"
+          onClick={onBack}
+        >
+          <s-icon type="arrow-left" />
+        </button>
         <span className="cin-th-name">{name}</span>
         {!active.contact ? <span className="cin-th-tag">Anonymous</span> : null}
         <span className="cin-sp" />
+        <button
+          type="button"
+          className="cin-infobtn"
+          aria-label="Conversation details"
+          onClick={onShowDetails}
+        >
+          <s-icon type="info" />
+        </button>
         <button
           type="button"
           className={`cin-star${active.starred ? " on" : ""}`}

@@ -50,7 +50,7 @@ export async function recommendationMatch(
   let cached = global.recVectorCache.get(cacheKey);
   if (!cached) {
     const texts = candidates.flatMap((rec) => rec.triggerQuestions);
-    const vectors = await embedTexts(texts);
+    const vectors = await embedTexts(texts, { shopId });
     let cursor = 0;
     cached = candidates.map((rec) => {
       const take = rec.triggerQuestions.length;

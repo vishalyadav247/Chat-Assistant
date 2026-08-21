@@ -380,6 +380,8 @@ export function RecommendationDetailCustom(props: {
       <BrowseProductsModal
         open={productPickerOpen}
         selectedIds={productIds}
+        // Mirrors customRecommendationSchema.productIds.max(100).
+        maxSelected={100}
         onClose={() => setProductPickerOpen(false)}
         onConfirm={(ids, newMeta) => {
           setProductIds(ids);

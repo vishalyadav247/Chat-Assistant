@@ -1,3 +1,4 @@
+import { logError } from "./log.server";
 // SSE response helper: wraps an async iterable of JSON-serializable frames in
 // text/event-stream framing with periodic heartbeat comments.
 
@@ -35,7 +36,7 @@ export function sseResponse<T>(frames: AsyncIterable<T>, signal?: AbortSignal): 
         controller.enqueue(
           encoder.encode(`data: ${JSON.stringify({ type: "error", message: "stream_failed" })}\n\n`),
         );
-        console.error("sse_stream_error", error);
+        logError("sse_stream_error", error);
       } finally {
         clearInterval(heartbeat);
         signal?.removeEventListener("abort", abort);

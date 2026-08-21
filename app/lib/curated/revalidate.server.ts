@@ -1,6 +1,7 @@
 import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
 import { recordEvent } from "../analytics/events.server";
+import { isPurchasable } from "../search/product-search.server";
 
 // Stock revalidation (spec 09): check each published answer's productIds
 // against the product mirror; missing or zero-stock products flag the answer
@@ -26,19 +27,24 @@ export async function revalidateCuratedStock(shopId: string): Promise<Revalidate
   const products = allIds.length
     ? await db.product.findMany({
         where: { shopId, shopifyProductId: { in: allIds } },
-        select: { shopifyProductId: true, stock: true },
+        select: { shopifyProductId: true, stock: true, variants: true },
       })
     : [];
-  const stockByGid = new Map(products.map((p) => [p.shopifyProductId, p.stock]));
+  // Dead stock = NOT purchasable by the runtime's own definition (QA D4):
+  // `stock <= 0` alone flagged products the pipeline happily still serves
+  // (untracked inventory / "continue selling when out of stock" variants).
+  const purchasableByGid = new Map(
+    products.map((p) => [p.shopifyProductId, isPurchasable(p)]),
+  );
 
   let flagged = 0;
   let cleared = 0;
   let issueCount = 0;
   for (const answer of answers) {
-    // Missing from the mirror (deleted product) reads as stock 0.
+    // Missing from the mirror (deleted product) reads as not purchasable.
     const issue =
       answer.productIds.length > 0 &&
-      answer.productIds.some((gid) => (stockByGid.get(gid) ?? 0) <= 0);
+      answer.productIds.some((gid) => !(purchasableByGid.get(gid) ?? false));
     if (issue) issueCount += 1;
     if (issue === answer.stockIssue) continue;
     await db.curatedAnswer.updateMany({

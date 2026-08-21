@@ -1,6 +1,8 @@
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import { recordEvent } from "../lib/analytics/events.server";
+import { invalidateShopConfig } from "../lib/config/shop-config.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { shop, session, topic } = await authenticate.webhook(request);
@@ -20,9 +22,34 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   // uninstall-purge sweep (jobs/handlers.server.ts) erases everything at day 7
   // unless a reinstall cleared the stamp. shop/redact (~48h later) is honored
   // by the same sweep, within Shopify's 30-day redaction SLA.
+  //
+  // Billing (QA D6): Shopify cancels every app subscription on uninstall, so the
+  // plan fields are reset to Free right here (tiny idempotent update) — a
+  // reinstall inside the grace window must not resume a dead subscription.
+  // cleanupShop (day-7 purge) resets them again as a backstop.
   const existing = await db.shop.findUnique({ where: { domain: shop } });
   if (existing && !existing.uninstalledAt) {
-    await db.shop.update({ where: { id: existing.id }, data: { uninstalledAt: new Date() } });
+    const hadPlan = existing.plan !== "free" || existing.subscriptionId !== null;
+    await db.shop.update({
+      where: { id: existing.id },
+      data: {
+        uninstalledAt: new Date(),
+        plan: "free",
+        planStatus: "none",
+        subscriptionId: null,
+        billingInterval: null,
+        trialEndsAt: null,
+        usageLineItemId: null,
+      },
+    });
+    if (hadPlan) {
+      await recordEvent(existing.id, "plan_changed", {
+        plan: "free",
+        planStatus: "none",
+        reason: "app_uninstalled",
+      });
+    }
+    invalidateShopConfig(existing.id);
   }
 
   return new Response();

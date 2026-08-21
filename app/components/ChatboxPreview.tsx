@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { WidgetSettingsData } from "../lib/settings/schemas";
+import { useIsMobile } from "../lib/ui/use-mobile";
 
 // Live preview (spec 06) with parity BY CONSTRUCTION: it injects the exact
 // storefront assets (extensions/chat-widget/assets/widget-renderer.js + .css,
@@ -73,6 +74,14 @@ const PREVIEW_CSS = `
 .ccpv .cw-panel{width:100%;max-width:none;}
 .ccpv .cw-body{max-height:560px;}
 .ccpv .cw-launcher{margin-top:14px;}
+/* The storefront CSS takes the panel full-screen (position:fixed;inset:0)
+   below 480px. That is right on a shop, but inside the admin preview it would
+   cover the settings being edited — keep it inside its card on phones too. */
+@media (max-width: 480px){
+.ccpv .cw-panel{position:static;inset:auto;width:100%;max-width:none;border-radius:18px;margin:0 0 12px;min-height:min(520px,68dvh);max-height:min(560px,68dvh);}
+.ccpv .cw-pos-top_right .cw-panel,.ccpv .cw-pos-top_left .cw-panel{margin:12px 0 0;}
+.ccpv .cw-body{max-height:none;}
+}
 `;
 
 function ensureAssets(rendererJs: string, widgetCss: string): boolean {
@@ -116,16 +125,29 @@ export function ChatboxPreview(props: {
   const [screen, setScreen] = useState<Screen>("home");
   const [faq, setFaq] = useState<PreviewFaq | null>(null);
   const [minimized, setMinimized] = useState(false);
+  // Phones (spec 20): the preview column sits under the settings, so an
+  // auto-opened panel buries the form the merchant came to edit. Collapse it
+  // to just the launcher and let them open it deliberately. Desktop keeps the
+  // always-open panel.
+  const isMobile = useIsMobile();
+  const isMobileRef = useRef(isMobile);
+  isMobileRef.current = isMobile;
 
   useEffect(() => {
     setReady(ensureAssets(props.rendererJs, props.widgetCss));
   }, [props.rendererJs, props.widgetCss]);
 
+  // Runs on mount (desktop: no-op) and whenever the viewport crosses the
+  // breakpoint — not on every render, so an opened panel stays open.
+  useEffect(() => {
+    setMinimized(isMobile);
+  }, [isMobile]);
+
   // Design behavior: switching to the Chat page tab auto-shows the chat
-  // screen; other tabs return to home. Restores a minimized panel.
+  // screen; other tabs return to home. Restores a minimized panel (desktop).
   useEffect(() => {
     setScreen(tab === "chatpage" ? "chat" : "home");
-    setMinimized(false);
+    setMinimized(isMobileRef.current);
   }, [tab]);
 
   useEffect(() => {
@@ -233,6 +255,12 @@ export function ChatboxPreview(props: {
     // Appearance edits are always previewable; clicking it restores the panel.
     const launcher = R.launcher(settings, {
       onToggle: () => {
+        // On phones the launcher toggles (open ⇄ collapse), like the
+        // storefront; on desktop it only restores, as before.
+        if (!minimized) {
+          if (isMobileRef.current) setMinimized(true);
+          return;
+        }
         setMinimized(false);
         setScreen(chatFocus ? "chat" : "home");
       },
@@ -253,5 +281,14 @@ export function ChatboxPreview(props: {
     props.storeInfo,
   ]);
 
-  return <div className="ccpv" ref={containerRef} />;
+  return (
+    <>
+      {isMobile && minimized ? (
+        <p style={{ margin: 0, fontSize: 13, color: "#6a6a72" }}>
+          Tap the chat button to open the live preview.
+        </p>
+      ) : null}
+      <div className="ccpv" ref={containerRef} />
+    </>
+  );
 }

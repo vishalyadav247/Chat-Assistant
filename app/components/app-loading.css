@@ -1,0 +1,280 @@
+/* ChatConvert loading screen (design: .claude/resources/other/loading.html).
+   Shown while the app boots (server HTML is painted but React has not hydrated,
+   so nothing is clickable yet) and while a page change is in flight.
+
+   Served as a <link> from app.tsx, not a CSS module or an inline <style> — a
+   hydration mismatch anywhere would otherwise drop Vite's injected styles in
+   dev and unstyle the overlay (same rule as web-shell.css).
+
+   --c1/--c2 mirror BRAND.progressGradient in app/components/ui/tokens.ts. */
+
+.ccload {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000; /* above App Bridge chrome and the web shell drawer */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: #2e2e37;
+  -webkit-font-smoothing: antialiased;
+  --c1: #7c3aed;
+  --c2: #3b82f6;
+}
+
+/* Boot: opaque — the app genuinely is not ready yet. */
+.ccload--boot {
+  background:
+    radial-gradient(900px 460px at 100% -5%, rgba(59, 130, 246, 0.14), transparent 60%),
+    radial-gradient(760px 420px at -5% 0%, rgba(124, 58, 237, 0.16), transparent 55%),
+    #f6f7f9;
+}
+
+/* Page change: the previous screen stays visible behind a frosted veil, so a
+   navigation never reads as a full app restart. */
+.ccload--nav {
+  background: rgba(246, 247, 249, 0.82);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.ccload--leaving {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 260ms ease;
+}
+
+.ccload__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+/* ── Mark ────────────────────────────────────────────────────────────────── */
+
+.ccload__logoWrap {
+  position: relative;
+  width: 132px;
+  height: 132px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 30px;
+}
+
+.ccload__ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 28px;
+  border: 2px solid rgba(124, 58, 237, 0.35);
+  opacity: 0;
+  animation: ccload-pulse 2.4s ease-out infinite;
+}
+
+.ccload__ring--2 {
+  animation-delay: 0.8s;
+}
+
+.ccload__ring--3 {
+  animation-delay: 1.6s;
+}
+
+@keyframes ccload-pulse {
+  0% {
+    transform: scale(0.62);
+    opacity: 0.7;
+  }
+  80% {
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.08);
+    opacity: 0;
+  }
+}
+
+.ccload__logo {
+  width: 82px;
+  height: 82px;
+  border-radius: 22px;
+  background: linear-gradient(135deg, var(--c1), var(--c2));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 700;
+  font-size: 42px;
+  box-shadow: 0 18px 40px -14px rgba(109, 59, 245, 0.7);
+  animation: ccload-bob 2.6s ease-in-out infinite;
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes ccload-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-7px);
+  }
+}
+
+.ccload__orbit {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  animation: ccload-spin 3.2s linear infinite;
+}
+
+@keyframes ccload-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.ccload__pin {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  margin-left: -13px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 6px 16px -4px rgba(16, 24, 40, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Counter-rotates so the bubble stays upright as the orbit turns. */
+  animation: ccload-spin-rev 3.2s linear infinite;
+}
+
+@keyframes ccload-spin-rev {
+  to {
+    transform: rotate(-360deg);
+  }
+}
+
+.ccload__pin svg {
+  width: 15px;
+  height: 15px;
+  color: var(--c1);
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ── Wordmark ────────────────────────────────────────────────────────────── */
+
+.ccload__name {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  margin-bottom: 6px;
+}
+
+.ccload__tag {
+  color: #5b6472;
+  font-size: 13.5px;
+  margin-bottom: 26px;
+}
+
+/* ── Indeterminate bar ───────────────────────────────────────────────────── */
+
+.ccload__bar {
+  width: 230px;
+  height: 7px;
+  background: #e7eaef;
+  border-radius: 20px;
+  overflow: hidden;
+  position: relative;
+}
+
+.ccload__bar span {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  width: 45%;
+  border-radius: 20px;
+  background: linear-gradient(90deg, var(--c1), var(--c2));
+  animation: ccload-slide 1.5s ease-in-out infinite;
+}
+
+@keyframes ccload-slide {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(285%);
+  }
+}
+
+.ccload__status {
+  margin-top: 16px;
+  color: #78787f;
+  font-size: 12.5px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+
+.ccload__dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  margin-left: 1px;
+  opacity: 0.25;
+  animation: ccload-blink 1.4s infinite;
+}
+
+.ccload__dot:nth-of-type(2) {
+  animation-delay: 0.2s;
+}
+
+.ccload__dot:nth-of-type(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes ccload-blink {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+
+/* ── Reduced motion ──────────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .ccload__ring,
+  .ccload__logo,
+  .ccload__orbit,
+  .ccload__pin,
+  .ccload__bar span,
+  .ccload__dot,
+  .ccload--leaving {
+    animation: none;
+    transition: none;
+  }
+
+  .ccload__ring {
+    opacity: 0.35;
+  }
+
+  .ccload__bar span {
+    transform: none;
+    width: 100%;
+    opacity: 0.9;
+  }
+}

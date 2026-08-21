@@ -2,6 +2,8 @@ import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import db from "../db.server";
 import { requireShopAccess } from "../lib/access.server";
+import { isPurchasable } from "../lib/search/product-search.server";
+import { logError } from "../lib/log.server";
 
 // Resource route feeding the shared Browse products / Browse collections
 // modals (specs 08/09/12). Loader-only JSON; every query shop-scoped via
@@ -39,9 +41,14 @@ export interface BrowseData {
   };
 }
 
+// Uses the shared purchasable predicate (QA D4) so "Out of stock" here means
+// exactly what the runtime means — a product with 0 tracked stock but an
+// available variant is still sellable and must not read as dead stock.
 function stockLabel(stock: number, variants: unknown): string {
   const count = Array.isArray(variants) ? variants.length : 0;
-  return count ? `${stock} in stock for ${count} variants` : `${stock} in stock`;
+  if (!isPurchasable({ stock, variants })) return "Out of stock";
+  const base = stock > 0 ? `${stock} in stock` : "Available";
+  return count ? `${base} for ${count} variants` : base;
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs): Promise<BrowseData> => {
@@ -112,7 +119,7 @@ export const loader = async ({ request }: LoaderFunctionArgs): Promise<BrowseDat
       };
       memberGids = body.data?.collection?.products?.nodes?.map((n) => n.id) ?? [];
     } catch (error) {
-      console.error("browse_collection_filter_error", error);
+      logError("browse_collection_filter_error", error);
       memberGids = [];
     }
   }

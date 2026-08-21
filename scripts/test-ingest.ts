@@ -133,7 +133,7 @@ async function main() {
     manual.id,
   );
   ok("manual rows embedded", Number(manualEmb.n) >= 1, `${manualEmb.n} embedded rows`);
-  const warrantyHits = await knowledgeSearch(shopId, await embedText("how long is the zorblatt warranty?"), 3);
+  const warrantyHits = await knowledgeSearch(shopId, await embedText("how long is the zorblatt warranty?", { shopId }), 3);
   ok(
     "manual retrievable via knowledgeSearch",
     warrantyHits.some((h) => /warranty period/i.test(h.topic)),
@@ -162,7 +162,7 @@ async function main() {
   ok("pages ingested → active", pagesAfter?.status === "active" && (pagesAfter?.chunkCount ?? 0) >= 1);
   const pagesRows = await db.knowledge.findMany({ where: { shopId, dataSourceId: pages.id } });
   ok("pages HTML stripped", pagesRows.every((r) => !r.body.includes("<p>")), pagesRows[0]?.body.slice(0, 60));
-  const meteorHits = await knowledgeSearch(shopId, await embedText("can I return a meteorite I bought?"), 3);
+  const meteorHits = await knowledgeSearch(shopId, await embedText("can I return a meteorite I bought?", { shopId }), 3);
   ok("pages retrievable", meteorHits.some((h) => /meteorite/i.test(h.topic)), `top: ${meteorHits[0]?.topic}`);
 
   // resync rebuilds (change content → rows rebuilt)
@@ -202,7 +202,7 @@ async function main() {
   await ingestSource(shopId, csvSource.id);
   const csvAfter = await db.dataSource.findFirst({ where: { id: csvSource.id, shopId } });
   ok("csv ingested (row per Q&A)", csvAfter?.status === "active" && csvAfter?.chunkCount === 2);
-  const gliftorHits = await knowledgeSearch(shopId, await embedText("is a gliftor waterproof?"), 3);
+  const gliftorHits = await knowledgeSearch(shopId, await embedText("is a gliftor waterproof?", { shopId }), 3);
   ok("csv retrievable", gliftorHits.some((h) => /waterproof/i.test(h.topic)), `top: ${gliftorHits[0]?.topic}`);
 
   // file — txt ok; pdf → error "parser pending" (spec delta)
@@ -221,7 +221,7 @@ async function main() {
   await ingestSource(shopId, txtSource.id);
   const txtAfter = await db.dataSource.findFirst({ where: { id: txtSource.id, shopId } });
   ok("txt file ingested", txtAfter?.status === "active" && (txtAfter?.chunkCount ?? 0) >= 1);
-  const frimbulatorHits = await knowledgeSearch(shopId, await embedText("how do I clean my frimbulator?"), 3);
+  const frimbulatorHits = await knowledgeSearch(shopId, await embedText("how do I clean my frimbulator?", { shopId }), 3);
   ok("txt retrievable", frimbulatorHits.some((h) => /frimbulator|care-guide/i.test(`${h.topic} ${h.body}`)), `top: ${frimbulatorHits[0]?.topic}`);
   const pdfSource = await createSource(
     shopId,
@@ -265,7 +265,7 @@ async function main() {
   const approved = await approveSuggested(shopId, suggested1.id, { enqueueIngest: false });
   createdSourceIds.push(approved.id);
   ok("approve → active manual source", approved.status === "active" && approved.type === "manual" && (approved.chunkCount ?? 0) >= 1);
-  const plumbusHits = await knowledgeSearch(shopId, await embedText("can I get my plumbus engraved?"), 3);
+  const plumbusHits = await knowledgeSearch(shopId, await embedText("can I get my plumbus engraved?", { shopId }), 3);
   ok("approved suggestion retrievable", plumbusHits.some((h) => /plumbus/i.test(h.topic)), `top: ${plumbusHits[0]?.topic}`);
   ok("dismiss deletes", await dismissSuggested(shopId, suggested2.id));
   ok("dismissed gone", (await listSuggested(shopId)).every((q) => q.id !== suggested2.id));
@@ -283,7 +283,7 @@ async function main() {
   const faqResult = await syncFaqKnowledge(shopId);
   const faqSource = await db.dataSource.findFirst({ where: { shopId, type: "faq" } });
   ok("faq source synced", faqSource?.status === "active" && faqResult.chunkCount >= 1, `chunks=${faqResult.chunkCount}`);
-  const splendenHits = await knowledgeSearch(shopId, await embedText("do you buy back used splendens?"), 3);
+  const splendenHits = await knowledgeSearch(shopId, await embedText("do you buy back used splendens?", { shopId }), 3);
   ok("faq retrievable", splendenHits.some((h) => /splenden/i.test(h.topic)), `top: ${splendenHits[0]?.topic}`);
   await db.faq.deleteMany({ where: { id: faq.id, shopId } });
   const faqResync = await syncFaqKnowledge(shopId); // published FAQ removed → mirror empties
@@ -297,7 +297,7 @@ async function main() {
   }
   const leftover = await db.knowledge.count({ where: { shopId, dataSourceId: { in: createdSourceIds } } });
   ok("delete cascades knowledge rows", leftover === 0);
-  const afterDelete = await knowledgeSearch(shopId, await embedText("can I return a meteorite I bought?"), 3);
+  const afterDelete = await knowledgeSearch(shopId, await embedText("can I return a meteorite I bought?", { shopId }), 3);
   ok("deleted content no longer retrievable", afterDelete.every((h) => !/meteorite|zorblatt|gliftor|frimbulator|plumbus|splenden/i.test(`${h.topic} ${h.body}`)));
   const remaining = await db.dataSource.count({ where: { shopId, id: { in: createdSourceIds } } });
   ok("sources deleted", remaining === 0);

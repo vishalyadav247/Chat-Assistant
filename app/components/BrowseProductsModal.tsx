@@ -165,6 +165,12 @@ export function BrowseProductsModal(props: {
   open: boolean;
   onClose: () => void;
   selectedIds: string[]; // shopify product gids
+  /**
+   * Server-side selection cap for the calling feature (curated answers 20, app
+   * recommendations 50 …). Selecting past it is blocked here so the merchant
+   * sees the limit while picking instead of a rejected save (QA D12a).
+   */
+  maxSelected?: number;
   onConfirm: (ids: string[], meta?: Record<string, BrowseItemMeta>) => void;
 }) {
   const fetcher = useFetcher<BrowseData>();
@@ -217,11 +223,13 @@ export function BrowseProductsModal(props: {
     }
   }, [data]);
 
+  const cap = props.maxSelected;
   const toggle = (id: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
-      else next.add(id);
+      else if (cap === undefined || next.size < cap) next.add(id);
+      else return prev; // at cap — selecting more is blocked, not silently lost
       return next;
     });
   };
@@ -233,6 +241,7 @@ export function BrowseProductsModal(props: {
     }).format(price);
 
   const count = selected.size;
+  const atCap = cap !== undefined && count >= cap;
 
   return (
     <BrowseModalShell
@@ -242,8 +251,10 @@ export function BrowseProductsModal(props: {
       footer={
         <>
           <span style={{ marginRight: "auto" }}>
-            <s-text tone="neutral">
-              {count} product{count === 1 ? "" : "s"} selected
+            <s-text tone={atCap ? "critical" : "neutral"}>
+              {cap === undefined
+                ? `${count} product${count === 1 ? "" : "s"} selected`
+                : `${count} of ${cap} products selected${atCap ? " — limit reached" : ""}`}
             </s-text>
           </span>
           <s-button onClick={props.onClose}>Cancel</s-button>
@@ -353,6 +364,7 @@ export function BrowseProductsModal(props: {
                   id={`browse-product-${item.id}`}
                   type="checkbox"
                   checked={selected.has(item.id)}
+                  disabled={atCap && !selected.has(item.id)}
                   onChange={() => toggle(item.id)}
                 />
                 <BrowseThumb imageUrl={item.imageUrl} title={item.title} />

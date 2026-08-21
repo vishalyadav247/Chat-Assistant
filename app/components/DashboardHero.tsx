@@ -8,6 +8,11 @@ import { BRAND, RADIUS, SHADOW, SPACE } from "./ui/tokens";
 // white-on-gradient; focus outlines are preserved.
 
 const HERO_CSS = `
+/* Phones (spec 20): tighter hero, calmer title scale. */
+@media (max-width: 768px) {
+  .cc-hero { padding: 16px !important; }
+  .cc-hero-title { font-size: 18.5px !important; }
+}
 @keyframes cc-pulse {
   0% { box-shadow: 0 0 0 0 rgba(74,222,128,.5); }
   70% { box-shadow: 0 0 0 6px rgba(74,222,128,0); }
@@ -115,10 +120,11 @@ export function DashboardHero(props: {
   const subline =
     pending === 0 && atc === 0
       ? "Your assistant is ready — shoppers' questions and chat add-to-carts will show up here."
-      : `${pending} shopper ${pending === 1 ? "question is" : "questions are"} waiting for an answer, and your assistant drove ${atc} chat add-to-cart${atc === 1 ? "" : "s"} this month.`;
+      : `${pending} shopper ${pending === 1 ? "question is" : "questions are"} waiting for an answer, and your assistant drove ${atc} chat add-to-cart${atc === 1 ? "" : "s"} in the last 30 days.`;
 
   return (
     <div
+      className="cc-hero"
       style={{
         position: "relative",
         overflow: "hidden",
@@ -146,6 +152,7 @@ export function DashboardHero(props: {
       >
         <div style={{ minWidth: 0 }}>
           <h1
+            className="cc-hero-title"
             style={{
               margin: 0,
               fontSize: 22,

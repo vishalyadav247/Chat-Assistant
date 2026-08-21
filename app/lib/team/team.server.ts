@@ -1,13 +1,13 @@
 import { z } from "zod";
 import db from "../../db.server";
-import { env } from "../env.server";
 import { getQuota } from "../billing/plans.server";
 import { requireShopId } from "../tenancy.server";
-import { unauthenticated } from "../../shopify.server";
+import { runtimeConfig } from "../platform/runtime-config.server";
 import { handoverEmail, inviteEmail, resetEmail, sendEmail } from "../email/email.server";
 import { hashPassword, passwordProblem, verifyPassword } from "./password.server";
 import { consumeToken, findToken, mintToken, revokeTokens } from "./tokens.server";
 import { revokeMemberSessions } from "./web-session.server";
+import { logError } from "../log.server";
 
 // Team module (spec 18): roster + logins for the standalone web surface.
 // Replaces the JSON roster that lived in ShopSettings.settings.team.members.
@@ -64,8 +64,8 @@ const MAX_FAILED_LOGINS = 5;
 const LOCK_MS = 15 * 60 * 1000;
 
 export function webBaseUrl(): string {
-  const base = env().WEB_APP_URL || process.env.SHOPIFY_APP_URL || "";
-  return base.replace(/\/+$/, "");
+  // Operator-managed at /platform/settings; WEB_APP_URL / SHOPIFY_APP_URL fall back.
+  return runtimeConfig().webAppUrl.replace(/\/+$/, "");
 }
 
 function asRole(value: string): MemberRole {
@@ -161,6 +161,9 @@ const placeholderOwnerEmail = (shopDomain: string) => `owner@${shopDomain}`;
 
 async function lookupOwnerIdentity(shopDomain: string): Promise<{ email: string; name: string }> {
   try {
+    // Lazy import: keeps offline scripts (golden eval, smoke) from booting the
+    // full Shopify app config just to reach the pipeline through contacts.
+    const { unauthenticated } = await import("../../shopify.server");
     const { admin } = await unauthenticated.admin(shopDomain);
     const res = await admin.graphql(`#graphql
       query OwnerIdentity { shop { email name shopOwnerName } }`);
@@ -168,10 +171,10 @@ async function lookupOwnerIdentity(shopDomain: string): Promise<{ email: string;
       data?: { shop?: { email?: string; name?: string; shopOwnerName?: string } };
       errors?: unknown;
     };
-    if (json.errors) console.error("owner_identity_lookup_errors", JSON.stringify(json.errors).slice(0, 500));
+    if (json.errors) logError("owner_identity_lookup_errors", JSON.stringify(json.errors).slice(0, 500));
     return { email: json.data?.shop?.email ?? "", name: json.data?.shop?.shopOwnerName || json.data?.shop?.name || "" };
   } catch (error) {
-    console.error("owner_identity_lookup_failed", shopDomain, error instanceof Error ? error.message : error);
+    logError("owner_identity_lookup_failed", error, { shopDomain });
     return { email: "", name: "" };
   }
 }
@@ -309,6 +312,9 @@ export async function resendInvite(args: { shopId: string; memberId: string; inv
   if (!member || !shop) return { ok: false, error: "Member not found." };
   if (member.role === "owner") return { ok: false, error: "The owner signs in from the Shopify admin." };
   if (member.status === "disabled") return { ok: false, error: "Enable the member first." };
+  // An invite link sets a NEW password on acceptance — on an active account
+  // that is a takeover. Reset links are the tool for members who have joined.
+  if (member.status === "active") return { ok: false, error: "This member has already joined. Send a reset link instead." };
   const sent = await issueInvite({ shopId: args.shopId, member, shopName: shop.name || shop.domain, inviterName: args.inviterName });
   return { ok: true, member: toRow(member), inviteUrl: sent.inviteUrl, emailDelivered: sent.emailDelivered };
 }
@@ -360,7 +366,7 @@ export async function peekInvite(raw: string) {
     db.teamMember.findFirst({ where: { id: row.memberId, shopId: row.shopId } }),
     db.shop.findUnique({ where: { id: row.shopId }, select: { name: true, domain: true } }),
   ]);
-  if (!member || !shop || member.status === "disabled") return null;
+  if (!member || !shop || member.status !== "invited") return null;
   return { member, shopName: shop.name || shop.domain };
 }
 
@@ -371,10 +377,13 @@ export async function acceptInvite(args: {
 }): Promise<{ ok: true; member: { id: string; shopId: string } } | { ok: false; error: string }> {
   const problem = passwordProblem(args.password);
   if (problem) return { ok: false, error: problem };
+  // Only "invite" tokens are accepted here (a "reset" token goes through
+  // resetPassword); an invite must never set a password on an account that
+  // has already joined — that would be a takeover path.
   const row = await consumeToken(args.raw, "invite");
   if (!row) return { ok: false, error: "This invitation link is invalid or has expired. Ask for a new one." };
   const member = await db.teamMember.findFirst({ where: { id: row.memberId, shopId: row.shopId } });
-  if (!member || member.status === "disabled") return { ok: false, error: "This invitation is no longer valid." };
+  if (!member || member.status !== "invited") return { ok: false, error: "This invitation is no longer valid." };
   const name = args.name.trim().slice(0, 100) || member.name;
   await db.teamMember.update({
     where: { id: member.id },
@@ -493,7 +502,10 @@ export async function verifyLogin(emailInput: string, password: string): Promise
   const now = Date.now();
   const locked = members.filter((m) => m.lockedUntil && m.lockedUntil.getTime() > now);
   if (locked.length === members.length) {
-    return { ok: false, error: "Too many attempts. Try again in a few minutes." };
+    // Lock is enforced server-side but reported with the generic message so a
+    // locked account can't be told apart from an unknown email.
+    await verifyPassword(password, "scrypt$32768$8$1$AAAAAAAAAAAAAAAAAAAAAA==$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+    return { ok: false, error: generic };
   }
   const candidates: LoginCandidate[] = [];
   const failed: string[] = [];
@@ -533,7 +545,21 @@ export async function notificationRecipients(args: {
   assigneeId: string | null;
 }): Promise<Array<{ id: string; email: string; name: string; role: MemberRole; prefs: NotifyPrefs }>> {
   requireShopId(args.shopId);
-  const members = await db.teamMember.findMany({ where: { shopId: args.shopId, status: "active" } });
+  let members = await db.teamMember.findMany({ where: { shopId: args.shopId, status: "active" } });
+  if (members.length === 0) {
+    // Fresh install: the owner row is normally created the first time the
+    // merchant opens the web app. Bootstrap it here so handover emails reach
+    // the store owner before that ever happens.
+    const shop = await db.shop.findUnique({ where: { id: args.shopId }, select: { domain: true } });
+    if (shop) {
+      try {
+        await ensureOwnerMember(args.shopId, shop.domain);
+        members = await db.teamMember.findMany({ where: { shopId: args.shopId, status: "active" } });
+      } catch (error) {
+        logError("notification_owner_bootstrap_failed", error);
+      }
+    }
+  }
   return members
     .map((m) => ({ id: m.id, email: m.email, name: m.name, role: asRole(m.role), prefs: parseNotifyPrefs(m.notifyPrefs, m.role) }))
     .filter((m) => {

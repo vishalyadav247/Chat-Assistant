@@ -3,36 +3,55 @@ import { useState } from "react";
 // Billing FAQ accordion (spec 15 — these 6 items are the policy contract and
 // the copy is verbatim from the design prototype plan-usage.html).
 // Multiple items can be open at once.
+// The overage rate is NOT hard-coded: it arrives from the plan matrix
+// (plans.server.ts → the route loader), so a /platform price edit is reflected
+// here too. `null` = the plan has no overage (AI stops at the cap).
 
-const FAQ_ITEMS: Array<[question: string, answer: string]> = [
-  [
-    "What exactly is counted as 1 AI conversation?",
-    "A conversation is a single shopper session with your AI — no matter how many back-and-forth messages it contains. A new session begins after 30 minutes of inactivity.",
-  ],
-  [
-    "What happens when I reach my monthly AI conversation limit?",
-    "Your AI keeps replying — extra conversations beyond your plan are billed at $0.4 each. Upgrade anytime to raise the included allowance.",
-  ],
-  [
-    "Does unused AI usage carry over to the next month?",
-    "No. Unused conversations reset on the 1st of each month and don't roll over to the next period.",
-  ],
-  [
-    "Can I cancel my subscription at anytime?",
-    "Yes. You can cancel from this page at any time; your plan stays active until the end of the current billing period.",
-  ],
-  [
-    "If I cancel the paid plans, will I lose the features or effects that were available in the previous plan?",
-    "You keep all your data, but plan-specific features (extra conversations, exports, branding removal) pause until you resubscribe.",
-  ],
-  [
-    "Is it easy to switch between plans?",
-    "Very easy — upgrade or downgrade right here anytime. Changes apply immediately and billing is prorated by Shopify.",
-  ],
-];
+function overageAnswer(overagePerConversation: number | null): string {
+  if (overagePerConversation === null) {
+    return "Your plan has no overage billing — your AI pauses new conversations once the included allowance is used up. Upgrade anytime to raise the allowance.";
+  }
+  const rate =
+    overagePerConversation % 1 === 0
+      ? overagePerConversation.toFixed(0)
+      : overagePerConversation.toFixed(2);
+  return `Your AI keeps replying — extra conversations beyond your plan are billed at $${rate} each. Upgrade anytime to raise the included allowance.`;
+}
 
-export function PlanFaq(props: { contactHref: string }) {
+export function faqItems(
+  overagePerConversation: number | null,
+): Array<[question: string, answer: string]> {
+  return [
+    [
+      "What exactly is counted as 1 AI conversation?",
+      "A conversation is a single shopper session with your AI — no matter how many back-and-forth messages it contains. A new session begins after 30 minutes of inactivity.",
+    ],
+    [
+      "What happens when I reach my monthly AI conversation limit?",
+      overageAnswer(overagePerConversation),
+    ],
+    [
+      "Does unused AI usage carry over to the next month?",
+      "No. Unused conversations reset on the 1st of each month and don't roll over to the next period.",
+    ],
+    [
+      "Can I cancel my subscription at anytime?",
+      "Yes. You can cancel from this page at any time; your plan stays active until the end of the current billing period.",
+    ],
+    [
+      "If I cancel the paid plans, will I lose the features or effects that were available in the previous plan?",
+      "You keep all your data, but plan-specific features (extra conversations, exports, branding removal) pause until you resubscribe.",
+    ],
+    [
+      "Is it easy to switch between plans?",
+      "Very easy — upgrade or downgrade right here anytime. Changes apply immediately and billing is prorated by Shopify.",
+    ],
+  ];
+}
+
+export function PlanFaq(props: { contactHref: string; overagePerConversation: number | null }) {
   const [open, setOpen] = useState<Set<number>>(new Set());
+  const FAQ_ITEMS = faqItems(props.overagePerConversation);
 
   const toggle = (index: number) => {
     setOpen((current) => {

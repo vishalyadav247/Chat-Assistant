@@ -334,6 +334,7 @@ export function InstructionsRecommendationsTab(props: {
       <BrowseProductsModal
         open={pairStage.stage === "anchor"}
         selectedIds={[]}
+        maxSelected={1}
         onClose={() => setPairStage({ stage: "closed" })}
         onConfirm={(ids, meta) => {
           const anchorId = ids[0];
@@ -347,6 +348,8 @@ export function InstructionsRecommendationsTab(props: {
       <BrowseProductsModal
         open={pairStage.stage === "companions"}
         selectedIds={[]}
+        // Mirrors crossSellSchema.companionIds.max(20).
+        maxSelected={20}
         onClose={() => setPairStage({ stage: "closed" })}
         onConfirm={(ids) => {
           if (pairStage.stage !== "companions") return;

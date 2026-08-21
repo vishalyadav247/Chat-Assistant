@@ -41,6 +41,9 @@ export const apiVersion = ApiVersion.July26;
 export const addDocumentResponseHeaders = shopify.addDocumentResponseHeaders;
 export const authenticate = shopify.authenticate;
 export const unauthenticated = shopify.unauthenticated;
-export const login = shopify.login;
+// NOTE: `shopify.login` is deliberately NOT exported. Its only consumer was the
+// template's /auth/login shop-domain form, removed 2026-08-21 — App Store review
+// requirement 2.3.1 forbids asking a merchant to type their .myshopify.com
+// domain. Installation goes through the App Store listing only. Do not re-add.
 export const registerWebhooks = shopify.registerWebhooks;
 export const sessionStorage = shopify.sessionStorage;

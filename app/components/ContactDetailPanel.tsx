@@ -271,9 +271,11 @@ function ActivityTimeline(props: { items: ContactActivityItem[] }) {
 
 function InfoRow(props: { label: string; children: React.ReactNode }) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "6px 0" }}>
+    // flexWrap: long values (emails, page URLs) drop below the label on
+    // narrow screens instead of colliding with it (spec 19).
+    <div style={{ display: "flex", justifyContent: "space-between", gap: "4px 12px", padding: "6px 0", flexWrap: "wrap" }}>
       <s-text tone="neutral">{props.label}</s-text>
-      <span style={{ textAlign: "right", fontSize: 13 }}>{props.children}</span>
+      <span style={{ textAlign: "right", fontSize: 13, minWidth: 0, overflowWrap: "anywhere", marginLeft: "auto" }}>{props.children}</span>
     </div>
   );
 }
@@ -351,6 +353,7 @@ export function ContactDetailPanel(props: {
         {/* No heading — the two action buttons need the width (left-aligned,
             close X pinned right); the dialog keeps its aria-label. */}
         <div
+          className="cc-panel-head"
           style={{
             display: "flex",
             alignItems: "center",

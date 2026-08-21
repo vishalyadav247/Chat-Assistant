@@ -1,9 +1,10 @@
 import { z } from "zod";
 import db from "../../db.server";
-import { hasFeature, requirePlan, PlanGateError } from "../billing/plans.server";
+import { getQuota, hasFeature, isUnlimitedQuota, requirePlan, PlanGateError } from "../billing/plans.server";
 import { campaignSettingsSchema, type CampaignSettingsData } from "../settings/schemas";
 import { requireShopId } from "../tenancy.server";
 import { campaignTemplate, isPremiumTemplate } from "./templates";
+import { logError } from "../log.server";
 
 // Proactive-chat campaign CRUD + widget projection + metric counters (spec 12).
 // Every function is shop-scoped; premium templates are gated server-side both
@@ -65,11 +66,71 @@ export async function listCampaigns(shopId: string): Promise<CampaignRow[]> {
 
 const savePayloadSchema = z.object({
   id: z.string().max(64).optional(),
-  name: z.string().trim().min(1).max(100),
+  name: z.string().trim().min(1, "Give the campaign a name").max(100, "Name must be 100 characters or fewer"),
   templateType: z.string().max(40),
   status: z.enum(["active", "inactive"]),
   settings: z.unknown().optional(),
 });
+
+// SAVE-path settings schema: STRICT. The frozen campaignSettingsSchema uses
+// `.catch()` so stored blobs always parse on READ, but on save that would
+// silently rewrite a bad URL / oversized message to "" under a "Campaign
+// saved" toast. Invalid input returns { ok:false, error } instead.
+const strictCampaignSettingsSchema = z
+  .object({
+    trigger: z.object({
+      pageTypes: z
+        .array(z.enum(["home", "product", "collection", "search", "cart", "any"]))
+        .min(1, "Pick at least one page type"),
+      urlContains: z.string().max(300, "“URL contains” must be 300 characters or fewer"),
+      delaySeconds: z
+        .number()
+        .int("Delay must be a whole number of seconds")
+        .min(0, "Delay can't be negative")
+        .max(300, "Delay can be at most 300 seconds"),
+      exitIntent: z.boolean(),
+      cartMinItems: z.number().int("Cart items must be a whole number").min(0, "Cart items can't be negative"),
+      cartMinValue: z.number().min(0, "Cart value can't be negative"),
+    }),
+    message: z.string().max(500, "Message must be 500 characters or fewer"),
+    ctaLabel: z.string().max(60, "Button label must be 60 characters or fewer"),
+    ctaAction: z.enum(["open_chat", "apply_code", "link"]),
+    // Only relative paths or http(s) — a javascript:/data: CTA would execute
+    // in storefront visitors' browsers (review M3).
+    ctaUrl: z
+      .string()
+      .max(500, "Link URL must be 500 characters or fewer")
+      .refine(
+        (v) => v === "" || v.startsWith("/") || /^https?:\/\//i.test(v),
+        "Link URL must start with / or http(s)://",
+      ),
+    discountCode: z.string().max(60, "Discount code must be 60 characters or fewer"),
+    productIds: z.array(z.string().max(120)),
+    collectionIds: z.array(z.string().max(120)),
+  })
+  .superRefine((s, ctx) => {
+    if (s.ctaAction === "link" && s.ctaUrl.trim() === "") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ctaUrl"],
+        message: "Add the link the button should open",
+      });
+    }
+    if (s.ctaAction === "apply_code" && s.discountCode.trim() === "") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["discountCode"],
+        message: "Add the discount code the button should apply",
+      });
+    }
+  });
+
+/** ZodError → one merchant-readable line. */
+function issueMessage(error: z.ZodError): string {
+  const issue = error.issues[0];
+  if (!issue) return "Invalid campaign payload";
+  return issue.message;
+}
 
 export type SaveCampaignResult =
   | { ok: true; id: string }
@@ -84,7 +145,7 @@ export async function saveCampaign(
 ): Promise<SaveCampaignResult> {
   requireShopId(shopId);
   const parsed = savePayloadSchema.safeParse(payload);
-  if (!parsed.success) return { ok: false, error: "Invalid campaign payload", code: "invalid" };
+  if (!parsed.success) return { ok: false, error: issueMessage(parsed.error), code: "invalid" };
   const { id, name, templateType, status } = parsed.data;
   if (!campaignTemplate(templateType)) {
     return { ok: false, error: "Unknown template", code: "invalid" };
@@ -97,7 +158,28 @@ export async function saveCampaign(
     }
     throw error;
   }
-  const settings = campaignSettingsSchema.parse(parsed.data.settings ?? {});
+  // Fill any field the client omitted with its default, then validate the
+  // merchant's own values strictly.
+  const base = campaignSettingsSchema.parse({});
+  const incoming = (parsed.data.settings ?? {}) as Partial<CampaignSettingsData>;
+  const strict = strictCampaignSettingsSchema.safeParse({
+    ...base,
+    ...incoming,
+    trigger: { ...base.trigger, ...(incoming.trigger ?? {}) },
+  });
+  if (!strict.success) return { ok: false, error: issueMessage(strict.error), code: "invalid" };
+  const settings = strict.data;
+
+  // active_campaigns quota (spec 15). Only saving AS ACTIVE is gated — drafts
+  // are unlimited, and an already-active campaign re-saved stays active.
+  if (status === "active" && (await activationWouldExceedQuota(shopId, plan, id))) {
+    return {
+      ok: false,
+      error:
+        "You've reached your plan's limit for active campaigns. Deactivate another one or upgrade your plan.",
+      code: "plan_gate",
+    };
+  }
 
   if (id) {
     const updated = await db.campaign.updateMany({
@@ -147,12 +229,40 @@ export async function deleteCampaign(shopId: string, id: string): Promise<boolea
   return result.count > 0;
 }
 
+/** Would activating one more campaign exceed the plan's `active_campaigns`
+ *  quota? Counts only campaigns that are active RIGHT NOW, excluding the row
+ *  being changed, so re-saving an already-active campaign never trips the gate.
+ *
+ *  Downgrade rule (spec 15): campaigns already active on a higher plan keep
+ *  running after a downgrade — this only blocks going from N to N+1. */
+async function activationWouldExceedQuota(
+  shopId: string,
+  plan: string,
+  excludeId?: string,
+): Promise<boolean> {
+  const quota = getQuota(plan, "active_campaigns");
+  if (isUnlimitedQuota(quota)) return false;
+  const active = await db.campaign.count({
+    where: { shopId, status: "active", ...(excludeId ? { id: { not: excludeId } } : {}) },
+  });
+  return active >= quota;
+}
+
 export async function toggleCampaign(
   shopId: string,
   id: string,
   active: boolean,
-): Promise<boolean> {
+): Promise<boolean | { error: string }> {
   requireShopId(shopId);
+  if (active) {
+    const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
+    if (await activationWouldExceedQuota(shopId, shop?.plan ?? "free", id)) {
+      return {
+        error:
+          "You've reached your plan's limit for active campaigns. Deactivate another one or upgrade your plan.",
+      };
+    }
+  }
   const result = await db.campaign.updateMany({
     where: { id, shopId },
     data: { status: active ? "active" : "inactive" },
@@ -320,7 +430,7 @@ export async function recordCampaignMetric(
     await db.campaign.updateMany({ where: { id: campaignId, shopId }, data });
   } catch (error) {
     // Metrics must never break the beacon path.
-    console.error("campaign_metric_error", metric, error);
+    logError("campaign_metric_error", error, { metric, shopId });
   }
 }
 

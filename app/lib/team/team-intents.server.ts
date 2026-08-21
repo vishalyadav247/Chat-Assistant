@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z, ZodError } from "zod";
 import db from "../../db.server";
 import type { ShopAccess } from "../access.server";
 import {
@@ -56,6 +56,14 @@ export async function applyTeamIntent(args: {
       }
       case "team-resend": {
         const p = z.object({ id: z.string().min(1) }).parse(raw);
+        // Same privilege rule as team-reset-link: a web admin may only act on
+        // agents (an invite link sets a password, so it must not cross levels).
+        const target = await db.teamMember.findFirst({ where: { id: p.id, shopId }, select: { role: true } });
+        if (!target) return { ok: false, intent, error: "Member not found." };
+        if (target.role === "owner") return { ok: false, intent, error: "The owner signs in from the Shopify admin." };
+        if (access.role === "admin" && target.role !== "agent") {
+          return { ok: false, intent, error: "Only the store owner can re-send another admin's invite." };
+        }
         const result = await resendInvite({ shopId, memberId: p.id, inviterName });
         return { ok: result.ok, intent, error: result.error, link: result.inviteUrl, emailDelivered: result.emailDelivered };
       }
@@ -92,6 +100,11 @@ export async function applyTeamIntent(args: {
         return { ok: false, intent, error: `Unknown team intent: ${intent}` };
     }
   } catch (error) {
+    if (error instanceof ZodError) {
+      const issue = error.issues[0];
+      const path = issue?.path.length ? `${issue.path.join(".")}: ` : "";
+      return { ok: false, intent, error: `${path}${issue?.message ?? "Invalid values."}` };
+    }
     return { ok: false, intent, error: error instanceof Error ? error.message : "Invalid team payload" };
   }
 }

@@ -1,7 +1,7 @@
 import db from "../../db.server";
 import { recordEvent } from "../analytics/events.server";
 import { embedTexts } from "../embeddings/embedding.server";
-import { resolveAvailability } from "../settings/availability.server";
+import { resolveAvailabilityFor } from "../settings/availability.server";
 import { requireShopId } from "../tenancy.server";
 import type { HandoverConfigData } from "../settings/schemas";
 import type { ShopConfig } from "../config/shop-config.server";
@@ -21,12 +21,15 @@ export type HandoverTrigger =
 // Explicit ask = the shopper wants a person. Every pattern needs an intent verb
 // or an unambiguous "human" noun — a bare "customer service" ("what's your
 // customer service email?") is a QUESTION for the RAG lane, not a handover.
+// The article group is `an?` (not `a`) — "speak with AN agent" is at least as
+// common as "speak with A person", and the narrower group missed it entirely.
+const WHO = "(human|person|agent|someone|rep|representative)\\b";
+const ARTICLE = "(an?\\s+|the\\s+|your\\s+|some\\s+)?";
 const EXPLICIT_PATTERNS = [
-  /talk\s+to\s+(a\s+)?(human|person|agent|someone|rep)/i,
-  /speak\s+(to|with)\s+(a\s+)?(human|person|agent|someone|rep)/i,
+  new RegExp(`\\b(talk|speak|chat)\\s+(to|with)\\s+${ARTICLE}${WHO}`, "i"),
   /real\s+(person|human|agent)/i,
   /human\s+(agent|support|help)/i,
-  /connect\s+me\s+(to|with)\s+(a\s+|the\s+|your\s+)?(human|person|agent|someone|rep|support|team)/i,
+  new RegExp(`connect\\s+me\\s+(to|with)\\s+${ARTICLE}(human|person|agent|someone|rep|support|team)\\b`, "i"),
   /\b(talk|speak|chat|connect|contact|reach)\b[^.?!]{0,40}\bcustomer\s+(service|support|care)\b/i,
 ];
 
@@ -115,6 +118,14 @@ export interface HandoverFrameData {
     formMessage: string;
     postSubmitMessage: string;
   };
+  /**
+   * Spec 10 step 4: "message + contact method chips". True for the
+   * contact_methods destination AND for the inbox destination when we're
+   * offline and the merchant chose contact methods over a form — the copy is
+   * the same in both, so the chips must be too. The widget renders them from
+   * the chatbox contact methods it already has in its config (spec 06).
+   */
+  contactMethods: boolean;
   aiDormant: boolean;
 }
 
@@ -131,10 +142,17 @@ export async function executeHandover(args: {
   const shopId = requireShopId(args.shopId);
   const handover = args.config.handover;
 
-  const availability = resolveAvailability(args.config.settings.availability, args.config.timezone);
+  // Live availability WITH agent presence — the widget status line resolves it
+  // the same way, so the copy the shopper reads matches the badge they saw.
+  const availability = await resolveAvailabilityFor(
+    shopId,
+    args.config.settings.availability,
+    args.config.timezone,
+  );
   const online = availability.status === "online";
 
   let aiDormant = false;
+  let contactMethods = false;
   const messages: string[] = [];
   let form: HandoverFrameData["form"] = null;
 
@@ -152,6 +170,7 @@ export async function executeHandover(args: {
         };
       } else {
         messages.push(handover.contactMethods.message);
+        contactMethods = true;
       }
       switch (handover.inbox.aiWhileWaiting) {
         case "never":
@@ -179,6 +198,7 @@ export async function executeHandover(args: {
     }
     case "contact_methods": {
       messages.push(handover.contactMethods.message);
+      contactMethods = true;
       aiDormant = false;
       break;
     }
@@ -224,7 +244,7 @@ export async function executeHandover(args: {
   // (submitHandoverForm) notifies once the shopper's details are in.
   if (!form) await notifyMerchantHandover(shopId, args.conversationId);
 
-  return { destination: handover.destination, messages, form, aiDormant };
+  return { destination: handover.destination, messages, form, contactMethods, aiDormant };
 }
 
 function collectToFields(collect: {
@@ -258,7 +278,7 @@ async function intentRuleVectors(shopId: string, topics: string[]): Promise<numb
   const key = `${shopId}:${topics.join("|")}`;
   let vectors = global.intentRuleVectorCache.get(key);
   if (!vectors) {
-    vectors = await embedTexts(topics.map((t) => `a message about ${t}`));
+    vectors = await embedTexts(topics.map((t) => `a message about ${t}`), { shopId });
     global.intentRuleVectorCache.set(key, vectors);
     if (global.intentRuleVectorCache.size > 500) global.intentRuleVectorCache.clear();
   }

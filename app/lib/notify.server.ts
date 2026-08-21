@@ -1,4 +1,5 @@
 import { requireShopId } from "./tenancy.server";
+import { logError } from "./log.server";
 
 // Team notification dispatcher (spec 10 seam, implemented in spec 18).
 // Producers call these fire-and-forget helpers; delivery (browser push +
@@ -23,7 +24,7 @@ async function dispatch(data: NotifyJobData): Promise<void> {
     const { enqueue } = await import("./jobs/queue.server");
     await enqueue(NOTIFY_JOB, data);
   } catch (error) {
-    console.error("notify_enqueue_failed", data.kind, error);
+    logError("notify_enqueue_failed", error, { kind: data.kind, shopId: data.shopId });
   }
 }
 

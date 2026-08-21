@@ -129,7 +129,9 @@ export function DataTable<Row extends { id: string }>(props: {
   // technique as row-hover CSS elsewhere). nth-child shifts by one when the
   // selection checkbox column is present.
   const scopeClass = "dt" + useId().replace(/[^a-zA-Z0-9-]/g, "");
-  const widthCss = props.columns
+  // Fixed widths apply on desktop only (spec 19): on phones the columns take
+  // their natural size and the table pans inside its .dt-scroll wrapper.
+  const widthRules = props.columns
     .map((col, i) => {
       if (col.width === undefined) return "";
       const width = typeof col.width === "number" ? `${col.width}px` : col.width;
@@ -138,6 +140,7 @@ export function DataTable<Row extends { id: string }>(props: {
     })
     .filter(Boolean)
     .join("\n");
+  const widthCss = widthRules ? `@media (min-width: 769px) {\n${widthRules}\n}` : "";
   // No custom hover/cursor CSS for clickable rows: the s-* table hosts are
   // display:contents (the real tr/td live in shadow DOM), so external
   // backgrounds never paint. Polaris supplies whole-row hover + pointer
@@ -254,6 +257,7 @@ export function DataTable<Row extends { id: string }>(props: {
                 zIndex: 2,
                 display: "flex",
                 alignItems: "center",
+                flexWrap: "wrap",
                 gap: SPACE.sm,
                 padding: "4px 12px",
                 background: "var(--s-color-bg-surface-secondary, #f7f7f8)",
@@ -282,6 +286,9 @@ export function DataTable<Row extends { id: string }>(props: {
               </div>
             </div>
           ) : null}
+        {/* Wide tables pan inside this wrapper on narrow screens instead of
+            overflowing the page (spec 19); invisible when everything fits. */}
+        <div className="dt-scroll" style={{ overflowX: "auto" }}>
         <s-table>
           <s-table-header-row>
             {props.bulkActions ? (
@@ -371,17 +378,19 @@ export function DataTable<Row extends { id: string }>(props: {
           </s-table-body>
         </s-table>
         </div>
+        </div>
       )}
       </div>
 
       <div
+        className="dt-pager"
         style={{
           display: "grid",
           gridTemplateColumns: "1fr auto 1fr",
           alignItems: "center",
         }}
       >
-        <span />
+        <span className="dt-pager-spacer" />
         <div style={{ display: "flex", gap: SPACE.sm, alignItems: "center" }}>
           <s-button
             variant="tertiary"
@@ -402,6 +411,7 @@ export function DataTable<Row extends { id: string }>(props: {
           />
         </div>
         <div
+          className="dt-pager-end"
           style={{
             justifySelf: "end",
             display: "inline-flex",
@@ -413,7 +423,9 @@ export function DataTable<Row extends { id: string }>(props: {
           {props.footerExtra}
           {showPerPageSelector ? (
             <>
-              <s-text tone="neutral">Items per page</s-text>
+              <span className="dt-pp-label">
+                <s-text tone="neutral">Items per page</s-text>
+              </span>
               <s-select
                 label="Items per page"
                 labelAccessibilityVisibility="exclusive"

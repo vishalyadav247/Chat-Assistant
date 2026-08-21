@@ -50,11 +50,13 @@ export function SettingsSurvey(props: {
       <s-section heading="Survey content">
         <s-text-field
           label="Intro"
+          maxLength={200}
           value={value.intro}
           onInput={(e) => onChange({ ...value, intro: e.currentTarget.value })}
         />
         <s-text-field
           label="Thank you message"
+          maxLength={200}
           value={value.thanks}
           onInput={(e) => onChange({ ...value, thanks: e.currentTarget.value })}
         />

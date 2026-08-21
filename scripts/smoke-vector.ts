@@ -43,7 +43,7 @@ async function main() {
   let queryEmbedding: number[];
   if (hasKey) {
     const { embedText } = await import("../app/lib/embeddings/embedding.server");
-    queryEmbedding = await embedText(query);
+    queryEmbedding = await embedText(query, { shopId });
   } else {
     const { pseudoEmbedding } = await import("../app/lib/embeddings/embedding.server");
     queryEmbedding = pseudoEmbedding(query);
@@ -90,7 +90,7 @@ async function main() {
   let curatedQuery: number[];
   if (hasKey) {
     const { embedText } = await import("../app/lib/embeddings/embedding.server");
-    curatedQuery = await embedText("what are your best sellers");
+    curatedQuery = await embedText("what are your best sellers", { shopId });
   } else {
     const { pseudoEmbedding } = await import("../app/lib/embeddings/embedding.server");
     curatedQuery = pseudoEmbedding("what are your best sellers best sellers top products most popular what sells the most");
@@ -107,7 +107,7 @@ async function main() {
   let ragQuery: number[];
   if (hasKey) {
     const { embedText } = await import("../app/lib/embeddings/embedding.server");
-    ragQuery = await embedText("do you ship to Canada?");
+    ragQuery = await embedText("do you ship to Canada?", { shopId });
   } else {
     const { pseudoEmbedding } = await import("../app/lib/embeddings/embedding.server");
     ragQuery = pseudoEmbedding("Shipping — international. We ship worldwide, including Canada, the UK, the EU and Australia. International delivery takes 7-14 business days; import duties may apply.");
@@ -128,4 +128,12 @@ main()
     console.error("\nSMOKE FAIL ✖", error.message ?? error);
     process.exit(1);
   })
-  .finally(() => db.$disconnect());
+  .finally(async () => {
+    await db.$disconnect();
+    // This script holds its OWN client, but the modules it imports above share
+    // app/db.server's singleton. Leaving that one connected kept an open pool
+    // on the event loop and the script never exited — `npm run smoke` printed
+    // PASS and then hung forever (it would wedge CI).
+    const appDb = (await import("../app/db.server")).default;
+    await appDb.$disconnect();
+  });

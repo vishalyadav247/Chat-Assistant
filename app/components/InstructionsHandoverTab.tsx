@@ -13,6 +13,8 @@ import { SaveBar } from "./SaveBar";
 
 type LeaveMessageData = HandoverConfigData["inbox"]["leaveMessage"];
 
+const MAX_INTENT_RULES = 20;
+
 const REPLY_TIMES: { value: LeaveMessageData["replyTime"]; label: string }[] = [
   { value: "24h", label: "Within 24 hours" },
   { value: "12h", label: "Within 12 hours" },
@@ -139,9 +141,13 @@ export function InstructionsHandoverTab(props: { initial: HandoverConfigData }) 
   const setInbox = (next: HandoverConfigData["inbox"]) =>
     setConfig((prev) => ({ ...prev, inbox: next }));
 
+  // Server cap (handoverConfigSchema intentRules.max(20)) — mirrored here so
+  // the merchant can't build a 21st rule that the save would reject.
+  const ruleCapReached = config.intentRules.length >= MAX_INTENT_RULES;
+
   const addRule = () => {
     const topic = ruleTopic.trim().slice(0, 150);
-    if (!topic) return;
+    if (!topic || ruleCapReached) return;
     setConfig((prev) => ({ ...prev, intentRules: [...prev.intentRules, { topic }] }));
     setRuleTopic("");
     setRuleFormOpen(false);
@@ -315,7 +321,11 @@ export function InstructionsHandoverTab(props: { initial: HandoverConfigData }) 
                 />
                 <Counter value={ruleTopic} max={150} />
                 <s-stack direction="inline" gap="small-200" alignItems="center">
-                  <s-button variant="primary" disabled={!ruleTopic.trim()} onClick={addRule}>
+                  <s-button
+                    variant="primary"
+                    disabled={!ruleTopic.trim() || ruleCapReached}
+                    onClick={addRule}
+                  >
                     Add rule
                   </s-button>
                   <s-button
@@ -330,10 +340,14 @@ export function InstructionsHandoverTab(props: { initial: HandoverConfigData }) 
               </s-stack>
             </s-box>
           ) : (
-            <s-stack direction="inline">
-              <s-button icon="plus" onClick={() => setRuleFormOpen(true)}>
+            <s-stack direction="inline" gap="base" alignItems="center">
+              <s-button icon="plus" disabled={ruleCapReached} onClick={() => setRuleFormOpen(true)}>
                 Add rule
               </s-button>
+              <s-text color="subdued">
+                {config.intentRules.length}/{MAX_INTENT_RULES} rules
+                {ruleCapReached ? " — remove one to add another" : ""}
+              </s-text>
             </s-stack>
           )}
         </s-stack>

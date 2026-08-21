@@ -41,10 +41,45 @@ const inputStyle: CSSProperties = {
   background: "var(--s-color-bg-surface, #fff)",
 };
 
-const rowStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 12 };
+// wrap: day rows (checkbox + two time inputs) don't fit a phone; on desktop
+// they fit on one line, so wrapping is behavior-neutral there (spec 19).
+const rowStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" };
 
 type DayEntry = AvailabilityData["days"][number];
 type StatusKey = "online" | "offline" | "break" | "holiday";
+
+const DAY_LABEL: Record<number, string> = Object.fromEntries(
+  DAY_ROWS.map((row) => [row.day, row.label]),
+);
+
+// Client mirror of the STRICT save-path schema (settings/save.server.ts) so a
+// bad time is flagged in place instead of coming back as a save banner.
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+const toMinutes = (value: string) => {
+  const [h, m] = value.split(":").map(Number);
+  return h * 60 + m;
+};
+/** Minutes spanned by from→to; a `to` at or before `from` wraps past midnight. */
+const spanMinutes = (from: string, to: string) => (toMinutes(to) - toMinutes(from) + 1440) % 1440;
+
+/** Today's YYYY-MM-DD in the SHOP's time zone — holiday dates are local dates. */
+function todayIn(timezone: string): string {
+  try {
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: timezone || "UTC",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      })
+        .formatToParts(new Date())
+        .map((p) => [p.type, p.value]),
+    );
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
 
 const STATUS_TONE: Record<StatusKey, "success" | "neutral" | "caution" | "info"> = {
   online: "success",
@@ -92,8 +127,65 @@ export function SettingsAvailability(props: {
     onChange({ ...value, holidays: { ...value.holidays, items } });
   };
 
-  const today = () => new Date().toISOString().slice(0, 10);
+  const today = () => todayIn(props.timezone);
   const tone = STATUS_TONE[props.preview.status as StatusKey] ?? "neutral";
+
+  const errors = useMemo(() => {
+    const out: { days?: string; breaks?: string; holidays?: string } = {};
+    const enabledDays = value.mode === "custom" ? value.days.filter((d) => d.enabled) : [];
+    if (value.mode === "custom") {
+      const blank = enabledDays.find((d) => !HHMM.test(d.from) || !HHMM.test(d.to));
+      const same = enabledDays.find((d) => d.from === d.to);
+      if (blank) {
+        out.days = `${DAY_LABEL[blank.day]}: enter both an opening and a closing time.`;
+      } else if (same) {
+        out.days = `${DAY_LABEL[same.day]}: opening and closing time can't be the same.`;
+      } else if (enabledDays.length === 0) {
+        out.days = "Enable at least one working day, or switch to 24 hours / 7 days.";
+      }
+    }
+    if (value.breaks.enabled && !out.days) {
+      for (let i = 0; i < value.breaks.ranges.length; i++) {
+        const range = value.breaks.ranges[i];
+        if (!HHMM.test(range.from) || !HHMM.test(range.to)) {
+          out.breaks = `Break ${i + 1}: enter a start and an end time.`;
+          break;
+        }
+        const length = spanMinutes(range.from, range.to);
+        if (length === 0) {
+          out.breaks = `Break ${i + 1}: start and end time can't be the same.`;
+          break;
+        }
+        // A break must sit inside every enabled day's working hours (overnight
+        // windows are unwrapped onto a 0–2880 minute axis, as on the server).
+        const outside = enabledDays.find((d) => {
+          const open = toMinutes(d.from);
+          const close = open + spanMinutes(d.from, d.to);
+          let start = toMinutes(range.from);
+          if (start < open) start += 1440;
+          return start + length > close;
+        });
+        if (outside) {
+          out.breaks = `Break ${i + 1} (${range.from}–${range.to}) falls outside ${DAY_LABEL[outside.day]}'s working hours (${outside.from}–${outside.to}).`;
+          break;
+        }
+      }
+    }
+    if (value.holidays.enabled) {
+      for (let i = 0; i < value.holidays.items.length; i++) {
+        const holiday = value.holidays.items[i];
+        if (!holiday.from || !holiday.to) {
+          out.holidays = `Holiday ${i + 1}: choose a start and an end date.`;
+          break;
+        }
+        if (holiday.to < holiday.from) {
+          out.holidays = `Holiday ${i + 1}${holiday.name ? ` (${holiday.name})` : ""}: the end date is before the start date.`;
+          break;
+        }
+      }
+    }
+    return out;
+  }, [value]);
 
   return (
     <s-stack gap="base">
@@ -183,6 +275,11 @@ export function SettingsAvailability(props: {
             })}
           </div>
         ) : null}
+        {errors.days ? (
+          <div style={{ marginTop: 8 }}>
+            <s-text tone="critical">{errors.days}</s-text>
+          </div>
+        ) : null}
         {/* Constant gap before this block — the custom-time card above only
             renders in custom mode, so the spacing lives here, not on it. */}
         <div style={{ marginTop: 14 }}>
@@ -214,6 +311,14 @@ export function SettingsAvailability(props: {
             </s-text>
           </s-choice>
         </s-choice-list>
+        {value.onlineStatusMode !== "working_hours" ? (
+          <div style={{ marginTop: 8 }}>
+            <s-text tone="neutral">
+              An agent counts as online while someone from your team has the inbox open, or has
+              replied to a conversation, in the last 5 minutes.
+            </s-text>
+          </div>
+        ) : null}
         </div>
       </s-section>
 
@@ -236,6 +341,7 @@ export function SettingsAvailability(props: {
         </s-stack>
         {value.breaks.enabled ? (
           <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 12 }}>
+            {errors.breaks ? <s-text tone="critical">{errors.breaks}</s-text> : null}
             {value.breaks.ranges.map((range, index) => (
               <div key={index} style={rowStyle}>
                 <input
@@ -309,6 +415,7 @@ export function SettingsAvailability(props: {
         </s-stack>
         {value.holidays.enabled ? (
           <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 12 }}>
+            {errors.holidays ? <s-text tone="critical">{errors.holidays}</s-text> : null}
             {value.holidays.items.map((holiday, index) => (
               <div key={index} style={{ ...rowStyle, flexWrap: "wrap" }}>
                 <div style={{ minWidth: 200, flex: 1 }}>
@@ -317,6 +424,7 @@ export function SettingsAvailability(props: {
                       the date inputs out of alignment with the other rows. */}
                   <s-text-field
                     label="Holiday name"
+                    maxLength={100}
                     labelAccessibilityVisibility="exclusive"
                     placeholder="Enter holiday name"
                     value={holiday.name}
@@ -378,6 +486,7 @@ export function SettingsAvailability(props: {
       <s-section heading="Status messages">
         <s-text-field
           label="Online status"
+          maxLength={120}
           value={value.messages.online}
           onInput={(e) =>
             onChange({ ...value, messages: { ...value.messages, online: e.currentTarget.value } })
@@ -385,6 +494,7 @@ export function SettingsAvailability(props: {
         />
         <s-text-field
           label="Offline status (with schedule)"
+          maxLength={120}
           details="Shown when an upcoming opening schedule is available. Use {{schedule}} to insert the next time you'll be back (e.g. tomorrow 9 AM)."
           value={value.messages.offline}
           onInput={(e) =>
@@ -393,6 +503,7 @@ export function SettingsAvailability(props: {
         />
         <s-text-field
           label="Break status"
+          maxLength={120}
           details="Use {{schedule}} to insert the time you'll be back (e.g. 1 PM)."
           value={value.messages.break}
           onInput={(e) =>
@@ -401,6 +512,7 @@ export function SettingsAvailability(props: {
         />
         <s-text-field
           label="Holiday status"
+          maxLength={120}
           details="Use {{schedule}} to insert the day and time you'll be back (e.g. Monday 9 AM)."
           value={value.messages.holiday}
           onInput={(e) =>

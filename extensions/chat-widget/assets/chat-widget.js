@@ -69,10 +69,14 @@
   var PRECHAT_KEY = "cc:prechat";
   var CONFIG_KEY = "cc:config";
   var POLL_KEY = "cc:poll";
+  var HUMAN_KEY = "cc:human"; // "1" = a team member took over (AI dormant)
+  var BLOCKED_KEY = "cc:blocked"; // "1" = merchant blocked this visitor
+  var SURVEY_KEY = "cc:survey"; // conversationId whose survey was already shown
   var OPEN_KEY = "cc:open"; // "1" = panel open — survives page navigation
   var SCREEN_KEY = "cc:screen";
   var DEFAULT_PLACEHOLDER = "Type your message…";
   var HUMAN_PLACEHOLDER = "A team member will reply here…";
+  var BLOCKED_PLACEHOLDER = "This chat has been closed.";
   var CONFIG_TTL = 5 * 60 * 1000;
   var SESSION_IDLE = 30 * 60 * 1000; // billing session rule (spec 15)
 
@@ -94,6 +98,14 @@
     surveyPending: false,
     pollTimer: null,
     pollSince: null,
+    humanMode: false,
+    blocked: false,
+    resolvedSeen: false,
+    restoring: false,
+    // Ids already rendered this page — the cursor alone can't prevent a
+    // double render when /history and a poll overlap, or when the client
+    // clock drifts from the server's (QA D1/D2/D9).
+    renderedIds: {},
     lastUserText: null,
   };
 
@@ -122,25 +134,49 @@
     }
     if (!s || !s.id || now - (s.at || 0) > SESSION_IDLE) {
       s = { id: uuid(), at: now };
+      // A rotated session is a NEW conversation: per-conversation flags must
+      // reset too, or a blocked/human thread's lock survives into it (QA D6).
       state.conversationId = null;
+      state.pollSince = null;
+      state.humanMode = false;
+      state.blocked = false;
+      state.resolvedSeen = false;
+      state.renderedIds = {};
+      state.emptyPolls = 0;
+      stopPolling();
       store(sessionStorage, CONVO_KEY, null);
       store(sessionStorage, POLL_KEY, null);
+      store(sessionStorage, HUMAN_KEY, null);
+      store(sessionStorage, BLOCKED_KEY, null);
     }
     if (touch) s.at = now;
     store(localStorage, SESSION_KEY, JSON.stringify(s));
     return s.id;
   }
 
-  // ── config fetch (sessionStorage cache, 5 min) ───────────────────────────
-  function getConfig() {
-    var raw = read(sessionStorage, CONFIG_KEY);
-    if (raw) {
-      try {
-        var hit = JSON.parse(raw);
-        if (hit && Date.now() - hit.at < CONFIG_TTL) return Promise.resolve(hit.data);
-      } catch (e) { /* refetch */ }
-    }
-    return fetch(base + "/widget-config", { headers: { Accept: "application/json" } })
+  // ── config fetch (sessionStorage cache, ≤5 min) ──────────────────────────
+  /** How long this payload's online/offline line stays true. The server sends
+   *  `availability.ttl` (seconds to the next schedule boundary, capped at 5
+   *  min) so the widget stops claiming "We're online" after closing time. */
+  function configTtl(data) {
+    var a = data && data.availability;
+    var ttl = a && typeof a.ttl === "number" ? a.ttl * 1000 : CONFIG_TTL;
+    return Math.max(15000, Math.min(CONFIG_TTL, ttl));
+  }
+  function cachedConfigAt() {
+    try {
+      var hit = JSON.parse(read(sessionStorage, CONFIG_KEY));
+      return hit && hit.at ? hit.at : 0;
+    } catch (e) { return 0; }
+  }
+  function fetchConfig() {
+    // Minute bucket: the route answers with `Cache-Control: max-age=300`, so
+    // without this the browser/CDN copy could pin a status line up to five
+    // minutes past a boundary — on top of the sessionStorage cache. Bucketing
+    // (rather than a random token) keeps page-to-page navigation inside the
+    // same minute on the cached response.
+    var url = base + "/widget-config?t=" + Math.floor(Date.now() / 60000);
+    return fetch(url, { headers: { Accept: "application/json" } })
       .then(function (res) {
         if (!res.ok) return null; // 404 = uninstalled/disabled → render nothing
         return res.json().then(function (data) {
@@ -149,6 +185,28 @@
         });
       })
       .catch(function () { return null; }); // network error → silent
+  }
+  function getConfig() {
+    var raw = read(sessionStorage, CONFIG_KEY);
+    if (raw) {
+      try {
+        var hit = JSON.parse(raw);
+        if (hit && Date.now() - hit.at < configTtl(hit.data)) return Promise.resolve(hit.data);
+      } catch (e) { /* refetch */ }
+    }
+    return fetchConfig();
+  }
+
+  /** A tab left open across a boundary still holds the boot payload: re-pull
+   *  the status line when the shopper opens the panel. Only the availability
+   *  slice is swapped in — re-theming a live panel mid-session would flicker. */
+  function refreshAvailability() {
+    if (Date.now() - cachedConfigAt() < configTtl(config)) return;
+    fetchConfig().then(function (data) {
+      if (!data || !data.availability || !config) return;
+      config.availability = data.availability;
+      if (state.open && state.screen === "home") showScreen("home");
+    });
   }
 
   // ── lazy module loading ──────────────────────────────────────────────────
@@ -285,12 +343,13 @@
     ui.launcher.style.display = "none";
     ui.launcher.setAttribute("aria-expanded", "true");
     beacon("widget_opened", { pageType: pageType });
+    refreshAvailability(); // status line may have crossed a schedule boundary
     refreshCartSnapshot(); // first message's pageContext carries the cart
     state.open = true;
     store(sessionStorage, OPEN_KEY, "1");
     var focusChat = config.widget.chatFocusMode && config.widget.liveChat;
     showScreen(focusChat ? "chat" : state.screen === "chat" ? "chat" : "home");
-    if (state.pollTimer === null && isHumanMode()) startPolling();
+    if (state.pollTimer === null && state.conversationId) startPolling();
     var focusable = ui.panel.querySelector("input, button");
     if (focusable) focusable.focus();
   }
@@ -423,7 +482,8 @@
       if (state.conversationId) restoreHistory();
       else renderIntro();
     }
-    if (isHumanMode()) ui.inputEl.placeholder = HUMAN_PLACEHOLDER;
+    if (state.blocked) ui.inputEl.placeholder = BLOCKED_PLACEHOLDER;
+    else if (isHumanMode()) ui.inputEl.placeholder = HUMAN_PLACEHOLDER;
     lockInput(isInputLocked());
   }
 
@@ -457,6 +517,7 @@
   /** Rebuild the thread from the server (spec 05 delta: history survives
    *  storefront navigation). Falls back to the intro on any failure. */
   function restoreHistory() {
+    state.restoring = true;
     var loading = R.messageBubble("sys", "Loading conversation…");
     appendEl(loading.el);
     var done = function () {
@@ -471,27 +532,41 @@
     )
       .then(function (data) {
         done();
+        state.restoring = false;
         var msgs = (data && data.messages) || [];
         if (msgs.length === 0) return renderIntro();
         msgs.forEach(function (m) {
+          if (m.id) state.renderedIds[m.id] = 1;
           if (m.role === "in") {
             appendEl(R.messageBubble("user", m.content).el);
             state.shopperMessages++;
           } else {
             appendEl(
-              R.messageBubble("bot", m.content, m.author === "agent" ? "Team" : null).el,
+              R.messageBubble(
+                m.role === "sys" || m.author === "system" ? "sys" : "bot",
+                m.content,
+                m.author === "agent" ? "Team" : null,
+              ).el,
             );
             if (m.productCards && m.productCards.length) {
               appendEl(R.productCards(m.productCards, config.currency, { onAdd: onCardAdd }));
             }
           }
         });
-        // Human-mode threads resume polling exactly where the last page left
-        // off (pollSince already restored from sessionStorage at boot).
-        if (data.mode === "human" && data.status !== "resolved" && state.open) startPolling();
+        // The cursor must jump to the newest message we just rendered, or the
+        // first poll re-delivers the whole restored thread (QA D1).
+        var newest = msgs[msgs.length - 1].createdAt;
+        if (newest && (!state.pollSince || new Date(newest) > new Date(state.pollSince))) {
+          state.pollSince = newest;
+          store(sessionStorage, POLL_KEY, state.pollSince);
+        }
+        if (data.blocked) setBlocked();
+        else if (data.mode === "human" && data.status !== "resolved") setHumanMode(true);
+        if (state.open) startPolling();
         scroll();
       })
       .catch(function () {
+        state.restoring = false;
         // Conversation gone/unreachable — start fresh like a new visitor.
         done();
         renderIntro();
@@ -501,6 +576,7 @@
   function isInputLocked() {
     return (
       state.streaming ||
+      state.blocked ||
       (config.widget.prechat.mode === "guest" && !prechatDone() && state.prechatVisible)
     );
   }
@@ -582,7 +658,7 @@
         },
         onHandover: handleHandover,
         onDone: function (frame) { finishTurn(typing, frame, echoDone); },
-        onError: function () { failTurn(typing); },
+        onError: function () { failTurn(typing, botBubble); },
       },
     );
   }
@@ -608,11 +684,16 @@
     ) {
       showPrechat(true);
     }
-    if (frame.outcome === "human_mode" || frame.outcome === "handover") {
-      startPolling();
-    }
+    if (frame.outcome === "visitor_blocked") setBlocked();
+    else if (frame.outcome === "human_mode") setHumanMode(true);
+    // Poll while a conversation exists so a merchant reply ("take over" on an
+    // AI-mode thread, or a reply to a resolved one) reaches the shopper live.
+    // Only while the panel is open, or a closed panel leaves an orphan timer
+    // ticking for the life of the page (QA D4).
+    if (state.conversationId && state.open) startPolling();
     if (state.surveyPending && !state.surveyShown && state.conversationId) {
       state.surveyShown = true;
+      store(sessionStorage, SURVEY_KEY, state.conversationId);
       state.surveyPending = false;
       appendEl(R.surveyPrompt(config.survey, { onRate: onSurveyRate }));
     }
@@ -620,8 +701,13 @@
     if (!isInputLocked() && state.open && state.screen === "chat") ui.inputEl.focus();
   }
 
-  function failTurn(typing) {
+  function failTurn(typing, partial) {
     if (typing.parentNode) typing.parentNode.removeChild(typing);
+    // A truncated stream leaves a half-written bot bubble above the error;
+    // drop it so Retry doesn't stack a second partial answer under it (D15).
+    if (partial && partial.el && partial.el.parentNode) {
+      partial.el.parentNode.removeChild(partial.el);
+    }
     state.streaming = false;
     lockInput(false);
     appendEl(R.messageBubble("sys", "Message didn't send — check your connection.").el);
@@ -1029,7 +1115,37 @@
   }
 
   // ── handover (spec 10): leave-a-message form + AI dormancy ───────────────
+  /** Contact-method chips (spec 10 step 4: "message + contact method chips").
+   *  Same rows, same markup and same CSS as the home screen's block — they come
+   *  from Chatbox → Contact methods (spec 06), already in the widget config. */
+  function contactChips() {
+    var cm = config.widget && config.widget.contactMethods;
+    if (!cm || !cm.enabled || !cm.items || cm.items.length === 0) return null;
+    var wrap = R.el("div", "cw-actions");
+    cm.items
+      .slice()
+      .sort(function (a, b) { return (a.order || 0) - (b.order || 0); })
+      .forEach(function (m) {
+        var chip = R.el("a", "cw-cm cw-cm--" + m.type, {
+          href: R.contactHref(m),
+          "aria-label": m.type,
+          target: m.type === "whatsapp" ? "_blank" : "_self",
+          rel: "noopener",
+        });
+        chip.innerHTML = R.icons[m.type] || R.icons.email; // static, app-authored SVG
+        wrap.appendChild(chip);
+      });
+    return wrap;
+  }
+
   function handleHandover(data) {
+    // Destination "contact methods" (and the inbox destination's offline
+    // contact-methods branch): the server already streamed the message bubble,
+    // the chips are what let the shopper act on it.
+    if (data.contactMethods) {
+      var chips = contactChips();
+      if (chips) appendEl(chips);
+    }
     if (data.form) {
       var form = R.handoverForm(data.form, {
         onSubmit: function (values, api) {
@@ -1060,19 +1176,57 @@
       if (first) first.focus();
     }
     if (data.aiDormant) {
-      ui.inputEl.placeholder = HUMAN_PLACEHOLDER;
+      setHumanMode(true);
     }
   }
 
   // ── human-mode polling ───────────────────────────────────────────────────
   function isHumanMode() {
-    return state.pollSince !== null;
+    return state.humanMode;
+  }
+  function setHumanMode(on) {
+    state.humanMode = on;
+    store(sessionStorage, HUMAN_KEY, on ? "1" : null);
+    if (ui.inputEl && !state.blocked) {
+      ui.inputEl.placeholder = on ? HUMAN_PLACEHOLDER : DEFAULT_PLACEHOLDER;
+    }
+  }
+  /** Merchant blocked this visitor: composer locked for the conversation. */
+  function setBlocked() {
+    if (state.blocked) return;
+    state.blocked = true;
+    // Persisted so the composer is locked immediately on the next page rather
+    // than after /history answers (QA D7).
+    store(sessionStorage, BLOCKED_KEY, "1");
+    stopPolling();
+    if (ui.inputEl) {
+      ui.inputEl.placeholder = BLOCKED_PLACEHOLDER;
+      lockInput(true);
+    }
+  }
+  /** Poll cadence: snappy while a human is on the thread, backing off once a
+   *  thread goes quiet so an abandoned open panel stops hammering (QA D5). */
+  function pollIntervalMs() {
+    if (state.humanMode) return 5000;
+    var empties = state.emptyPolls || 0;
+    if (empties >= 12) return 30000;
+    if (empties >= 4) return 15000;
+    return 5000;
+  }
+  function applyPollInterval() {
+    if (!state.pollTimer) return;
+    var next = pollIntervalMs();
+    if (next === state.pollEvery) return;
+    stopPolling();
+    state.pollEvery = next;
+    state.pollTimer = setInterval(pollMessages, next);
   }
   function startPolling() {
-    if (state.pollTimer) return;
+    if (state.pollTimer || state.blocked) return;
     if (!state.pollSince) state.pollSince = new Date().toISOString();
     store(sessionStorage, POLL_KEY, state.pollSince);
-    state.pollTimer = setInterval(pollMessages, 5000);
+    state.pollEvery = pollIntervalMs();
+    state.pollTimer = setInterval(pollMessages, state.pollEvery);
   }
   function stopPolling() {
     if (state.pollTimer) {
@@ -1081,7 +1235,9 @@
     }
   }
   function pollMessages() {
-    if (!state.conversationId || !state.open) return;
+    // Never poll over an in-flight /history restore — the two would race and
+    // render the same messages twice (QA D2).
+    if (!state.conversationId || !state.open || state.restoring) return;
     // seen=1: the shopper is looking at the thread — agent replies get a
     // Seen receipt in the merchant inbox (spec 10 acceptance 7).
     T.getJson(
@@ -1095,7 +1251,15 @@
         "&seen=1",
     )
       .then(function (data) {
+        var fresh = 0;
         (data.messages || []).forEach(function (m) {
+          // Skip anything /history already drew (QA D1/D2).
+          if (m.id && state.renderedIds[m.id]) {
+            state.pollSince = m.createdAt;
+            return;
+          }
+          if (m.id) state.renderedIds[m.id] = 1;
+          fresh++;
           appendEl(
             R.messageBubble(
               m.author === "system" ? "sys" : "bot",
@@ -1106,16 +1270,33 @@
           state.pollSince = m.createdAt;
         });
         store(sessionStorage, POLL_KEY, state.pollSince);
-        if (data.status === "resolved") onConversationResolved();
+        // Idle threads back off so an abandoned open panel isn't a 5s
+        // read+write loop forever (QA D5).
+        state.emptyPolls = fresh > 0 ? 0 : (state.emptyPolls || 0) + 1;
+        applyPollInterval();
+        if (data.blocked) {
+          setBlocked();
+          return;
+        }
+        // Reset unconditionally: "unresolve" leaves mode at "ai", which used
+        // to strand resolvedSeen=true and swallow the next resolve (QA D3).
+        if (data.status !== "resolved") state.resolvedSeen = false;
+        if (data.mode === "human" && data.status !== "resolved") {
+          if (!state.humanMode) setHumanMode(true); // merchant took over an AI thread
+        } else if (data.status === "resolved") {
+          if (!state.resolvedSeen) onConversationResolved();
+        } else if (state.humanMode) {
+          setHumanMode(false);
+        }
       })
       .catch(function () { /* transient — keep polling */ });
   }
 
-  /** Merchant resolved the thread: stop polling, wake the AI, maybe survey. */
+  /** Merchant resolved the thread: AI wakes up, maybe survey. Polling keeps
+   *  running so a later merchant reply (which reopens it) still arrives. */
   function onConversationResolved() {
-    stopPolling();
-    state.pollSince = null;
-    store(sessionStorage, POLL_KEY, null);
+    state.resolvedSeen = true;
+    setHumanMode(false);
     ui.inputEl.placeholder = DEFAULT_PLACEHOLDER;
     var survey = config.survey;
     if (
@@ -1126,6 +1307,7 @@
       state.conversationId
     ) {
       state.surveyShown = true;
+      store(sessionStorage, SURVEY_KEY, state.conversationId);
       state.surveyPending = false;
       appendEl(R.surveyPrompt(survey, { onRate: onSurveyRate }));
     }
@@ -1159,6 +1341,10 @@
       // Human-mode survives reloads: resume polling from where we left off.
       var since = read(sessionStorage, POLL_KEY);
       if (since) state.pollSince = since;
+      state.humanMode = read(sessionStorage, HUMAN_KEY) === "1";
+      state.blocked = read(sessionStorage, BLOCKED_KEY) === "1";
+      // The survey is once per conversation, not once per page load (QA D8).
+      state.surveyShown = read(sessionStorage, SURVEY_KEY) === convo;
     }
   })();
 

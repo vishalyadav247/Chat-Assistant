@@ -2,6 +2,7 @@ import { useDeferredValue, useEffect, useRef, useState } from "react";
 import type { FaqCategoryData, FaqRowData } from "../lib/faq/faq.server";
 import type { TrainingActionResult } from "../routes/app.ai-agent.training";
 import { BrowseModalShell } from "./BrowseProductsModal";
+import { ReorderButtons } from "./DragReorder";
 import { downloadText, useTrainingFetcher } from "./TrainingShared";
 import { ConfirmDeleteModal } from "./ui/ConfirmDeleteModal";
 import { htmlTextLength, RichTextEditor } from "./ui/RichTextEditor";
@@ -62,6 +63,18 @@ const TABLE_CSS = `
 }
 .ccfaq-handle:not(:disabled):active {
   cursor: grabbing;
+}
+/* Phones (spec 19): the 140px/110px Status/Featured tracks leave no room for
+   the question — let them shrink to their content (badge + star). */
+@media (max-width: 768px) {
+  .ccfaq-gridhead, .ccfaq-row {
+    grid-template-columns: minmax(0, 1fr) auto auto !important;
+    gap: 8px !important;
+  }
+  .ccfaq-filter {
+    width: auto !important;
+    flex: 1 1 140px;
+  }
 }
 `;
 
@@ -366,7 +379,7 @@ export function FaqManager(props: {
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           {/* s-select fills its container — cap each in a fixed-width box so
               the dropdowns stay compact. */}
-          <div style={{ width: 180 }}>
+          <div className="ccfaq-filter" style={{ width: 180 }}>
             <s-select
               label="Status"
               labelAccessibilityVisibility="exclusive"
@@ -381,7 +394,7 @@ export function FaqManager(props: {
               <s-option value="draft">Draft</s-option>
             </s-select>
           </div>
-          <div style={{ width: 180 }}>
+          <div className="ccfaq-filter" style={{ width: 180 }}>
             <s-select
               label="Featured"
               labelAccessibilityVisibility="exclusive"
@@ -407,6 +420,7 @@ export function FaqManager(props: {
           }}
         >
         <div
+          className="ccfaq-gridhead"
           style={{
             display: "grid",
             gridTemplateColumns: "minmax(0,1fr) 140px 110px",
@@ -1034,6 +1048,11 @@ function TreeRow(props: {
         >
           <s-icon type="drag-handle" size="base" />
         </button>
+        <ReorderButtons
+          label="row"
+          enabled={props.drag.enabled}
+          onMove={props.onKeyMove}
+        />
         <span style={{ minWidth: 0, overflow: "hidden", display: "inline-flex", alignItems: "center", gap: 8 }}>
           {props.main}
         </span>

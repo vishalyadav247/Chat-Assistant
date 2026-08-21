@@ -36,6 +36,7 @@ import {
   parseCsvContent,
   QuotaError,
   resyncSource,
+  urlSourceSchema,
   CSV_ROW_CAP,
 } from "../lib/ingestion/sources.server";
 import {
@@ -134,7 +135,6 @@ export interface ProductDetail {
   vendor: string;
   description: string;
   tags: string[];
-  faqCount: number;
   variants: { title: string; price: number; available: boolean }[];
   /** Product + variant metafields as synced; `enabled` = currently trained on. */
   metafields: { label: string; value: string; enabled: boolean }[];
@@ -366,7 +366,9 @@ const manualPayloadSchema = z.object({
 });
 
 const urlPayloadSchema = z.object({
-  url: z.string().trim().min(1).max(2000),
+  // Same shape check as createSource's urlSourceSchema — editing a source used
+  // to accept a schemeless/ftp URL that then failed in the job (QA D10).
+  url: urlSourceSchema.shape.url,
   crawlScope: z.enum(["page", "linked", "sitemap"]).default("page"),
   reCrawlWeekly: z.boolean().default(false),
   status: statusEnum.default("active"),
@@ -652,7 +654,6 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
             vendor: product.vendor,
             description: product.description,
             tags: product.tags,
-            faqCount: 0,
             variants,
             metafields: await productDetailMetafields(shopId, product.metafields),
           },
@@ -670,6 +671,22 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
           featured: boolean;
           unresolvedId?: string;
         }>("payload");
+        if (!payload.question?.trim()) {
+          return { intent, ok: false, error: "Enter a question." };
+        }
+        // A published FAQ with no answer renders as a blank bubble in the
+        // widget — only drafts may be left unanswered (QA D12b).
+        const answerText = (payload.answerHtml ?? "")
+          .replace(/<[^>]*>/g, " ")
+          .replace(/&nbsp;/gi, " ")
+          .trim();
+        if (payload.status === "published" && !answerText) {
+          return {
+            intent,
+            ok: false,
+            error: "Add an answer before publishing (or save it as a draft).",
+          };
+        }
         await saveFaq(shopId, payload);
         if (payload.unresolvedId) {
           await db.unresolvedQuestion.updateMany({
@@ -721,16 +738,25 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
             error:
               result.badRows.length > 0
                 ? `No rows imported — first issue: line ${result.badRows[0].line} (${result.badRows[0].reason})`
-                : "The CSV file is empty",
+                : result.skipped > 0
+                  ? `No new FAQs — all ${result.skipped} row(s) already exist`
+                  : "The CSV file is empty",
           };
         }
+        // Duplicates and header consumption are called out so a "missing" row
+        // is never a silent surprise (QA D7 / D12c).
+        const notes = [
+          result.skipped > 0 ? `${result.skipped} duplicate(s) skipped` : "",
+          result.badRows.length > 0 ? `${result.badRows.length} row(s) skipped` : "",
+          result.headerSkipped ? "first row read as column headers" : "",
+        ].filter(Boolean);
         return {
           intent,
           ok: true,
           imported: result.imported,
-          skipped: result.badRows.length,
+          skipped: result.badRows.length + result.skipped,
           message: `Imported ${result.imported} FAQ${result.imported === 1 ? "" : "s"}${
-            result.badRows.length > 0 ? ` · ${result.badRows.length} row(s) skipped` : ""
+            notes.length > 0 ? ` · ${notes.join(" · ")}` : ""
           }`,
         };
       }

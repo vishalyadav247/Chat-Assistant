@@ -7,6 +7,7 @@ import { requireShopId } from "../tenancy.server";
 import { htmlToText } from "./fetchers.server";
 import { ingestSource, type IngestResult } from "./knowledge-ingest.server";
 import { KNOWLEDGE_INGEST_JOB } from "./knowledge-jobs.server";
+import { logError } from "../log.server";
 
 // Data-source CRUD + quota API (spec 04) — the surface feature 07's admin UI
 // calls. Every function takes a TRUSTED shopId (from authenticate.admin) as
@@ -191,6 +192,12 @@ export async function createSource(
         throw new Error("file too large (max 2MB)");
       }
       const { text, parseError } = extractFileText(parsed.name, parsed.mime, parsed.bytes);
+      // A file type we can never parse must not become a stored "error" row:
+      // it consumed the file_uploads quota, and re-adding it just piled up
+      // duplicates (QA D12e). Reject it outright instead.
+      if (parseError && !PARSEABLE_KINDS.has(fileKind(parsed.name, parsed.mime))) {
+        throw new UnsupportedFileError(parseError);
+      }
       data = {
         shopId,
         type: "file",
@@ -324,7 +331,7 @@ export async function fetchShopPolicies(shopDomain: string): Promise<PolicyCandi
   } catch (error) {
     // Stores that installed before read_legal_policies was added haven't
     // re-consented yet — degrade to an empty candidate list, never a crash.
-    console.error("shop_policies_access", shopDomain, error);
+    logError("shop_policies_access", error, { shopDomain });
     return [];
   }
   const body = (await response.json()) as {
@@ -410,7 +417,7 @@ export async function fetchShopPages(shopDomain: string): Promise<PolicyCandidat
   } catch (error) {
     // Missing scope on stores that haven't re-consented — degrade to what we
     // have so far (policies still list), never crash the connector.
-    console.error("shop_pages_access", shopDomain, error);
+    logError("shop_pages_access", error, { shopDomain });
   }
   return candidates.slice(0, PAGE_CANDIDATE_CAP);
 }
@@ -546,6 +553,18 @@ function extractFileText(
       return { parseError: `${kind.toUpperCase()} parser pending — .txt and .json are supported today` };
     default:
       return { parseError: "unsupported file type (.pdf .docx .txt .json only)" };
+  }
+}
+
+/** File kinds this build can actually turn into text. Anything else is
+ *  rejected at upload time rather than stored as a broken source. */
+const PARSEABLE_KINDS = new Set(["txt", "json"]);
+
+/** Upload rejected because the format is not supported (not a bug/failure). */
+export class UnsupportedFileError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnsupportedFileError";
   }
 }
 

@@ -78,7 +78,50 @@ export interface DragHandleProps {
   onDragEnd: () => void;
 }
 
-/** Drag affordance: grab cursor + ArrowUp/ArrowDown keyboard fallback. */
+/** Visible up/down fallback for touch devices (HTML5 drag never fires there).
+ *  Hidden on fine-pointer devices via .cc-reorder-btns (app-mobile.css). */
+export function ReorderButtons(props: {
+  label: string;
+  enabled: boolean;
+  onMove: (direction: "up" | "down") => void;
+}) {
+  const buttonStyle: React.CSSProperties = {
+    border: "none",
+    background: "none",
+    padding: 4,
+    display: "inline-flex",
+    alignItems: "center",
+    borderRadius: 6,
+    cursor: "pointer",
+    color: "var(--s-color-text-secondary, #8a8a8f)",
+    opacity: props.enabled ? 1 : 0.4,
+  };
+  return (
+    <span className="cc-reorder-btns">
+      <button
+        type="button"
+        aria-label={`Move ${props.label} up`}
+        disabled={!props.enabled}
+        style={buttonStyle}
+        onClick={() => props.onMove("up")}
+      >
+        <s-icon type="chevron-up" size="base" />
+      </button>
+      <button
+        type="button"
+        aria-label={`Move ${props.label} down`}
+        disabled={!props.enabled}
+        style={buttonStyle}
+        onClick={() => props.onMove("down")}
+      >
+        <s-icon type="chevron-down" size="base" />
+      </button>
+    </span>
+  );
+}
+
+/** Drag affordance: grab cursor + ArrowUp/ArrowDown keyboard fallback, plus
+ *  visible up/down buttons on touch devices (ReorderButtons). */
 export function DragHandle(props: {
   label: string;
   drag: DragHandleProps;
@@ -86,6 +129,7 @@ export function DragHandle(props: {
 }) {
   const enabled = props.drag.draggable;
   return (
+    <>
     <button
       type="button"
       aria-label={`${props.label} — drag, or press arrow up/down`}
@@ -122,5 +166,7 @@ export function DragHandle(props: {
     >
       <s-icon type="drag-handle" size="base" />
     </button>
+    <ReorderButtons label={props.label} enabled={enabled} onMove={props.onKeyMove} />
+    </>
   );
 }

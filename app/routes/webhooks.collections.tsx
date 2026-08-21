@@ -1,13 +1,15 @@
 import type { ActionFunctionArgs } from "react-router";
 import db from "../db.server";
 import { authenticate } from "../shopify.server";
-import { resolveShopId } from "../lib/tenancy.server";
 
 // Collections change rarely and the payload is tiny — direct upsert is still
 // fast enough for the 5s rule; embedding work (none for collections) stays out.
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { topic, shop, payload } = await authenticate.webhook(request);
-  const shopId = await resolveShopId(shop);
+  // Non-creating lookup (QA D11): unknown shops get no rows from a webhook.
+  const shopRow = await db.shop.findUnique({ where: { domain: shop }, select: { id: true } });
+  if (!shopRow) return new Response();
+  const shopId = shopRow.id;
   const p = payload as { admin_graphql_api_id?: string; id?: number; title?: string; body_html?: string };
   const shopifyCollectionId = p.admin_graphql_api_id ?? `gid://shopify/Collection/${p.id}`;
 

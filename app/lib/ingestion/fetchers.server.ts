@@ -44,15 +44,71 @@ function isPrivateIpv4(ip: string): boolean {
   );
 }
 
+/**
+ * Expand an IPv6 literal to its eight 16-bit groups (numbers). Handles `::`
+ * compression and a trailing dotted IPv4 (`::ffff:1.2.3.4`). Returns null when
+ * the literal cannot be parsed — callers treat that as unsafe.
+ */
+function expandIpv6(ip: string): number[] | null {
+  let text = ip;
+  // Trailing dotted IPv4 → two hex groups so the generic parser handles it.
+  const dotted = text.match(/^(.*:)(\d+\.\d+\.\d+\.\d+)$/);
+  if (dotted) {
+    const parts = dotted[2].split(".").map(Number);
+    if (parts.length !== 4 || parts.some((n) => Number.isNaN(n) || n < 0 || n > 255)) return null;
+    text = `${dotted[1]}${((parts[0] << 8) | parts[1]).toString(16)}:${((parts[2] << 8) | parts[3]).toString(16)}`;
+  }
+  const halves = text.split("::");
+  if (halves.length > 2) return null;
+  const parse = (segment: string): number[] | null => {
+    if (segment === "") return [];
+    const out: number[] = [];
+    for (const group of segment.split(":")) {
+      if (!/^[0-9a-f]{1,4}$/.test(group)) return null;
+      out.push(parseInt(group, 16));
+    }
+    return out;
+  };
+  const head = parse(halves[0]);
+  const tail = halves.length === 2 ? parse(halves[1]) : [];
+  if (!head || !tail) return null;
+  if (halves.length === 1) return head.length === 8 ? head : null;
+  const missing = 8 - head.length - tail.length;
+  if (missing < 1) return null;
+  return [...head, ...new Array<number>(missing).fill(0), ...tail];
+}
+
+function embeddedIpv4(groups: number[], offset: number): string {
+  const hi = groups[offset];
+  const lo = groups[offset + 1];
+  return `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+}
+
 function isPrivateIpv6(rawIp: string): boolean {
   const ip = rawIp.toLowerCase().replace(/^\[|\]$/g, "").split("%")[0];
-  if (ip === "::" || ip === "::1") return true; // unspecified / loopback
-  // IPv4-mapped (::ffff:a.b.c.d) → check the embedded IPv4.
-  const v4 = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (v4) return isPrivateIpv4(v4[1]);
-  const firstGroup = ip.split(":")[0];
-  if (firstGroup.startsWith("fc") || firstGroup.startsWith("fd")) return true; // fc00::/7 ULA
-  if (/^fe[89ab]/.test(firstGroup)) return true; // fe80::/10 link-local
+  const groups = expandIpv6(ip);
+  if (!groups) return true; // unparseable → unsafe
+  const [g0, g1, g2, g3, g4, g5] = groups;
+  const allZero = (from: number, to: number) => groups.slice(from, to).every((g) => g === 0);
+
+  // :: (unspecified) and ::1 (loopback).
+  if (allZero(0, 7) && (groups[7] === 0 || groups[7] === 1)) return true;
+  // IPv4-mapped ::ffff:a.b.c.d — WHATWG URL serializes it as hex
+  // ([::ffff:7f00:1]); both forms land here → check the embedded IPv4.
+  if (allZero(0, 5) && g5 === 0xffff) return isPrivateIpv4(embeddedIpv4(groups, 6));
+  // IPv4-compatible ::a.b.c.d (deprecated) — embedded IPv4 decides.
+  if (allZero(0, 6)) return isPrivateIpv4(embeddedIpv4(groups, 6));
+  // 64:ff9b::/96 NAT64 and 64:ff9b:1::/48 local-use NAT64 — reject outright.
+  if (g0 === 0x64 && g1 === 0xff9b) return true;
+  // 2002::/16 6to4 — embedded IPv4 (groups 1-2) decides.
+  if (g0 === 0x2002) return isPrivateIpv4(embeddedIpv4(groups, 1));
+  // Teredo 2001::/32 embeds the (obfuscated) server/client — reject.
+  if (g0 === 0x2001 && g1 === 0) return true;
+  if ((g0 & 0xfe00) === 0xfc00) return true; // fc00::/7 ULA
+  if ((g0 & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
+  if ((g0 & 0xffc0) === 0xfec0) return true; // fec0::/10 site-local (deprecated)
+  if ((g0 & 0xff00) === 0xff00) return true; // ff00::/8 multicast
+  if (g0 === 0x0100 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0) return true; // 100::/64 discard
   return false;
 }
 

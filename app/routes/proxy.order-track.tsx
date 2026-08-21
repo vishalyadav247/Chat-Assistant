@@ -4,6 +4,7 @@ import { authenticate } from "../shopify.server";
 import { resolveShopId } from "../lib/tenancy.server";
 import { loadShopSettings } from "../lib/settings/save.server";
 import { get17TrackShipment, type ShipmentInfo } from "../lib/tracking/seventeen-track.server";
+import { logError } from "../lib/log.server";
 
 // POST /apps/chatconvert/order-track — in-widget order status (spec 05 delta).
 // The shopper proves ownership with order number + the email/phone on the
@@ -11,6 +12,35 @@ import { get17TrackShipment, type ShipmentInfo } from "../lib/tracking/seventeen
 // Response is a minimal status subset — never the order's own email/phone/
 // address (the shopper already typed the contact; echoing the order's copy
 // back would leak PII to anyone who guesses a number).
+
+// ── Lookup throttle (in-memory token bucket, shop + client IP) ─────────────
+declare global {
+  // eslint-disable-next-line no-var
+  var orderTrackBuckets: Map<string, { tokens: number; at: number }> | undefined;
+}
+const TRACK_CAPACITY = 8;
+const TRACK_REFILL_PER_MS = 8 / 60_000; // 8 lookups per minute
+
+function consumeTrackToken(key: string): boolean {
+  if (!global.orderTrackBuckets) global.orderTrackBuckets = new Map();
+  const now = Date.now();
+  const bucket = global.orderTrackBuckets.get(key) ?? { tokens: TRACK_CAPACITY, at: now };
+  bucket.tokens = Math.min(
+    TRACK_CAPACITY,
+    bucket.tokens + (now - bucket.at) * TRACK_REFILL_PER_MS,
+  );
+  bucket.at = now;
+  global.orderTrackBuckets.set(key, bucket);
+  if (bucket.tokens < 1) return false;
+  bucket.tokens -= 1;
+  if (global.orderTrackBuckets.size > 10_000) {
+    const cutoff = now - 10 * 60 * 1000;
+    for (const [k, b] of global.orderTrackBuckets) {
+      if (b.at < cutoff) global.orderTrackBuckets.delete(k);
+    }
+  }
+  return true;
+}
 
 const bodySchema = z.union([
   // Order-number lookup: ownership proven by the contact on the order.
@@ -76,7 +106,9 @@ function numberMatches(orderName: string, input: string): boolean {
   const name = alnum(orderName);
   const want = alnum(input);
   if (!want) return false;
-  return name === want || (want.length >= 2 && name.endsWith(want));
+  // A 2-char suffix matched far too many orders, which made guessing cheap
+  // (QA D13). Require the whole number or a a substantial suffix.
+  return name === want || (want.length >= 4 && name.endsWith(want));
 }
 
 function contactMatches(order: OrderNode, method: "email" | "phone", contact: string): boolean {
@@ -84,13 +116,14 @@ function contactMatches(order: OrderNode, method: "email" | "phone", contact: st
     return Boolean(order.email) && order.email!.trim().toLowerCase() === contact.trim().toLowerCase();
   }
   const want = digits(contact);
-  if (want.length < 7) return false;
+  // A 7-digit tail is a ~10^7 guess space against an unauthenticated endpoint;
+  // require a full national number so the check is real (QA D13).
+  if (want.length < 10) return false;
   return [order.phone, order.shippingAddress?.phone].some((candidate) => {
     const have = digits(candidate || "");
-    if (have.length < 7) return false;
-    // Country-code tolerant: compare the last 10 digits (or all, if shorter).
-    const n = Math.min(10, have.length, want.length);
-    return have.slice(-n) === want.slice(-n);
+    if (have.length < 10) return false;
+    // Country-code tolerant: compare the last 10 digits.
+    return have.slice(-10) === want.slice(-10);
   });
 }
 
@@ -105,6 +138,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return new Response("bad request", { status: 400 });
   }
   const noStore = { headers: { "Cache-Control": "no-store" } };
+
+  // Unauthenticated + hits the Admin API + returns order facts: without a
+  // throttle an attacker can brute-force order numbers / phone tails (QA D13).
+  const clientIp =
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    request.headers.get("x-real-ip") ||
+    "unknown";
+  if (!consumeTrackToken(`${session.shop}:${clientIp}`)) {
+    return Response.json({ ok: false, error: "unavailable" }, { status: 429, ...noStore });
+  }
+
   const shopId = await resolveShopId(session.shop);
   const settings = await loadShopSettings(shopId);
   const tracking = settings.orderTracking;
@@ -202,8 +246,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const gqlErrors = (
       error as { body?: { errors?: { graphQLErrors?: Array<{ message?: string }> } } }
     ).body?.errors?.graphQLErrors;
-    console.error(
-      "order-track lookup failed:",
+    logError(
+      "order_track_lookup_failed",
       gqlErrors?.map((e) => e.message).join(" | ") ||
         (error instanceof Error ? error.message : error),
     );

@@ -2,8 +2,9 @@ import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import db from "../../db.server";
 import { embedTexts, productEmbeddingText, toSqlVector } from "../embeddings/embedding.server";
-import { env } from "../env.server";
+import { runtimeConfig } from "../platform/runtime-config.server";
 import { requireShopId } from "../tenancy.server";
+import { logWarn } from "../log.server";
 
 // Product metafields as AI training data (spec 07 → "Manage metafields",
 // 2026-08-19). Catalog sync stores the product + variant metafields on the
@@ -530,9 +531,9 @@ export async function embedProducts(
   items: { id: string; text: string }[],
 ): Promise<void> {
   if (items.length === 0) return;
-  if (!env().OPENAI_API_KEY) {
+  if (!runtimeConfig().openaiApiKey) {
     // Never silent: rows keep their previous/NULL embedding.
-    console.warn(`embedding_skipped shop=${shopId} products=${items.length} (no OPENAI_API_KEY)`);
+    logWarn("embedding_skipped", "no OPENAI_API_KEY", { shopId, products: items.length });
     const { recordEvent } = await import("../analytics/events.server");
     await recordEvent(shopId, "embedding_skipped", { products: items.length });
     return;
@@ -540,7 +541,7 @@ export async function embedProducts(
   const BATCH = 100;
   for (let start = 0; start < items.length; start += BATCH) {
     const slice = items.slice(start, start + BATCH);
-    const vectors = await embedTexts(slice.map((e) => e.text));
+    const vectors = await embedTexts(slice.map((e) => e.text), { shopId });
     for (let i = 0; i < slice.length; i++) {
       await db.$executeRaw(Prisma.sql`
         UPDATE "products" SET "embedding" = ${toSqlVector(vectors[i])}::vector

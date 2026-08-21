@@ -2,6 +2,7 @@ import webpush from "web-push";
 import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
 import { getVapidKeys } from "./vapid.server";
+import { logError } from "../log.server";
 
 // Web Push delivery (spec 18). Payloads are end-to-end encrypted per the Web
 // Push spec (p256dh/auth) — the push service never sees the content — but we
@@ -26,7 +27,7 @@ export async function pushConfigured(): Promise<boolean> {
     }
     return true;
   } catch (error) {
-    console.error("vapid_config_invalid", error);
+    logError("vapid_config_invalid", error);
     return false;
   }
 }
@@ -56,7 +57,7 @@ export async function sendPushToMembers(shopId: string, memberIds: string[], pay
           pruned += 1;
           await db.pushSubscription.delete({ where: { id: sub.id } }).catch(() => undefined);
         } else {
-          console.error("push_send_failed", status, (error as Error)?.message);
+          logError("push_send_failed", (error as Error)?.message, { status, shopId });
           await db.pushSubscription.update({ where: { id: sub.id }, data: { failedAt: new Date() } }).catch(() => undefined);
         }
       }

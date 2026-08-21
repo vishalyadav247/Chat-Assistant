@@ -140,25 +140,31 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "convert-lead") {
     const email = String(formData.get("email") ?? "").trim();
     if (!email) return { intent: "convert-lead" as const, ok: false, error: "Email address is required." };
-    const ok = await updateContactInfo(shopId, String(formData.get("id") ?? ""), {
+    const result = await updateContactInfo(shopId, String(formData.get("id") ?? ""), {
       name: joinedName(),
       email,
       phone: String(formData.get("phone") ?? ""),
     });
+    const ok = result === true;
     return {
       intent: "convert-lead" as const,
       ok,
-      error: ok ? undefined : "Contact not found.",
+      error: ok ? undefined : typeof result === "object" ? result.error : "Contact not found.",
     };
   }
 
   if (intent === "contact-save") {
-    const ok = await updateContactInfo(shopId, String(formData.get("id") ?? ""), {
+    const result = await updateContactInfo(shopId, String(formData.get("id") ?? ""), {
       name: joinedName(),
       email: String(formData.get("email") ?? ""),
       phone: String(formData.get("phone") ?? ""),
     });
-    return { intent: "contact-save" as const, ok };
+    const ok = result === true;
+    return {
+      intent: "contact-save" as const,
+      ok,
+      error: ok ? undefined : typeof result === "object" ? result.error : "Contact not found.",
+    };
   }
 
   if (intent === "contact-delete") {

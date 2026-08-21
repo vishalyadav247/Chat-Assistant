@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import db from "../../db.server";
 import { getQuota } from "../billing/plans.server";
 import { embedTexts, toSqlVector } from "../embeddings/embedding.server";
-import { env } from "../env.server";
+import { runtimeConfig } from "../platform/runtime-config.server";
 import { stripToText } from "../sanitize.server";
 import { requireShopId } from "../tenancy.server";
 import { crawl, htmlToText, HARD_CRAWL_PAGE_CAP, type CrawlScope } from "./fetchers.server";
@@ -92,8 +92,8 @@ export async function ingestSource(shopId: string, sourceId: string): Promise<In
       });
       rowIds.push(row.id);
     }
-    if (chunks.length > 0 && env().OPENAI_API_KEY) {
-      const vectors = await embedTexts(chunks.map((c) => `${c.topic}. ${c.body}`));
+    if (chunks.length > 0 && runtimeConfig().openaiApiKey) {
+      const vectors = await embedTexts(chunks.map((c) => `${c.topic}. ${c.body}`), { shopId });
       for (let i = 0; i < rowIds.length; i++) {
         await db.$executeRaw(Prisma.sql`
           UPDATE "knowledge" SET "embedding" = ${toSqlVector(vectors[i])}::vector
@@ -121,7 +121,13 @@ export async function ingestSource(shopId: string, sourceId: string): Promise<In
         where: { id: source.id, shopId },
         data: {
           status: "error",
-          metadata: { ...meta, error: message.slice(0, 500) } as Prisma.InputJsonValue,
+          // A failed crawl indexed nothing, so it must not keep consuming the
+          // "N of M pages used" meter (QA D9).
+          metadata: {
+            ...meta,
+            pagesUsed: 0,
+            error: message.slice(0, 500),
+          } as Prisma.InputJsonValue,
         },
       })
       .catch(() => {});

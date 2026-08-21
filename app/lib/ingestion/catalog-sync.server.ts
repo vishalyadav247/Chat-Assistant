@@ -4,7 +4,7 @@ import { unauthenticated } from "../../shopify.server";
 import { recordEvent } from "../analytics/events.server";
 import { getQuota } from "../billing/plans.server";
 import { productEmbeddingText } from "../embeddings/embedding.server";
-import { requireShopId, resolveShopId } from "../tenancy.server";
+import { requireShopId } from "../tenancy.server";
 import {
   buildMetafieldText,
   embedProducts,
@@ -16,6 +16,7 @@ import {
   toStoredMetafield,
   type StoredMetafield,
 } from "./metafields.server";
+import { logError, logWarn } from "../log.server";
 
 // Catalog sync (spec 02). Full paged sync + webhook-driven single upserts.
 // Re-embeds ONLY when the embedding text (title/type/vendor/tags/description/
@@ -91,6 +92,22 @@ function collectMetafields(
   return out;
 }
 
+/**
+ * Non-creating shop lookup for every webhook/job-driven entry point (QA D11):
+ * a webhook or a queued sync for a domain we have no row for (never installed,
+ * or already purged) must not materialise a Shop — the install/auth path
+ * (install.server.ts → resolveShopId) is the only creator. Returns null →
+ * caller no-ops.
+ */
+async function existingShopId(shopDomain: string): Promise<string | null> {
+  const shop = await db.shop.findUnique({ where: { domain: shopDomain }, select: { id: true } });
+  if (!shop) {
+    logWarn("catalog_unknown_shop", undefined, { shopDomain });
+    return null;
+  }
+  return requireShopId(shop.id);
+}
+
 interface SyncedProduct {
   shopifyProductId: string;
   title: string;
@@ -109,7 +126,8 @@ interface SyncedProduct {
 }
 
 export async function fullCatalogSync(shopDomain: string): Promise<void> {
-  const shopId = requireShopId(await resolveShopId(shopDomain));
+  const shopId = await existingShopId(shopDomain);
+  if (!shopId) return;
   await db.syncState.upsert({
     where: { shopId },
     update: { status: "running", errorMessage: null },
@@ -123,6 +141,9 @@ export async function fullCatalogSync(shopDomain: string): Promise<void> {
     let cursor: string | null = null;
     let total = 0;
     let capped = false;
+    // Every Shopify id seen in this run — rows not in this set were deleted in
+    // Shopify while a webhook was missed and are pruned after a COMPLETE run.
+    const seenIds = new Set<string>();
 
     do {
       const response = await admin.graphql(PRODUCTS_QUERY, { variables: { cursor } });
@@ -186,9 +207,22 @@ export async function fullCatalogSync(shopDomain: string): Promise<void> {
         }),
       );
       await upsertProducts(shopId, products);
+      for (const product of products) seenIds.add(product.shopifyProductId);
       total += products.length;
       cursor = !capped && page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
     } while (cursor);
+
+    // QA D7: reconcile deletions. Only after a full, uncapped enumeration —
+    // a capped run stopped paging, so "unseen" would include live products
+    // beyond the cap; an error never reaches this line (throw above).
+    // Mirrors deleteProductFromWebhook (the Product row is the only table the
+    // delete webhook touches — embeddings live on the row itself).
+    if (!capped) {
+      const pruned = await db.product.deleteMany({
+        where: { shopId, shopifyProductId: { notIn: [...seenIds] } },
+      });
+      if (pruned.count > 0) console.log(`catalog_sync_pruned ${shopDomain} products=${pruned.count}`);
+    }
 
     await db.syncState.update({
       where: { shopId },
@@ -203,7 +237,7 @@ export async function fullCatalogSync(shopDomain: string): Promise<void> {
     // Refresh the metafield catalog (definitions + "used in" counts) from the
     // freshly synced rows; failures here must not fail the product sync.
     await syncMetafieldDefinitions(shopDomain, shopId).catch((error: unknown) =>
-      console.error("metafield_definitions_sync_error", shopDomain, error),
+      logError("metafield_definitions_sync_error", error, { shopDomain }),
     );
   } catch (error) {
     await db.syncState.update({
@@ -233,7 +267,8 @@ export async function catalogAutoSyncAllowed(
 }
 
 export async function upsertProductFromWebhook(shopDomain: string, payload: unknown): Promise<void> {
-  const shopId = requireShopId(await resolveShopId(shopDomain));
+  const shopId = await existingShopId(shopDomain);
+  if (!shopId) return;
   const p = payload as {
     admin_graphql_api_id?: string;
     id?: number;
@@ -248,6 +283,24 @@ export async function upsertProductFromWebhook(shopDomain: string, payload: unkn
     variants?: Array<{ price?: string; inventory_quantity?: number }>;
   };
   const shopifyProductId = p.admin_graphql_api_id ?? `gid://shopify/Product/${p.id}`;
+
+  // QA D7: the products_synced cap applies to webhook CREATES too (updates of
+  // an already-synced product always apply). getQuota is unlimited in "open"
+  // enforcement mode, so this only bites once enforcement is switched on.
+  const existing = await db.product.findUnique({
+    where: { shopId_shopifyProductId: { shopId, shopifyProductId } },
+    select: { id: true },
+  });
+  if (!existing) {
+    const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
+    const cap = getQuota(shop?.plan ?? "free", "products_synced");
+    const count = await db.product.count({ where: { shopId } });
+    if (count >= cap) {
+      console.log(`product_webhook_create_capped ${shopDomain} count=${count} cap=${cap}`);
+      return;
+    }
+  }
+
   const description = stripHtml(p.body_html ?? "");
   const webhookVariants = (p.variants ?? []) as Array<{
     id?: number;
@@ -284,7 +337,7 @@ export async function upsertProductFromWebhook(shopDomain: string, payload: unkn
       );
     }
   } catch (error) {
-    console.error("product webhook metafield refetch failed", error);
+    logError("product_webhook_metafield_refetch_failed", error, { shopId });
   }
 
   await upsertProducts(shopId, [
@@ -317,12 +370,13 @@ export async function upsertProductFromWebhook(shopDomain: string, payload: unkn
     },
   ]);
   await refreshMetafieldUsage(shopId).catch((error: unknown) =>
-    console.error("metafield_usage_refresh_error", shopDomain, error),
+    logError("metafield_usage_refresh_error", error, { shopDomain }),
   );
 }
 
 export async function deleteProductFromWebhook(shopDomain: string, payload: unknown): Promise<void> {
-  const shopId = requireShopId(await resolveShopId(shopDomain));
+  const shopId = await existingShopId(shopDomain);
+  if (!shopId) return;
   const p = payload as { admin_graphql_api_id?: string; id?: number };
   const shopifyProductId = p.admin_graphql_api_id ?? `gid://shopify/Product/${p.id}`;
   await db.product.deleteMany({ where: { shopId, shopifyProductId } });
@@ -387,10 +441,12 @@ const COLLECTIONS_QUERY = `#graphql
 `;
 
 export async function fullCollectionSync(shopDomain: string): Promise<void> {
-  const shopId = requireShopId(await resolveShopId(shopDomain));
+  const shopId = await existingShopId(shopDomain);
+  if (!shopId) return;
   const { admin } = await unauthenticated.admin(shopDomain);
   let cursor: string | null = null;
   let total = 0;
+  const seenIds = new Set<string>();
 
   do {
     const response = await admin.graphql(COLLECTIONS_QUERY, { variables: { cursor } });
@@ -427,10 +483,19 @@ export async function fullCollectionSync(shopDomain: string): Promise<void> {
           conditions: node.ruleSet ? `Automated (${node.ruleSet.rules.length} rules)` : "Manual",
         },
       });
+      seenIds.add(node.id);
       total++;
     }
     cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
   } while (cursor);
+
+  // QA D7: prune collections deleted in Shopify (full enumeration completed —
+  // any GraphQL error throws out of the loop before reaching this line).
+  // Mirrors the COLLECTIONS_DELETE webhook (deleteMany on the Collection row).
+  const pruned = await db.collection.deleteMany({
+    where: { shopId, shopifyCollectionId: { notIn: [...seenIds] } },
+  });
+  if (pruned.count > 0) console.log(`collection_sync_pruned ${shopDomain} collections=${pruned.count}`);
 
   await db.syncState.upsert({
     where: { shopId },
@@ -509,7 +574,8 @@ function discountRowFields(d: DiscountPayload) {
 }
 
 export async function fullDiscountSync(shopDomain: string): Promise<void> {
-  const shopId = requireShopId(await resolveShopId(shopDomain));
+  const shopId = await existingShopId(shopDomain);
+  if (!shopId) return;
   const { admin } = await unauthenticated.admin(shopDomain);
   let cursor: string | null = null;
   let total = 0;
@@ -553,7 +619,8 @@ export async function fullDiscountSync(shopDomain: string): Promise<void> {
 }
 
 export async function upsertDiscountFromWebhook(shopDomain: string, payload: unknown): Promise<void> {
-  const shopId = requireShopId(await resolveShopId(shopDomain));
+  const shopId = await existingShopId(shopDomain);
+  if (!shopId) return;
   // Real-time discount sync is a Pro+ feature (seam active even in open mode)
   // AND a merchant toggle (ShopSettings.discountRealtime, Discounts tab).
   const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
@@ -579,7 +646,7 @@ export async function upsertDiscountFromWebhook(shopDomain: string, payload: unk
     const discount = body.data.discountNode?.discount;
     if (discount?.title) fields = discountRowFields(discount);
   } catch (error) {
-    console.error("discount webhook refetch failed, using payload fields", error);
+    logError("discount_webhook_refetch_failed", error, { shopId, shopDomain });
   }
   const fallback = {
     title: p.title ?? "",
@@ -598,7 +665,8 @@ export async function upsertDiscountFromWebhook(shopDomain: string, payload: unk
 }
 
 export async function deleteDiscountFromWebhook(shopDomain: string, payload: unknown): Promise<void> {
-  const shopId = requireShopId(await resolveShopId(shopDomain));
+  const shopId = await existingShopId(shopDomain);
+  if (!shopId) return;
   const p = payload as { admin_graphql_api_id?: string };
   if (!p.admin_graphql_api_id) return;
   await db.discount.deleteMany({ where: { shopId, shopifyDiscountId: p.admin_graphql_api_id } });

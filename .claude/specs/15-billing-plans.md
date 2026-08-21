@@ -23,10 +23,22 @@
 | Discount real-time sync | — | — | ✅ | ✅ |
 | Premium proactive templates | — | — | ✅ | ✅ |
 | Inbox cart view | — | — | ✅ | ✅ |
-| Multi-language + auto-detect | — | — | — | ✅ |
+| Multi-language + auto-detect | ✅ | ✅ | ✅ | ✅ | (not gated — every plan)
 | Analytics/conversation exports | — | — | — | ✅ |
 
 (Design hard-codes Plus quotas in AI-agent meters and says "Downgrade to X" on every CTA — both are design bugs; UI must derive from this matrix and label Upgrade/Downgrade/Current correctly.)
+
+**No literal plan numbers in UI copy (QA D10).** Everything above is a *default* the
+operator can change from `/platform/plans`, so the UI must recompute, never quote:
+- the yearly discount is `Math.round((1 - yearlyTotal / (priceMonthly × 12)) × 100)`
+  (`yearlySavingsPercent` / `savingsBadgeLabel` in `app/components/PlanCards.tsx`) —
+  the toggle badge and the yearly terms line both read it, so "18%" is derived, not typed;
+- the overage rate in the FAQ comes from `overageRate(plan)` via the loader
+  (`PlanFaq` prop `overagePerConversation`; `null` ⇒ "AI pauses at the cap" copy);
+- the "(50 rows)" CSV figure is **not** modelled as a quota dimension
+  (`QUOTA_DIMENSIONS` has no csv-rows key), so the Plus bullet says
+  "CSV import + PDF upload (N files)" using `quotas.file_uploads` rather than
+  stating a row limit the code does not enforce.
 
 ## Billing integration (Shopify Billing API)
 
@@ -35,7 +47,7 @@
 - Confirmation URL redirect flow from embedded app (top-level redirect via App Bridge); return URL → verify active → store plan + planStatus on Shop.
 - Plan change: create new subscription (Shopify auto-cancels/prorates — FAQ #6: immediate, prorated by Shopify).
 - Cancel/uninstall: `app_subscriptions/update` webhook + uninstall → planStatus updated; FAQ #5: data retained, premium features pause.
-- Discount codes: `appSubscriptionCreate` discount field where supported; UI input + Apply (error "Please enter a code."; success "✓ Code applied…").
+- Discount codes (built 2026-08-21): operator-managed **promo codes** at `/platform/promo-codes` (`PromoCode` table — percent or fixed USD, optional duration in billing cycles, plan/interval restriction, max redemptions, expiry, active flag; codes handed to merchants out of band by mail/chat). Merchant applies a code on Plan & Usage → `validate_code` action (server-side, shop-scoped; one redemption per shop per code) → cards preview the discounted price → `subscribe` re-validates against the chosen plan+interval and passes `discount: { value: { percentage: 0–1 | amount }, durationLimitInIntervals }` on the recurring line of `appSubscriptionCreate`, so **Shopify applies it** (approval page, invoices, proration). `PromoRedemption` row is `pending` at create and flipped to `redeemed` by `completeBillingReturn` once the subscription is ACTIVE. A fixed discount ≥ the interval price is refused (no $0 subscriptions). Codes with redemptions can be deactivated, not deleted. Lib: `app/lib/billing/promo-codes.server.ts`.
 - Dev stores: test charges (`test: true` in dev).
 
 ## Usage metering (FAQ rules are the contract)

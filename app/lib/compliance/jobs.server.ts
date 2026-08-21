@@ -1,6 +1,7 @@
 import type { PgBoss } from "pg-boss";
 import db from "../../db.server";
 import { pendingDataRequests } from "./data-request.server";
+import { logError, logWarn } from "../log.server";
 
 // Compliance job registry (spec 17). Registered by the pg-boss orchestrator
 // (app/lib/jobs/queue.server.ts) alongside the core handlers.
@@ -22,7 +23,7 @@ function notifyMerchantOfDataRequests(
   requests: Array<{ id: string; dueAt: Date; isOverdue: boolean }>,
 ): void {
   const overdue = requests.filter((r) => r.isOverdue);
-  console.warn("data_request_reminder", {
+  logWarn("data_request_reminder", {
     shopId,
     open: requests.length,
     overdue: overdue.length,
@@ -51,5 +52,5 @@ export async function registerComplianceJobs(boss: PgBoss): Promise<void> {
 
   await boss
     .schedule(COMPLIANCE_JOBS.dataRequestReminder, DATA_REQUEST_REMINDER_CRON, {}, {})
-    .catch((error: unknown) => console.error("data_request_reminder_schedule_error", error));
+    .catch((error: unknown) => logError("data_request_reminder_schedule_error", error));
 }

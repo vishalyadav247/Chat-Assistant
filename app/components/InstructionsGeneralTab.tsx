@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useFetcher, useNavigate } from "react-router";
+import { useFetcher } from "react-router";
 import { useAppBridge } from "../lib/ui/surface";
 import type { GeneralData, InstructionsActionResult } from "../routes/app.ai-agent.instructions";
 import { SaveBar } from "./SaveBar";
@@ -70,9 +70,8 @@ function toForm(data: GeneralData): FormState {
   };
 }
 
-export function InstructionsGeneralTab(props: { initial: GeneralData; autoDetectLocked: boolean }) {
+export function InstructionsGeneralTab(props: { initial: GeneralData }) {
   const shopify = useAppBridge();
-  const navigate = useNavigate();
   const fetcher = useFetcher<InstructionsActionResult>();
   const [saved, setSaved] = useState<FormState>(() => toForm(props.initial));
   const [form, setForm] = useState<FormState>(() => toForm(props.initial));
@@ -217,23 +216,12 @@ export function InstructionsGeneralTab(props: { initial: GeneralData; autoDetect
               </s-option>
             ))}
           </s-select>
-          <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="center">
-            <s-switch
-              label="Auto-detect shopper's language"
-              details="When enabled, the assistant answers in the shopper's detected language."
-              checked={form.autoDetectLanguage}
-              disabled={props.autoDetectLocked}
-              onChange={(e) => set("autoDetectLanguage", e.currentTarget.checked)}
-            />
-            {props.autoDetectLocked ? (
-              <s-stack direction="inline" gap="small-200" alignItems="center">
-                <s-badge tone="info">Plus</s-badge>
-                <s-button variant="tertiary" onClick={() => navigate("/app/plan-usage")}>
-                  Upgrade to unlock
-                </s-button>
-              </s-stack>
-            ) : null}
-          </s-grid>
+          <s-switch
+            label="Auto-detect shopper's language"
+            details="When enabled, the assistant answers in the shopper's detected language."
+            checked={form.autoDetectLanguage}
+            onChange={(e) => set("autoDetectLanguage", e.currentTarget.checked)}
+          />
         </s-stack>
       </s-section>
 

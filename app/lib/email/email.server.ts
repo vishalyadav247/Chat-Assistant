@@ -1,8 +1,10 @@
 import nodemailer from "nodemailer";
-import { env } from "../env.server";
+import { runtimeConfig } from "../platform/runtime-config.server";
+import { logError } from "../log.server";
 
 // Transactional email seam (spec 18 / spec 10 & 17 "email provider decision").
-// Provider is picked from EMAIL_PROVIDER:
+// Provider + credentials are operator-managed at /platform/settings, falling
+// back to the EMAIL_* environment variables (spec 19). Modes:
 //   log    — prints the message; returns delivered=false so callers fall back
 //            to copy-link UX (dev default).
 //   resend — POST https://api.resend.com/emails (plain fetch, no SDK).
@@ -24,38 +26,43 @@ export interface EmailResult {
 }
 
 export function emailConfigured(): boolean {
-  const e = env();
-  if (e.EMAIL_PROVIDER === "resend") return Boolean(e.RESEND_API_KEY);
-  if (e.EMAIL_PROVIDER === "smtp") return Boolean(e.SMTP_HOST);
+  const e = runtimeConfig();
+  if (e.emailProvider === "resend") return Boolean(e.resendApiKey);
+  if (e.emailProvider === "smtp") return Boolean(e.smtpHost);
   return false;
 }
 
-let transporter: nodemailer.Transporter | null = null;
+// Cached per credential set so a settings change takes effect without a restart.
+let transporter: { fingerprint: string; value: nodemailer.Transporter } | null = null;
 function smtpTransport() {
-  if (!transporter) {
-    const e = env();
-    transporter = nodemailer.createTransport({
-      host: e.SMTP_HOST,
-      port: e.SMTP_PORT,
-      secure: e.SMTP_SECURE,
-      auth: e.SMTP_USER ? { user: e.SMTP_USER, pass: e.SMTP_PASS } : undefined,
-    });
+  const e = runtimeConfig();
+  const fingerprint = `${e.smtpHost}|${e.smtpPort}|${e.smtpSecure}|${e.smtpUser}|${e.smtpPass}`;
+  if (!transporter || transporter.fingerprint !== fingerprint) {
+    transporter = {
+      fingerprint,
+      value: nodemailer.createTransport({
+        host: e.smtpHost,
+        port: e.smtpPort,
+        secure: e.smtpSecure,
+        auth: e.smtpUser ? { user: e.smtpUser, pass: e.smtpPass } : undefined,
+      }),
+    };
   }
-  return transporter;
+  return transporter.value;
 }
 
 export async function sendEmail(message: EmailMessage): Promise<EmailResult> {
-  const e = env();
-  if (e.EMAIL_PROVIDER === "resend" && e.RESEND_API_KEY) {
+  const e = runtimeConfig();
+  if (e.emailProvider === "resend" && e.resendApiKey) {
     try {
       const res = await fetch("https://api.resend.com/emails", {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${e.RESEND_API_KEY}`,
+          Authorization: `Bearer ${e.resendApiKey}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          from: e.EMAIL_FROM,
+          from: e.emailFrom,
           to: [message.to],
           subject: message.subject,
           html: message.html,
@@ -65,19 +72,19 @@ export async function sendEmail(message: EmailMessage): Promise<EmailResult> {
       });
       if (!res.ok) {
         const body = await res.text().catch(() => "");
-        console.error("email_send_failed", res.status, body.slice(0, 300));
+        logError("email_send_failed", `Resend ${res.status}`, { status: res.status, response: body.slice(0, 300) });
         return { delivered: false, provider: "resend", error: `Resend ${res.status}` };
       }
       return { delivered: true, provider: "resend" };
     } catch (error) {
-      console.error("email_send_error", error);
+      logError("email_send_error", error);
       return { delivered: false, provider: "resend", error: "network" };
     }
   }
-  if (e.EMAIL_PROVIDER === "smtp" && e.SMTP_HOST) {
+  if (e.emailProvider === "smtp" && e.smtpHost) {
     try {
       await smtpTransport().sendMail({
-        from: e.EMAIL_FROM,
+        from: e.emailFrom,
         to: message.to,
         subject: message.subject,
         text: message.text,
@@ -85,7 +92,7 @@ export async function sendEmail(message: EmailMessage): Promise<EmailResult> {
       });
       return { delivered: true, provider: "smtp" };
     } catch (error) {
-      console.error("email_smtp_error", error instanceof Error ? error.message : error);
+      logError("email_smtp_error", error instanceof Error ? error.message : error);
       return { delivered: false, provider: "smtp", error: "smtp" };
     }
   }
@@ -99,27 +106,51 @@ function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
 }
 
+// Shared branded shell (matches BRAND in app/components/ui/tokens.ts:
+// accent #6d3bf5, gradient #6d3bf5→#3b82f6). Inline styles only — email
+// clients strip <style> blocks. Every template returns html + text so the
+// smtp/log providers work unchanged.
 function layout(title: string, bodyHtml: string, cta?: { label: string; url: string }): string {
   const button = cta
-    ? `<p style="margin:24px 0"><a href="${escapeHtml(cta.url)}" style="display:inline-block;background:#303030;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600">${escapeHtml(cta.label)}</a></p>
-       <p style="color:#6b7280;font-size:12px">Or copy this link: <br><span style="word-break:break-all">${escapeHtml(cta.url)}</span></p>`
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:28px 0 8px"><tr><td style="border-radius:10px;background:linear-gradient(135deg,#6d3bf5,#3b82f6)">
+         <a href="${escapeHtml(cta.url)}" style="display:inline-block;padding:12px 28px;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;border-radius:10px">${escapeHtml(cta.label)}</a>
+       </td></tr></table>
+       <p style="color:#78787f;font-size:12px;line-height:1.6;margin:12px 0 0">If the button doesn't work, copy this link into your browser:<br>
+       <a href="${escapeHtml(cta.url)}" style="color:#6d3bf5;word-break:break-all">${escapeHtml(cta.url)}</a></p>`
     : "";
-  return `<!doctype html><html><body style="margin:0;background:#f6f6f7;font-family:Inter,-apple-system,Segoe UI,Roboto,sans-serif;color:#1f2937">
-  <div style="max-width:520px;margin:24px auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:28px">
-    <div style="font-weight:700;font-size:16px;margin-bottom:16px">ChatConvert</div>
-    <h1 style="font-size:18px;margin:0 0 12px">${escapeHtml(title)}</h1>
-    ${bodyHtml}
-    ${button}
-    <p style="color:#9ca3af;font-size:12px;margin-top:28px">If you weren't expecting this email you can ignore it.</p>
-  </div></body></html>`;
+  return `<!doctype html><html><body style="margin:0;padding:0;background:#f4f4f7;font-family:Inter,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#2e2e37">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:32px 12px"><tr><td align="center">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:540px;background:#ffffff;border-radius:14px;overflow:hidden;border:1px solid #e9e9ec">
+      <tr><td style="background:linear-gradient(135deg,#6d3bf5,#3b82f6);padding:18px 32px">
+        <span style="color:#ffffff;font-weight:700;font-size:17px;letter-spacing:.2px">ChatConvert</span>
+      </td></tr>
+      <tr><td style="padding:32px">
+        <h1 style="font-size:20px;line-height:1.35;margin:0 0 14px;color:#1f1f26">${escapeHtml(title)}</h1>
+        <div style="font-size:14px;line-height:1.65;color:#4a4a53">${bodyHtml}</div>
+        ${button}
+      </td></tr>
+      <tr><td style="padding:18px 32px;border-top:1px solid #f1f1f1">
+        <p style="margin:0;color:#a2a2ab;font-size:12px;line-height:1.6">You're receiving this because of activity on a ChatConvert workspace. If you weren't expecting this email, you can safely ignore it.</p>
+      </td></tr>
+    </table>
+  </td></tr></table></body></html>`;
 }
 
 export function inviteEmail(args: { to: string; inviterName: string; shopName: string; url: string }): EmailMessage {
   const subject = `${args.inviterName} invited you to ${args.shopName} on ChatConvert`;
-  const text = `${args.inviterName} invited you to help with customer conversations for ${args.shopName} on ChatConvert.\n\nAccept the invitation and set your password:\n${args.url}\n\nThe link expires in 7 days.`;
+  const text = `${args.inviterName} invited you to join the ${args.shopName} team on ChatConvert.
+
+As a team member you'll answer shopper conversations, hand-picked by AI when a human is needed.
+
+Accept the invitation and set your password:
+${args.url}
+
+This link expires in 7 days. If you weren't expecting this invitation, you can ignore this email.`;
   const html = layout(
-    `You're invited to ${args.shopName}`,
-    `<p>${escapeHtml(args.inviterName)} invited you to help with customer conversations for <strong>${escapeHtml(args.shopName)}</strong> on ChatConvert.</p><p>Accept the invitation and set your password. The link expires in 7 days.</p>`,
+    `${escapeHtml(args.inviterName)} invited you to join ${escapeHtml(args.shopName)}`,
+    `<p style="margin:0 0 12px"><strong>${escapeHtml(args.inviterName)}</strong> invited you to join the <strong>${escapeHtml(args.shopName)}</strong> team on ChatConvert — the AI support &amp; sales chat for their store.</p>
+     <p style="margin:0 0 12px">You'll pick up shopper conversations whenever the AI hands over to a human, right from a shared team inbox.</p>
+     <p style="margin:0;color:#78787f">The invitation expires in <strong>7 days</strong>.</p>`,
     { label: "Accept invitation", url: args.url },
   );
   return { to: args.to, subject, html, text };
@@ -127,10 +158,16 @@ export function inviteEmail(args: { to: string; inviterName: string; shopName: s
 
 export function resetEmail(args: { to: string; url: string }): EmailMessage {
   const subject = "Reset your ChatConvert password";
-  const text = `Someone requested a password reset for your ChatConvert login.\n\nSet a new password:\n${args.url}\n\nThe link expires in 1 hour.`;
+  const text = `Someone requested a password reset for your ChatConvert login.
+
+Set a new password:
+${args.url}
+
+This link expires in 1 hour and can be used once. If you didn't request this, you can ignore this email — your password stays unchanged.`;
   const html = layout(
     "Reset your password",
-    `<p>Someone requested a password reset for your ChatConvert login. The link expires in 1 hour.</p>`,
+    `<p style="margin:0 0 12px">Someone requested a password reset for your ChatConvert login.</p>
+     <p style="margin:0;color:#78787f">The link expires in <strong>1 hour</strong> and can be used once. If this wasn't you, ignore this email — your password stays unchanged.</p>`,
     { label: "Set a new password", url: args.url },
   );
   return { to: args.to, subject, html, text };
@@ -139,12 +176,17 @@ export function resetEmail(args: { to: string; url: string }): EmailMessage {
 export function handoverEmail(args: { to: string; shopName: string; url: string; snippet?: string }): EmailMessage {
   const subject = `A shopper needs a human — ${args.shopName}`;
   const snippet = args.snippet ? `\n\n"${args.snippet}"` : "";
-  const text = `A conversation on ${args.shopName} was handed over to your team.${snippet}\n\nOpen it in the inbox:\n${args.url}`;
+  const text = `A conversation on ${args.shopName} was handed over to your team.${snippet}
+
+Open it in the inbox:
+${args.url}`;
   const html = layout(
     "A shopper needs a human",
-    `<p>A conversation on <strong>${escapeHtml(args.shopName)}</strong> was handed over to your team.</p>${
-      args.snippet ? `<blockquote style="margin:12px 0;padding:8px 12px;border-left:3px solid #e5e7eb;color:#4b5563">${escapeHtml(args.snippet)}</blockquote>` : ""
-    }`,
+    `<p style="margin:0 0 12px">A conversation on <strong>${escapeHtml(args.shopName)}</strong> was handed over to your team.</p>${
+      args.snippet
+        ? `<blockquote style="margin:0 0 12px;padding:10px 14px;border-left:3px solid #6d3bf5;background:#efeafe;border-radius:0 8px 8px 0;color:#4a4a53">${escapeHtml(args.snippet)}</blockquote>`
+        : ""
+    }<p style="margin:0;color:#78787f">Reply from the shared inbox so the shopper isn't kept waiting.</p>`,
     { label: "Open in inbox", url: args.url },
   );
   return { to: args.to, subject, html, text };

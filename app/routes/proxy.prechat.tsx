@@ -12,7 +12,7 @@ import { authenticate } from "../shopify.server";
 const bodySchema = z.object({
   sessionId: z.string().min(8).max(64),
   conversationId: z.string().max(64).optional(),
-  email: z.email().max(200),
+  email: z.email().max(200).transform((v) => v.trim().toLowerCase()),
   name: z.string().max(120).optional(),
   phone: z.string().max(40).optional(),
   optIn: z.boolean().optional().default(false),
@@ -93,8 +93,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (conversationId) {
+    // sessionId binds the write to the caller's OWN conversation. Without it a
+    // leaked/guessed conversationId let anyone re-point that thread's contact
+    // at themselves, corrupting the merchant's inbox attribution (QA D12 —
+    // same rule the other proxy routes already enforce, review C1).
     await db.conversation.updateMany({
-      where: { id: conversationId, shopId },
+      where: { id: conversationId, shopId, sessionId },
       data: { contactId: contact.id },
     });
   }

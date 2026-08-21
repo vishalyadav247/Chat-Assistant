@@ -1,0 +1,194 @@
+/* Platform console extras (spec 19).
+   The chrome comes from web-shell.css (`ccws-*`) so the operator console is
+   visually identical to the standalone web app — see PlatformShell.tsx. Only
+   the few things with no Polaris/design-system equivalent live here, and they
+   use the same tokens as the rest of the app. */
+
+/* Plan distribution meter: ordinal single-hue ramp, 2px gaps between segments,
+   identity carried by the labelled legend (never colour alone). */
+.ccpf-meter {
+  display: flex;
+  height: 14px;
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--s-color-bg-fill-secondary, #f1f1f1);
+}
+
+.ccpf-meterSeg {
+  height: 100%;
+  min-width: 6px;
+}
+
+.ccpf-meterSeg + .ccpf-meterSeg {
+  margin-left: 2px;
+}
+
+.ccpf-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+}
+
+.ccpf-legendItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--s-color-text-secondary, #616166);
+}
+
+.ccpf-legendDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.ccpf-legendCount {
+  font-weight: 700;
+  color: var(--s-color-text, #1a1a1e);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Daily cost bars: one series, so no legend — the section heading names it. */
+.ccpf-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 120px;
+}
+
+.ccpf-chartCol {
+  flex: 1;
+  min-width: 3px;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  border-radius: 4px;
+}
+
+.ccpf-chartCol:hover {
+  background: var(--s-color-bg-fill-secondary, #f1f1f1);
+}
+
+.ccpf-chartBar {
+  width: 100%;
+  background: #6d3bf5;
+  border-radius: 4px 4px 0 0;
+}
+
+.ccpf-chartCol:hover .ccpf-chartBar {
+  background: #4f21c9;
+}
+
+.ccpf-chartAxis {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--s-color-text-secondary, #616166);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Share-of-total bars in the "where the tokens go" breakdown. */
+.ccpf-breakRow {
+  display: grid;
+  grid-template-columns: minmax(120px, 210px) 1fr auto;
+  align-items: center;
+  gap: 14px;
+  font-size: 13px;
+}
+
+.ccpf-breakBar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--s-color-bg-fill-secondary, #f1f1f1);
+  overflow: hidden;
+}
+
+.ccpf-breakFill {
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(135deg, #6d3bf5, #3b82f6);
+}
+
+.ccpf-breakValue {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--s-color-text-secondary, #616166);
+  white-space: nowrap;
+}
+
+.ccpf-breakCost {
+  font-weight: 700;
+  color: var(--s-color-text, #1a1a1e);
+  min-width: 62px;
+  text-align: right;
+}
+
+/* Monospace for model ids / keys shown inside Polaris text. */
+.ccpf-mono {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 12.5px;
+}
+
+.ccpf-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ── Logs (spec 21) ───────────────────────────────────────────────────────── */
+
+.ccpf-logFilters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+/* Event codes in the top-events table double as a filter control. */
+.ccpf-logLink {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 12.5px;
+  color: var(--s-color-text-emphasis, #3b82f6);
+  cursor: pointer;
+  text-align: left;
+}
+
+.ccpf-logLink:hover {
+  text-decoration: underline;
+}
+
+.ccpf-logDetail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 52ch;
+  overflow-wrap: anywhere;
+}
+
+.ccpf-logCtx > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--s-color-text-secondary, #616166);
+}
+
+.ccpf-logCtx > pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--s-color-bg-surface-secondary, #f6f6f7);
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}

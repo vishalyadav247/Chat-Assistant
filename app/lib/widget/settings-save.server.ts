@@ -1,3 +1,4 @@
+import { ZodError } from "zod";
 import type { Prisma } from "@prisma/client";
 import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
@@ -6,7 +7,7 @@ import { uploadImage } from "../files.server";
 import { sanitizeHtml } from "../sanitize.server";
 import { recordEvent } from "../analytics/events.server";
 import { requirePlan, PlanGateError } from "../billing/plans.server";
-import { widgetSettingsSchema, type WidgetSettingsData } from "../settings/schemas";
+import { widgetSettingsSchema, zodMessage, type WidgetSettingsData } from "../settings/schemas";
 
 // Chatbox settings save workflow (spec 06). Intents:
 //   save          — full WidgetSettings draft JSON → zod parse → normalize →
@@ -149,6 +150,11 @@ export async function applyChatboxIntent(args: {
         intent,
         error: 'Removing the "Powered by ChatConvert" branding requires the Basic plan or above.',
       };
+    }
+    // Raw ZodError JSON must never reach the merchant-facing banner.
+    if (error instanceof ZodError) return { ok: false, intent, error: zodMessage(error) };
+    if (error instanceof SyntaxError) {
+      return { ok: false, intent, error: "Couldn't read the chatbox payload — please reload and try again." };
     }
     return {
       ok: false,

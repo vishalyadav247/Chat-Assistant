@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import { useFetcher } from "react-router";
 import { useAppBridge } from "../lib/ui/surface";
+import { useIsMobile } from "../lib/ui/use-mobile";
 import type { ShopSettingsData } from "../lib/settings/schemas";
 import {
   dateFormatOptions,
@@ -69,6 +70,7 @@ export function SettingsGeneral(props: {
   const shopify = useAppBridge();
   const uploadFetcher = useFetcher<{ ok: boolean; intent?: string; error?: string; logoUrl?: string }>();
   const fileRef = useRef<HTMLInputElement>(null);
+  const isMobile = useIsMobile();
   const [teamQuery, setTeamQuery] = useState("");
 
   // ── Team roster (self-contained fetcher, like the logo upload) ────────────
@@ -204,6 +206,7 @@ export function SettingsGeneral(props: {
           <s-box maxInlineSize="360px">
             <s-text-field
               label="Name"
+              maxLength={100}
               value={props.name}
               placeholder={props.placeholderName}
               onInput={(e) => props.onNameChange(e.currentTarget.value)}
@@ -275,7 +278,7 @@ export function SettingsGeneral(props: {
             time zone ({props.timeZone}) —{" "}
             <s-link onClick={props.onOpenAvailability}>change it in Chat availability</s-link>.
           </s-text>
-          <s-grid gridTemplateColumns="minmax(0,1fr) minmax(0,1fr)" gap="base">
+          <s-grid gridTemplateColumns={isMobile ? "minmax(0,1fr)" : "minmax(0,1fr) minmax(0,1fr)"} gap="base">
             <s-select
               label="Date format"
               value={props.dateFormat}
