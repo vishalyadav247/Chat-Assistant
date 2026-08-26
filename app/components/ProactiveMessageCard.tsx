@@ -334,7 +334,7 @@ export function ProactiveMessageCard(props: {
           label="Collect lead"
           details="Ask for contact details before revealing the code."
           checked={message.collectLead}
-          onChange={(e) => setMessage({ collectLead: e.currentTarget.checked })}
+          onInput={(e) => setMessage({ collectLead: e.currentTarget.checked })}
         />
         {message.collectLead ? (
           <s-box paddingInlineStart="large">
@@ -354,12 +354,12 @@ export function ProactiveMessageCard(props: {
                   <s-checkbox
                     label="Name"
                     checked={message.lead.askName}
-                    onChange={(e) => setLead({ askName: e.currentTarget.checked })}
+                    onInput={(e) => setLead({ askName: e.currentTarget.checked })}
                   />
                   <s-checkbox
                     label="Phone"
                     checked={message.lead.askPhone}
-                    onChange={(e) => setLead({ askPhone: e.currentTarget.checked })}
+                    onInput={(e) => setLead({ askPhone: e.currentTarget.checked })}
                   />
                 </s-stack>
                 <s-stack gap="small">
@@ -375,7 +375,7 @@ export function ProactiveMessageCard(props: {
                       label="Marketing double opt-in"
                       labelAccessibilityVisibility="exclusive"
                       checked={message.lead.doubleOptIn}
-                      onChange={(e) => setLead({ doubleOptIn: e.currentTarget.checked })}
+                      onInput={(e) => setLead({ doubleOptIn: e.currentTarget.checked })}
                     />
                   </div>
                 </s-stack>

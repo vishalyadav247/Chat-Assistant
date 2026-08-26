@@ -245,7 +245,7 @@ export function ProactiveCampaignEditor(props: {
       min={0}
       max={600}
       suffix="seconds"
-      onChange={(e) =>
+      onInput={(e) =>
         setTrigger({ delaySeconds: Math.max(0, Math.min(600, Math.round(Number(e.currentTarget.value) || 0))) })
       }
     />
@@ -292,7 +292,7 @@ export function ProactiveCampaignEditor(props: {
               min={1}
               max={100}
               suffix="%"
-              onChange={(e) =>
+              onInput={(e) =>
                 setTrigger({
                   scrollPercent: Math.max(1, Math.min(100, Math.round(Number(e.currentTarget.value) || 1))),
                 })
@@ -310,7 +310,7 @@ export function ProactiveCampaignEditor(props: {
         value={String(trigger.cartMinValue)}
         min={0}
         prefix={props.currency}
-        onChange={(e) => setTrigger({ cartMinValue: Math.max(0, Number(e.currentTarget.value) || 0) })}
+        onInput={(e) => setTrigger({ cartMinValue: Math.max(0, Number(e.currentTarget.value) || 0) })}
       />
       <s-number-field
         label="Maximum cart value"
@@ -318,7 +318,7 @@ export function ProactiveCampaignEditor(props: {
         value={trigger.cartMaxValue === null ? "" : String(trigger.cartMaxValue)}
         min={0}
         prefix={props.currency}
-        onChange={(e) => {
+        onInput={(e) => {
           const raw = e.currentTarget.value;
           setTrigger({ cartMaxValue: raw.trim() === "" ? null : Math.max(0, Number(raw) || 0) });
         }}
@@ -426,12 +426,12 @@ export function ProactiveCampaignEditor(props: {
                   <s-date-field
                     label="Start date"
                     value={conditions.startDate}
-                    onChange={(e) => setConditions({ startDate: e.currentTarget.value })}
+                    onInput={(e) => setConditions({ startDate: e.currentTarget.value })}
                   />
                   <s-date-field
                     label="End date"
                     value={conditions.endDate}
-                    onChange={(e) => setConditions({ endDate: e.currentTarget.value })}
+                    onInput={(e) => setConditions({ endDate: e.currentTarget.value })}
                   />
                 </s-grid>
               </RadioOption>
@@ -555,7 +555,7 @@ export function ProactiveCampaignEditor(props: {
             label="Activate proactive chat"
             labelAccessibilityVisibility="exclusive"
             checked={draft.status === "active"}
-            onChange={(e) =>
+            onInput={(e) =>
               setDraft((d) => ({ ...d, status: e.currentTarget.checked ? "active" : "inactive" }))
             }
           />

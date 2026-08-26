@@ -274,6 +274,7 @@ export function InboxThread({
         <textarea
           ref={composerRef}
           className="cin-comp-input"
+          aria-label="Type a reply"
           placeholder="Type a reply…"
           rows={isMobile ? 1 : 2}
           maxLength={2000}

@@ -227,7 +227,7 @@ export default function PlatformPlans() {
                 }
                 details="Open: all features usable everywhere, quotas unlimited (meters still show matrix values). Enforced: every gate and quota below is applied server-side."
                 checked={data.enforcement === "enforced"}
-                onChange={(e) => setEnforcement(e.currentTarget.checked ? "enforced" : "open")}
+                onInput={(e) => setEnforcement(e.currentTarget.checked ? "enforced" : "open")}
               />
               {data.enforcement === "open" ? (
                 <s-banner tone="warning">
@@ -312,7 +312,7 @@ export default function PlatformPlans() {
                     key={feature}
                     label={FEATURE_LABELS[feature]}
                     checked={draft.features.includes(feature)}
-                    onChange={(e) =>
+                    onInput={(e) =>
                       patchDraft({
                         features: e.currentTarget.checked
                           ? [...draft.features, feature]

@@ -186,34 +186,106 @@
     return "cc-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
   }
 
-  /** sessionId with 30-min inactivity rotation; touch() extends the window. */
+  /** A rotated/expired session is a NEW conversation: per-conversation flags
+   *  must reset too, or a blocked/human thread's lock survives into it (D6). */
+  function resetConversation() {
+    state.conversationId = null;
+    state.pollSince = null;
+    state.humanMode = false;
+    state.blocked = false;
+    state.resolvedSeen = false;
+    state.renderedIds = {};
+    state.emptyPolls = 0;
+    stopPolling();
+    store(sessionStorage, CONVO_KEY, null);
+    store(sessionStorage, POLL_KEY, null);
+    store(sessionStorage, HUMAN_KEY, null);
+    store(sessionStorage, BLOCKED_KEY, null);
+  }
+
+  function readSession() {
+    var raw = read(localStorage, SESSION_KEY);
+    if (!raw) return null;
+    try {
+      var s = JSON.parse(raw);
+      return s && s.id ? s : null;
+    } catch (e) { return null; }
+  }
+
+  /** sessionId with 30-min inactivity rotation; touch() extends the window.
+   *
+   *  PRIVACY: this id is FUNCTIONAL storage — it exists so the chat the
+   *  shopper started can be continued and so a human agent can reply into the
+   *  same thread. It is therefore minted and written only at the point the
+   *  shopper actually uses the chat (opens the panel, sends a message, adds to
+   *  cart from a card…), never on a passive page view. Boot uses peekSession()
+   *  instead, which reads and can expire but never creates. */
   function sessionId(touch) {
     var now = Date.now();
-    var s = null;
-    var raw = read(localStorage, SESSION_KEY);
-    if (raw) {
-      try { s = JSON.parse(raw); } catch (e) { s = null; }
-    }
-    if (!s || !s.id || now - (s.at || 0) > SESSION_IDLE) {
+    var s = readSession();
+    if (!s || now - (s.at || 0) > SESSION_IDLE) {
       s = { id: uuid(), at: now };
-      // A rotated session is a NEW conversation: per-conversation flags must
-      // reset too, or a blocked/human thread's lock survives into it (QA D6).
-      state.conversationId = null;
-      state.pollSince = null;
-      state.humanMode = false;
-      state.blocked = false;
-      state.resolvedSeen = false;
-      state.renderedIds = {};
-      state.emptyPolls = 0;
-      stopPolling();
-      store(sessionStorage, CONVO_KEY, null);
-      store(sessionStorage, POLL_KEY, null);
-      store(sessionStorage, HUMAN_KEY, null);
-      store(sessionStorage, BLOCKED_KEY, null);
+      resetConversation();
     }
     if (touch) s.at = now;
     store(localStorage, SESSION_KEY, JSON.stringify(s));
     return s.id;
+  }
+
+  /** Read-only form used at boot: expires a stale record (a delete, not a
+   *  write) and returns null rather than minting an id for a page view. */
+  function peekSession() {
+    var s = readSession();
+    if (!s) return null;
+    if (Date.now() - (s.at || 0) > SESSION_IDLE) {
+      store(localStorage, SESSION_KEY, null);
+      resetConversation();
+      return null;
+    }
+    return s.id;
+  }
+
+  // ── tracking consent (Shopify Customer Privacy API) ──────────────────────
+  /* The chat's own storage is functional and ungated (above). The `/event`
+   * beacons are analytics telemetry, so they are gated on the shopper's
+   * analytics consent whenever the storefront exposes the API. The API is not
+   * present on every storefront; per Shopify's own guidance an absent API
+   * means tracking may proceed. Consent never gates the chat itself. */
+  var privacy = { api: null, started: false, settled: false };
+  /** Resolve the API once, at boot, so the answer is ready before the first
+   *  beacon. `settled` distinguishes "no API on this storefront" (→ allowed)
+   *  from "still loading" (→ hold), so no event slips out ahead of consent. */
+  function initPrivacy() {
+    if (privacy.started) return;
+    privacy.started = true;
+    var S = window.Shopify; // absent on non-Shopify pages / theme previews
+    // Consent can be collected later in the visit — re-read the API then.
+    document.addEventListener("visitorConsentCollected", function () {
+      privacy.api = (window.Shopify && window.Shopify.customerPrivacy) || privacy.api;
+      privacy.settled = true;
+    });
+    if (S && S.customerPrivacy) {
+      privacy.api = S.customerPrivacy;
+      privacy.settled = true;
+      return;
+    }
+    if (!S || typeof S.loadFeatures !== "function") {
+      privacy.settled = true; // API unavailable here — nothing to consult
+      return;
+    }
+    try {
+      S.loadFeatures([{ name: "consent-tracking-api", version: "0.1" }], function (err) {
+        if (!err && window.Shopify) privacy.api = window.Shopify.customerPrivacy || null;
+        privacy.settled = true;
+      });
+    } catch (e) { privacy.settled = true; }
+  }
+  function analyticsAllowed() {
+    initPrivacy();
+    if (!privacy.settled) return false; // still resolving — don't pre-empt consent
+    var api = privacy.api;
+    if (!api || typeof api.analyticsProcessingAllowed !== "function") return true;
+    try { return api.analyticsProcessingAllowed() !== false; } catch (e) { return true; }
   }
 
   // ── config fetch (sessionStorage cache, ≤5 min) ──────────────────────────
@@ -304,6 +376,7 @@
   getConfig().then(function (data) {
     if (!data || data.active === false || !data.widget) return;
     config = data;
+    initPrivacy(); // resolve consent state before any beacon can fire
     ensureCss().then(mountLauncher).then(initCampaigns).then(maybeRestoreOpen);
   });
 
@@ -380,6 +453,10 @@
   }
 
   function beacon(type, payload, cart) {
+    // Analytics telemetry only — the shopper's own chat never depends on it
+    // (the cart also rides each message's pageContext), so dropping it when
+    // analytics consent is withheld costs the conversation nothing.
+    if (!analyticsAllowed()) return;
     try {
       var body = { type: type, payload: payload || {} };
       if (cart) {
@@ -412,8 +489,13 @@
     var focusChat = config.widget.chatFocusMode && config.widget.liveChat;
     showScreen(focusChat ? "chat" : state.screen === "chat" ? "chat" : "home");
     if (state.pollTimer === null && state.conversationId) startPolling();
-    var focusable = ui.panel.querySelector("input, button");
-    if (focusable) focusable.focus();
+    // The first `input, button` in the panel is the header Back button, which
+    // is display:none on the home screen — focusing it is a no-op and focus
+    // falls to <body>, so Escape (bound to the panel) and the focus trap never
+    // fire. Focus the composer when it is on screen, else the first VISIBLE
+    // focusable, else the panel itself (tabindex="-1").
+    var focusable = ui.inputEl && ui.inputEl.offsetParent !== null ? ui.inputEl : visibleFocusables()[0];
+    (focusable || ui.panel).focus();
   }
 
   function closePanel() {
@@ -427,7 +509,9 @@
   }
 
   function buildPanel() {
-    var panel = R.el("div", "cw-panel", { role: "dialog", "aria-modal": "true", "aria-label": config.widget.header.name || "ChatConvert chat" });
+    // tabindex="-1": programmatic focus target of last resort, so an open
+    // dialog always holds focus (Escape + the Tab trap are bound here).
+    var panel = R.el("div", "cw-panel", { role: "dialog", "aria-modal": "true", tabindex: "-1", "aria-label": config.widget.header.name || "ChatConvert chat" });
     panel.style.display = "none";
 
     var head = R.header(config, { showBack: false }, { onBack: onBack, onClose: closePanel });
@@ -469,14 +553,20 @@
     ui.panel = panel;
   }
 
-  function trapFocus(e) {
+  /** Focusable descendants of the panel that are actually rendered. */
+  function visibleFocusables() {
     var focusables = ui.panel.querySelectorAll(
-      'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
     );
     var visible = [];
     for (var i = 0; i < focusables.length; i++) {
       if (focusables[i].offsetParent !== null) visible.push(focusables[i]);
     }
+    return visible;
+  }
+
+  function trapFocus(e) {
+    var visible = visibleFocusables();
     if (visible.length === 0) return;
     var first = visible[0];
     var last = visible[visible.length - 1];
@@ -1515,7 +1605,9 @@
 
   // ── restore conversation id for this tab ─────────────────────────────────
   (function () {
-    sessionId(false); // rotate stale sessions first (also clears stale convo)
+    // Read-only: expires a stale session (clearing its convo) but never mints
+    // one — a page view alone must not write an identifier (see sessionId()).
+    peekSession();
     var convo = read(sessionStorage, CONVO_KEY);
     if (convo) {
       state.conversationId = convo;
@@ -1528,32 +1620,4 @@
       state.surveyShown = read(sessionStorage, SURVEY_KEY) === convo;
     }
   })();
-
-  // ── manual SSE probe (?ccprobe=1) — proxy buffering go/no-go check ───────
-  if (window.location.search.indexOf("ccprobe=1") !== -1) {
-    (function () {
-      var started = Date.now();
-      fetch(base + "/ping")
-        .then(function (res) {
-          var reader = res.body.getReader();
-          var decoder = new TextDecoder();
-          var buffer = "";
-          function pump() {
-            return reader.read().then(function (result) {
-              if (result.done) return undefined;
-              buffer += decoder.decode(result.value, { stream: true });
-              var parts = buffer.split("\n\n");
-              buffer = parts.pop() || "";
-              parts.forEach(function (part) {
-                var line = part.split("\n").find(function (l) { return l.indexOf("data: ") === 0; });
-                if (line) console.log("[ChatConvert probe]", line.slice(6), "+" + (Date.now() - started) + "ms");
-              });
-              return pump();
-            });
-          }
-          return pump();
-        })
-        .catch(function (err) { console.error("[ChatConvert probe] failed", err); });
-    })();
-  }
 })();

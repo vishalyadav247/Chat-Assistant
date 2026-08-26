@@ -299,7 +299,7 @@ export function SettingsGeneral(props: {
             label="Store time zone"
             details="Times are displayed, and working hours interpreted, in this zone."
             value={props.timeZone}
-            onChange={(e) => props.onTimeZoneChange(e.currentTarget.value)}
+            onInput={(e) => props.onTimeZoneChange(e.currentTarget.value)}
           >
             {props.timezoneOptions.map((tz) => (
               <s-option key={tz.value} value={tz.value}>
@@ -314,7 +314,7 @@ export function SettingsGeneral(props: {
             <s-select
               label="Date format"
               value={props.dateFormat}
-              onChange={(e) => props.onDateFormatChange(e.currentTarget.value as DateFormat)}
+              onInput={(e) => props.onDateFormatChange(e.currentTarget.value as DateFormat)}
             >
               {dateFormatOptions(SAMPLE_INSTANT, props.timeZone).map((o) => (
                 <s-option key={o.value} value={o.value}>
@@ -325,7 +325,7 @@ export function SettingsGeneral(props: {
             <s-select
               label="Time format"
               value={props.timeFormat}
-              onChange={(e) => props.onTimeFormatChange(e.currentTarget.value as TimeFormat)}
+              onInput={(e) => props.onTimeFormatChange(e.currentTarget.value as TimeFormat)}
             >
               {timeFormatOptions(SAMPLE_INSTANT, props.timeZone).map((o) => (
                 <s-option key={o.value} value={o.value}>
@@ -351,7 +351,7 @@ export function SettingsGeneral(props: {
             label="Storefront theme"
             value={props.theme}
             details="Helps the widget talk to your theme's cart (count bubble + drawer). Auto-detect works for most stores — pick your theme family only if the cart drawer doesn't open after an add to cart."
-            onChange={(e) => props.onThemeChange(e.currentTarget.value as Theme)}
+            onInput={(e) => props.onThemeChange(e.currentTarget.value as Theme)}
           >
             <s-option value="auto">Auto-detect (recommended)</s-option>
             <s-option value="dawn">Dawn</s-option>
@@ -385,7 +385,7 @@ export function SettingsGeneral(props: {
             label="Automatic resolution"
             details="Auto resolve conversations since the last message was sent by your team"
             checked={props.inbox.autoResolve}
-            onChange={(e) => props.onInboxChange({ ...props.inbox, autoResolve: e.currentTarget.checked })}
+            onInput={(e) => props.onInboxChange({ ...props.inbox, autoResolve: e.currentTarget.checked })}
           />
           {props.inbox.autoResolve ? (
             <s-stack direction="inline" gap="base" alignItems="end">
@@ -394,7 +394,7 @@ export function SettingsGeneral(props: {
                   label="Auto resolve after"
                   min={1}
                   value={String(props.inbox.after)}
-                  onChange={(e) => {
+                  onInput={(e) => {
                     const after = Math.max(1, Math.floor(Number(e.currentTarget.value) || 1));
                     props.onInboxChange({ ...props.inbox, after });
                   }}
@@ -405,7 +405,7 @@ export function SettingsGeneral(props: {
                   label="Unit"
                   labelAccessibilityVisibility="exclusive"
                   value={props.inbox.unit}
-                  onChange={(e) =>
+                  onInput={(e) =>
                     props.onInboxChange({ ...props.inbox, unit: e.currentTarget.value as Inbox["unit"] })
                   }
                 >
@@ -504,7 +504,7 @@ export function SettingsGeneral(props: {
                         labelAccessibilityVisibility="exclusive"
                         value={member.role}
                         disabled={teamBusy || isSelf}
-                        onChange={(e) =>
+                        onInput={(e) =>
                           submitTeam("team-role", { id: member.id, role: e.currentTarget.value })
                         }
                       >
@@ -629,7 +629,7 @@ export function SettingsGeneral(props: {
           <s-select
             label="Role"
             value={invite.role}
-            onChange={(e) =>
+            onInput={(e) =>
               setInvite({ ...invite, role: e.currentTarget.value === "admin" ? "admin" : "agent" })
             }
           >

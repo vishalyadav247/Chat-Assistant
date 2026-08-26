@@ -1,6 +1,7 @@
 import { useRef, useState, type ReactNode } from "react";
 import { Form, NavLink, useLocation } from "react-router";
 import { ConfirmDeleteModal } from "../ui/ConfirmDeleteModal";
+import { useNavDrawer } from "../web/use-nav-drawer";
 
 // Chrome for the authed /platform pages (spec 19).
 //
@@ -35,10 +36,57 @@ export function PlatformShell(props: { adminEmail: string; children: ReactNode }
   // Sign-out asks first (user, 2026-08-20) — the form submits only on confirm.
   const [confirmSignOut, setConfirmSignOut] = useState(false);
   const signOutForm = useRef<HTMLFormElement>(null);
+  // ≤900px the rail is a slide-in drawer (web-shell.css); without the top bar
+  // and this state an operator on a phone had NO way to navigate. Same hook,
+  // same markup and same classes as WebShell so the two surfaces behave alike.
+  const { open: drawerOpen, setOpen: setDrawerOpen, navRef, railRef, menuBtnRef } = useNavDrawer();
 
   return (
     <div className="ccws-shell">
-      <aside className="ccws-rail" aria-label="Platform navigation">
+      <header className="ccws-topbar">
+        <button
+          type="button"
+          ref={menuBtnRef}
+          className="ccws-menuBtn"
+          aria-label="Open navigation"
+          aria-expanded={drawerOpen}
+          onClick={() => setDrawerOpen(true)}
+        >
+          <s-icon type="menu" />
+        </button>
+        <div className="ccws-brandMark" aria-hidden="true">
+          C
+        </div>
+        <span className="ccws-topbarText">
+          <span className="ccws-topbarName">ChatConvert</span>
+          <span className="ccws-topbarShop">Platform console</span>
+        </span>
+        <NavLink
+          to="/platform/settings"
+          className="ccws-topbarAvatar"
+          aria-label="Platform settings"
+          title={props.adminEmail}
+        >
+          {initials(props.adminEmail)}
+        </NavLink>
+      </header>
+      {drawerOpen ? (
+        <button
+          type="button"
+          className="ccws-scrim"
+          aria-label="Close navigation"
+          onClick={() => setDrawerOpen(false)}
+        />
+      ) : null}
+      <aside
+        ref={railRef}
+        className={drawerOpen ? "ccws-rail ccws-railOpen" : "ccws-rail"}
+        aria-label="Platform navigation"
+        // Complementary landmark as a desktop rail; a real modal dialog while
+        // it is the ≤900px drawer (scrim + focus trap + Escape).
+        role={drawerOpen ? "dialog" : undefined}
+        aria-modal={drawerOpen ? true : undefined}
+      >
         <div className="ccws-brand">
           <div className="ccws-brandMark" aria-hidden="true">
             C
@@ -47,8 +95,16 @@ export function PlatformShell(props: { adminEmail: string; children: ReactNode }
             <span className="ccws-brandName">ChatConvert</span>
             <span className="ccws-brandShop">Platform console</span>
           </div>
+          <button
+            type="button"
+            className="ccws-railClose"
+            aria-label="Close navigation"
+            onClick={() => setDrawerOpen(false)}
+          >
+            <s-icon type="x" />
+          </button>
         </div>
-        <nav className="ccws-nav">
+        <nav className="ccws-nav" ref={navRef}>
           {NAV.map((item) => {
             const active = item.end
               ? location.pathname === item.href

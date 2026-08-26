@@ -7,7 +7,12 @@
 # TLS, App Store req 3.1.1), set automatically_update_urls_on_dev = false, and
 # deploy from a clean checkout.
 client_id = "d8b180fa8bf4edbda15692d2652516d7"
-name = "chat-convert"
+# Display name shown to merchants: the admin sidebar, the app list, the
+# "Uninstall …?" dialog and the review prompt all render this verbatim. It was
+# "chat-convert" (the CLI-scaffolded slug), so every one of those read as the
+# raw handle while the whole product says "ChatConvert". The URL handle is
+# derived separately and stays `chat-convert` — renaming here is display-only.
+name = "ChatConvert"
 application_url = "https://stop-connecting-magical-gospel.trycloudflare.com"
 embedded = true
 
@@ -82,7 +87,15 @@ api_version = "2026-07"
 #   write_customers          PCD-2 · merchant-initiated "convert contact to customer"
 #   write_app_proxy          storefront widget transport (/apps/ccwidget)
 #   write_files              merchant logo/icon uploads (Shopify Files staged uploads)
-scopes = "read_content,read_customers,write_customers,read_discounts,read_legal_policies,read_online_store_pages,read_orders,read_products,write_app_proxy,write_files"
+#   read_themes              READ-ONLY theme-embed detection: reads only
+#                            config/settings_data.json on the PUBLISHED theme to
+#                            tell the merchant whether the chat widget is
+#                            actually switched on. Never writes a theme, never
+#                            reads template or asset source. Added before launch
+#                            precisely because no merchant has installed yet — a
+#                            scope addition after launch forces every existing
+#                            merchant through re-auth.
+scopes = "read_content,read_customers,write_customers,read_discounts,read_legal_policies,read_online_store_pages,read_orders,read_products,read_themes,write_app_proxy,write_files"
 
 [auth]
 redirect_urls = [

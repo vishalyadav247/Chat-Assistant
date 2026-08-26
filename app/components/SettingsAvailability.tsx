@@ -196,7 +196,7 @@ export function SettingsAvailability(props: {
           labelAccessibilityVisibility="exclusive"
           name="working-hours-mode"
           values={[value.mode]}
-          onChange={(e) => {
+          onInput={(e) => {
             const mode = (e.currentTarget.values[0] ?? "always") as AvailabilityData["mode"];
             onChange({ ...value, mode });
           }}
@@ -228,7 +228,7 @@ export function SettingsAvailability(props: {
                     <s-checkbox
                       label={label}
                       checked={entry.enabled}
-                      onChange={(e) => setDay(day, { enabled: e.currentTarget.checked })}
+                      onInput={(e) => setDay(day, { enabled: e.currentTarget.checked })}
                     />
                   </div>
                   <input
@@ -265,7 +265,7 @@ export function SettingsAvailability(props: {
           label="Show online status"
           name="online-status-mode"
           values={[value.onlineStatusMode]}
-          onChange={(e) => {
+          onInput={(e) => {
             const mode = (e.currentTarget.values[0] ??
               "working_hours") as AvailabilityData["onlineStatusMode"];
             onChange({ ...value, onlineStatusMode: mode });
@@ -307,7 +307,7 @@ export function SettingsAvailability(props: {
             label="Break time"
             labelAccessibilityVisibility="exclusive"
             checked={value.breaks.enabled}
-            onChange={(e) => {
+            onInput={(e) => {
               const enabled = e.currentTarget.checked;
               const ranges =
                 enabled && value.breaks.ranges.length === 0
@@ -381,7 +381,7 @@ export function SettingsAvailability(props: {
             label="Holiday"
             labelAccessibilityVisibility="exclusive"
             checked={value.holidays.enabled}
-            onChange={(e) => {
+            onInput={(e) => {
               const enabled = e.currentTarget.checked;
               const items =
                 enabled && value.holidays.items.length === 0

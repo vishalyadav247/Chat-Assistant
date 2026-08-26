@@ -122,10 +122,18 @@ export async function saveCuratedAnswer(
     });
   }
 
-  // Embed question + synonyms; write via raw SQL, always shop-scoped.
+  // Embed the QUESTION ALONE. Embedding "question + every synonym" as one blob
+  // pulled the vector away from the question itself: measured, the answer's own
+  // question scored 0.775 against it — under the 0.80 serve threshold — while
+  // the identical question with no synonyms scored 1.000. Every synonym-bearing
+  // answer therefore fell into the 0.65–0.80 borderline branch, paying an extra
+  // LLM confirm call per turn and sometimes being declined outright.
+  //
+  // Synonyms are not lost: curatedMatch() matches them as exact phrases, which
+  // is what they are — the merchant stating "this wording means this answer".
   let warning: "embedding_failed" | undefined;
   try {
-    const vec = await embedText(`${data.question} ${data.synonyms.join(" ")}`.trim(), { shopId });
+    const vec = await embedText(data.question, { shopId });
     await db.$executeRaw(Prisma.sql`
       UPDATE "curated_answers" SET "embedding" = ${toSqlVector(vec)}::vector
       WHERE "id" = ${id} AND "shopId" = ${shopId}

@@ -60,7 +60,7 @@ export function ChatboxGeneral(props: {
           label="Chat focus mode"
           details="Quickly jump into the chat page when opening the chatbox. Active only with live chat enabled."
           checked={value.chatFocusMode}
-          onChange={(e) => onChange({ ...value, chatFocusMode: e.currentTarget.checked })}
+          onInput={(e) => onChange({ ...value, chatFocusMode: e.currentTarget.checked })}
         />
       </s-section>
 
@@ -140,7 +140,7 @@ export function ChatboxGeneral(props: {
           <s-switch
             label="Chat status"
             checked={value.chatStatus}
-            onChange={(e) => onChange({ ...value, chatStatus: e.currentTarget.checked })}
+            onInput={(e) => onChange({ ...value, chatStatus: e.currentTarget.checked })}
           />
           <s-paragraph>
             Set up online/offline status in{" "}
@@ -152,14 +152,14 @@ export function ChatboxGeneral(props: {
           label="Live chat"
           details="Enable real time conversation with your customers."
           checked={value.liveChat}
-          onChange={(e) => onChange({ ...value, liveChat: e.currentTarget.checked })}
+          onInput={(e) => onChange({ ...value, liveChat: e.currentTarget.checked })}
         />
         <s-divider />
         <s-switch
           label="Contact methods"
           details="Show contact methods to your store"
           checked={methods.enabled}
-          onChange={(e) =>
+          onInput={(e) =>
             onChange({ ...value, contactMethods: { ...methods, enabled: e.currentTarget.checked } })
           }
         />
@@ -223,7 +223,7 @@ export function ChatboxGeneral(props: {
               label="Add contact method"
               labelAccessibilityVisibility="exclusive"
               value=""
-              onChange={(e) => {
+              onInput={(e) => {
                 const type = e.currentTarget.value as ContactType | "";
                 if (type) addMethod(type);
               }}
@@ -246,7 +246,7 @@ export function ChatboxGeneral(props: {
           <s-switch
             label="Order tracking"
             checked={value.orderTracking}
-            onChange={(e) => onChange({ ...value, orderTracking: e.currentTarget.checked })}
+            onInput={(e) => onChange({ ...value, orderTracking: e.currentTarget.checked })}
           />
           <s-paragraph>
             Show the Order Tracking block to let customers track their orders. Select a tracking
@@ -262,7 +262,7 @@ export function ChatboxGeneral(props: {
           <s-switch
             label="FAQs"
             checked={value.faqs}
-            onChange={(e) => onChange({ ...value, faqs: e.currentTarget.checked })}
+            onInput={(e) => onChange({ ...value, faqs: e.currentTarget.checked })}
           />
           <s-paragraph>
             Show featured questions set up in <Link to="/app/ai-agent/training?tab=faqs">FAQs settings</Link>.

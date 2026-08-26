@@ -8,6 +8,7 @@ import { invalidateShopConfig } from "../lib/config/shop-config.server";
 import { loadShopSettings } from "../lib/settings/save.server";
 import { ProgressTrack } from "../components/ui/Progress";
 import { IconChip } from "../components/ui/IconChip";
+import { DismissibleBanner } from "../components/ui/DismissibleBanner";
 import { RADIUS } from "../components/ui/tokens";
 import { requireShopAccess } from "../lib/access.server";
 import { routeError } from "../lib/ui/route-error";
@@ -168,15 +169,14 @@ export default function AiAgentPage() {
         </s-grid>
 
         {home.aiEnabled && !bannerDismissed ? (
-          <s-banner
+          <DismissibleBanner
             tone="info"
             heading="Your AI agent is on"
-            dismissible
             onDismiss={dismissBanner}
           >
             AI is now responding to customers. Review and add training data to ensure accurate
             answers.
-          </s-banner>
+          </DismissibleBanner>
         ) : null}
         {!home.aiEnabled ? (
           <s-banner tone="warning" heading="Your AI agent is off">

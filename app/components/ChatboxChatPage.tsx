@@ -179,7 +179,7 @@ export function ChatboxChatPage(props: {
         <s-checkbox
           label="Use different offline message"
           checked={value.offlineMessageEnabled}
-          onChange={(e) => onChange({ ...value, offlineMessageEnabled: e.currentTarget.checked })}
+          onInput={(e) => onChange({ ...value, offlineMessageEnabled: e.currentTarget.checked })}
         />
         {value.offlineMessageEnabled ? (
           <s-text-area
@@ -202,7 +202,7 @@ export function ChatboxChatPage(props: {
           label="Conversation starter"
           details="Provide instant answers to customer's questions based on your FAQs"
           checked={starters.enabled}
-          onChange={(e) =>
+          onInput={(e) =>
             onChange({ ...value, starters: { ...starters, enabled: e.currentTarget.checked } })
           }
         />
@@ -265,7 +265,7 @@ export function ChatboxChatPage(props: {
             labelAccessibilityVisibility="exclusive"
             name="chat-avatar"
             values={[value.avatarMode]}
-            onChange={(e) => {
+            onInput={(e) => {
               const avatarMode = (e.currentTarget.values[0] ?? "store_branding") as
                 | "store_branding"
                 | "team_member";
@@ -292,7 +292,7 @@ export function ChatboxChatPage(props: {
           label="How customers start a chat"
           name="prechat-mode"
           values={[prechat.mode]}
-          onChange={(e) => {
+          onInput={(e) => {
             const mode = (e.currentTarget.values[0] ?? "both") as "guest" | "anonymous" | "both";
             setPrechat({ mode });
           }}
@@ -321,7 +321,7 @@ export function ChatboxChatPage(props: {
                 min={0}
                 max={20}
                 value={String(prechat.showAfterMessages)}
-                onChange={(e) => {
+                onInput={(e) => {
                   const n = Math.min(
                     20,
                     Math.max(0, Math.floor(Number(e.currentTarget.value) || 0)),
@@ -355,7 +355,7 @@ export function ChatboxChatPage(props: {
                   key={key}
                   label={FIELD_LABELS[key]}
                   checked={usedFieldKeys.has(key)}
-                  onChange={(e) => {
+                  onInput={(e) => {
                     if (e.currentTarget.checked) {
                       if (!usedFieldKeys.has(key))
                         setPrechat({ fields: [...prechat.fields, { key, required: false }] });
@@ -370,7 +370,7 @@ export function ChatboxChatPage(props: {
               label="Show marketing opt-in to customers"
               details="Visitors who subscribe will be converted to customers"
               checked={prechat.marketingOptIn}
-              onChange={(e) => setPrechat({ marketingOptIn: e.currentTarget.checked })}
+              onInput={(e) => setPrechat({ marketingOptIn: e.currentTarget.checked })}
             />
           </>
         ) : null}
@@ -379,7 +379,7 @@ export function ChatboxChatPage(props: {
           label="Disclaimer consent"
           details="Inform customers how their data is used before they start a conversation or subscribe"
           checked={prechat.disclaimer.enabled}
-          onChange={(e) =>
+          onInput={(e) =>
             setPrechat({ disclaimer: { ...prechat.disclaimer, enabled: e.currentTarget.checked } })
           }
         />
@@ -409,7 +409,7 @@ export function ChatboxChatPage(props: {
           <s-switch
             label="Display satisfaction survey"
             checked={value.survey}
-            onChange={(e) => onChange({ ...value, survey: e.currentTarget.checked })}
+            onInput={(e) => onChange({ ...value, survey: e.currentTarget.checked })}
           />
           <s-paragraph>
             Turn on to send a satisfaction survey in your conversations with customers.{" "}
@@ -542,7 +542,7 @@ export function ChatboxChatPage(props: {
                           labelAccessibilityVisibility="exclusive"
                           checked={already || importSelected.has(faq.id)}
                           disabled={already}
-                          onChange={(e) => toggleImport(faq.id, e.currentTarget.checked)}
+                          onInput={(e) => toggleImport(faq.id, e.currentTarget.checked)}
                         />
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <s-text type="strong">{faq.question}</s-text>

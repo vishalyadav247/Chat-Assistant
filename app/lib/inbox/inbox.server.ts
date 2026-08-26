@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import db from "../../db.server";
 import { recordEvent } from "../analytics/events.server";
 import { getShopConfig } from "../config/shop-config.server";
+import { hasFeature } from "../billing/plans.server";
 import { notifyMerchantHandover } from "../notify.server";
 import { touchAgentPresence } from "../settings/availability.server";
 import { shopSettingsSchema } from "../settings/schemas";
@@ -30,18 +31,164 @@ export interface InboxListRow {
   preview: string;
 }
 
-/** All non-test conversations for the shop, newest first, with contact name + last-message preview. */
-export async function listConversations(shopId: string): Promise<InboxListRow[]> {
+export const INBOX_FILTER_KEYS = [
+  "all",
+  "open",
+  "resolved",
+  "unassigned",
+  "handover",
+  "starred",
+  "blocked",
+] as const;
+export type InboxFilterKey = (typeof INBOX_FILTER_KEYS)[number];
+
+// The ONE definition of what each filter means. The client mirrors these as
+// predicates in InboxShared.FILTERS for labels/optimistic UI, and
+// scripts/qa/features.test.ts asserts the two agree row-for-row — if they ever
+// drift, the list and the badge would disagree with each other.
+const FILTER_WHERE: Record<InboxFilterKey, Prisma.ConversationWhereInput> = {
+  all: { blocked: false },
+  open: { blocked: false, status: "open" },
+  resolved: { blocked: false, status: "resolved" },
+  unassigned: { blocked: false, status: "open", assigneeId: null },
+  handover: { blocked: false, handover: true },
+  starred: { blocked: false, starred: true },
+  blocked: { blocked: true },
+};
+
+export interface InboxCounts extends Record<InboxFilterKey, number> {
+  /** Red badge on "All" — unread AND open AND not blocked. */
+  unreadOpen: number;
+}
+
+/**
+ * Exact per-filter counts across ALL of the shop's conversations.
+ *
+ * These must NOT be derived from the paged list: the list is capped, so counting
+ * within it undercounts every tab as soon as a shop passes the cap (a Plus shop
+ * is entitled to 1000 conversations a month, so that is weeks, not years). One
+ * aggregate pass over the [shopId, isTest, lastMessageAt] index instead.
+ */
+export async function getInboxCounts(shopId: string): Promise<InboxCounts> {
+  requireShopId(shopId);
+  const [row] = await db.$queryRaw<
+    Array<Record<InboxFilterKey | "unreadOpen", bigint>>
+  >`
+    SELECT
+      COUNT(*) FILTER (WHERE NOT blocked)                                          AS "all",
+      COUNT(*) FILTER (WHERE NOT blocked AND status = 'open')                      AS "open",
+      COUNT(*) FILTER (WHERE NOT blocked AND status = 'resolved')                  AS "resolved",
+      COUNT(*) FILTER (WHERE NOT blocked AND status = 'open'
+                             AND "assigneeId" IS NULL)                             AS "unassigned",
+      COUNT(*) FILTER (WHERE NOT blocked AND handover)                             AS "handover",
+      COUNT(*) FILTER (WHERE NOT blocked AND starred)                              AS "starred",
+      COUNT(*) FILTER (WHERE blocked)                                              AS "blocked",
+      COUNT(*) FILTER (WHERE NOT blocked AND unread AND status = 'open')           AS "unreadOpen"
+    FROM conversations
+    WHERE "shopId" = ${shopId} AND "isTest" = false`;
+  const n = (v: bigint | undefined) => Number(v ?? 0n);
+  return {
+    all: n(row?.all),
+    open: n(row?.open),
+    resolved: n(row?.resolved),
+    unassigned: n(row?.unassigned),
+    handover: n(row?.handover),
+    starred: n(row?.starred),
+    blocked: n(row?.blocked),
+    unreadOpen: n(row?.unreadOpen),
+  };
+}
+
+/**
+ * Resolve a free-text search to the contact ids it matches, reproducing the
+ * client's `displayName(name)` fallback chain exactly: contact.name, else
+ * contact.email, else the literal "Visitor".
+ *
+ * Returns `null` when the term matches "Visitor", meaning "also include
+ * conversations that have no contact at all".
+ */
+async function contactIdsMatching(
+  shopId: string,
+  term: string,
+): Promise<{ ids: string[]; includeAnonymous: boolean }> {
+  const contacts = await db.contact.findMany({
+    where: {
+      shopId,
+      OR: [
+        { name: { contains: term, mode: "insensitive" } },
+        { email: { contains: term, mode: "insensitive" } },
+      ],
+    },
+    select: { id: true, name: true, email: true },
+  });
+  // A contact whose name is set but does not match must NOT be pulled in by an
+  // email match, because the list never shows that email — displayName stops at
+  // the name. Filtering here keeps the server result identical to what the
+  // merchant can actually see on screen.
+  const lower = term.toLowerCase();
+  const ids = contacts
+    .filter((c) => {
+      const shown = (c.name?.trim() || c.email?.trim() || "Visitor").toLowerCase();
+      return shown.includes(lower);
+    })
+    .map((c) => c.id);
+  return { ids, includeAnonymous: "visitor".includes(lower) };
+}
+
+export interface ListConversationsOptions {
+  /** Rail selection. Omitted = no filter at all (every row, blocked included). */
+  filter?: InboxFilterKey;
+  /** List-column search box. Matches the displayed name. */
+  search?: string;
+  /** "Unread" toggle in the list header. */
+  unreadOnly?: boolean;
+  /** Page size. */
+  take?: number;
+}
+
+/**
+ * Non-test conversations for the shop, newest first, with contact name +
+ * last-message preview.
+ *
+ * `opts.filter` / `opts.search` / `opts.unreadOnly` are applied IN THE DATABASE.
+ * They used to be applied in the browser over whatever the capped query happened
+ * to return, which meant every tab silently showed only the subset of its
+ * category that fell inside the newest `take` rows.
+ */
+export async function listConversations(
+  shopId: string,
+  opts: ListConversationsOptions = {},
+): Promise<InboxListRow[]> {
   requireShopId(shopId);
   // "Agent online" (spec 16) = an admin session active in the inbox. The list
   // loader runs on every inbox render and on the SSE/30s revalidation, so it is
   // the heartbeat; the widget status line and executeHandover read it back
   // through isAgentOnline(). Shopper-facing functions below never stamp it.
   touchAgentPresence(shopId);
+
+  const term = (opts.search ?? "").trim();
+  let searchWhere: Prisma.ConversationWhereInput | null = null;
+  if (term) {
+    const { ids, includeAnonymous } = await contactIdsMatching(shopId, term);
+    const clauses: Prisma.ConversationWhereInput[] = [];
+    if (ids.length) clauses.push({ contactId: { in: ids } });
+    if (includeAnonymous) clauses.push({ contactId: null });
+    // No contact matched and the term is not "visitor" — nothing can match, and
+    // an empty OR in Prisma would wrongly return everything.
+    if (clauses.length === 0) return [];
+    searchWhere = { OR: clauses };
+  }
+
   const rows = await db.conversation.findMany({
-    where: { shopId, isTest: false },
+    where: {
+      shopId,
+      isTest: false,
+      ...(opts.filter ? FILTER_WHERE[opts.filter] : {}),
+      ...(opts.unreadOnly ? { unread: true } : {}),
+      ...(searchWhere ?? {}),
+    },
     orderBy: { lastMessageAt: "desc" },
-    take: 300,
+    take: opts.take ?? 300,
     select: {
       id: true,
       contactId: true,
@@ -121,7 +268,14 @@ export interface InboxConversationDetail {
   rating: number | null;
   pageContext: unknown;
   startedAt: string;
-  contact: { name: string | null; email: string | null; phone: string | null; type: string } | null;
+  contact: {
+    name: string | null;
+    email: string | null;
+    phone: string | null;
+    type: string;
+    /** Looks up this shopper's orders; the id itself is never displayed. */
+    shopifyCustomerId: string | null;
+  } | null;
   messages: InboxThreadMessage[];
 }
 
@@ -136,11 +290,26 @@ export async function getConversationDetail(
   });
   if (!convo) return null;
 
+  // `inbox_cart_view` is a paid feature. The gate lives HERE, at the data
+  // source, rather than in the route: hiding the cart in the component still
+  // shipped it in the loader payload, where it was readable straight out of the
+  // network response, and any other caller would have leaked it too.
+  //
+  // Only `cart` is removed. The same blob carries browsed pages and device info,
+  // which every plan is entitled to — dropping the whole object would quietly
+  // delete two ungated features.
+  const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
+  let pageContext = convo.pageContext;
+  if (!hasFeature(shop?.plan ?? "free", "inbox_cart_view") && pageContext && typeof pageContext === "object") {
+    const { cart: _gated, ...rest } = pageContext as Record<string, unknown>;
+    pageContext = rest as typeof pageContext;
+  }
+
   const [contact, messages] = await Promise.all([
     convo.contactId
       ? db.contact.findFirst({
           where: { id: convo.contactId, shopId },
-          select: { name: true, email: true, phone: true, type: true },
+          select: { name: true, email: true, phone: true, type: true, shopifyCustomerId: true },
         })
       : Promise.resolve(null),
     db.message.findMany({
@@ -169,7 +338,7 @@ export async function getConversationDetail(
     handover: convo.handover,
     assigneeId: convo.assigneeId,
     rating: convo.rating,
-    pageContext: convo.pageContext,
+    pageContext,
     startedAt: convo.startedAt.toISOString(),
     contact,
     messages: messages.map((m) => ({

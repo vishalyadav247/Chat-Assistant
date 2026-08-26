@@ -1,5 +1,5 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, redirect } from "react-router";
+import { Form, Link, redirect } from "react-router";
 import { sameOrigin } from "../lib/team/same-origin.server";
 import { destroyWebSession, hasWebCookie } from "../lib/team/web-session.server";
 
@@ -32,10 +32,11 @@ export default function WebLogout() {
           Sign out
         </button>
         {/* /app (dashboard) is 403 for the agent role — send everyone to the
-            inbox, the one page every role can open. */}
-        <a href="/app/inbox" style={{ padding: "10px 16px", color: "#1a1a1a" }}>
+            inbox, the one page every role can open. Router <Link>, not a raw
+            <a>: a raw anchor throws away the client router (full reload). */}
+        <Link to="/app/inbox" style={{ padding: "10px 16px", color: "#1a1a1a" }}>
           Cancel
-        </a>
+        </Link>
       </Form>
     </main>
   );

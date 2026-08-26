@@ -284,7 +284,9 @@ export async function* runPipeline(
   // ── Curated shortcut (zero generation) ────────────────────────────────────
   const curatedThreshold = guardrails?.curatedMatchThreshold ?? 0.8;
   const curatedBorderline = guardrails?.curatedBorderline ?? 0.65;
-  const curated = await curatedMatch(shopId, queryEmbedding);
+  // The raw message goes in too: curatedMatch runs a second lane that matches
+  // the merchant's own synonym phrasings exactly, which no embedding can.
+  const curated = await curatedMatch(shopId, queryEmbedding, message);
   trace.step(
     "curated_match",
     "Merchant curated answers (vector)",
@@ -866,8 +868,16 @@ async function* questionLane(args: {
 // model still can't invent discounts (prompt rule) — it can only voice these
 // rows. Zero extra LLM calls; one indexed query, only on matching messages.
 
-const DISCOUNT_INTENT_RE =
-  /\b(discount|coupon|promo|promotion|voucher|sale|offer|deal|discount code|promo code)\b/i;
+// The trailing `s?` matters: "any discounts today?", "do you have coupons",
+// "any offers" are the most natural shopper phrasings, and without it none of
+// them matched, so the synced discount rows were never injected. The multi-word
+// alternatives that used to be listed here ("discount code", "promo code") are
+// already covered by their single words and could never match first anyway.
+// Exported so the QA suite can assert against the REAL pattern. It previously
+// kept its own copy, which meant the test could not tell a fixed regex from a
+// broken one.
+export const DISCOUNT_INTENT_RE =
+  /\b(discount|coupon|promo|promotion|voucher|sale|offer|deal)s?\b/i;
 
 async function activeDiscountContext(shopId: string, message: string): Promise<string> {
   if (!DISCOUNT_INTENT_RE.test(message)) return "";

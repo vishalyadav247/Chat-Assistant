@@ -1,16 +1,18 @@
 import { FILTERS, FILTER_ORDER } from "./InboxShared";
-import type { FilterKey, InboxRow } from "./InboxShared";
+import type { FilterKey, InboxCounts } from "./InboxShared";
 
-// Filters rail (design inbox.html left column). Counts are computed from the
-// server-loaded rows. Unread notification lives on the list column's Unread
-// toggle (red bubble), so every tab badge here is a plain category count.
+// Filters rail (design inbox.html left column). Counts come from the server as
+// exact totals over ALL of the shop's conversations — counting the loaded rows
+// instead would undercount every tab the moment a shop outgrows one page.
+// Unread notification lives on the list column's Unread toggle (red bubble), so
+// every tab badge here is a plain category count.
 
 export function InboxFilters({
-  rows,
+  counts,
   filter,
   onSelect,
 }: {
-  rows: InboxRow[];
+  counts: InboxCounts;
   filter: FilterKey;
   onSelect: (key: FilterKey) => void;
 }) {
@@ -20,7 +22,7 @@ export function InboxFilters({
       <div className="cin-fil-grp">Conversations</div>
       {FILTER_ORDER.map((key) => {
         const def = FILTERS[key];
-        const count = rows.filter(def.test).length;
+        const count = counts[key];
         const active = key === filter;
         return (
           <button

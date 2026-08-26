@@ -155,7 +155,7 @@ export function TrainingCollectionsTab(props: {
                     label={`Learn ${row.title}`}
                     labelAccessibilityVisibility="exclusive"
                     checked={row.learnEnabled}
-                    onChange={(e) =>
+                    onInput={(e) =>
                       submit("collection-learn", {
                         id: row.id,
                         enabled: e.currentTarget.checked ? "true" : "false",

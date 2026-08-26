@@ -111,7 +111,7 @@ export default function PlatformAiSettings() {
                 Currently effective: <s-text type="strong">{data.effectiveChatModel}</s-text>{" "}
                 {data.overrides.chatModel ? "(dashboard override)" : "(environment default)"}
               </s-text>
-              <s-select label="Model" value={preset} onChange={(e) => setPreset(e.currentTarget.value)}>
+              <s-select label="Model" value={preset} onInput={(e) => setPreset(e.currentTarget.value)}>
                 <s-option value="">Environment default ({data.envChatModel})</s-option>
                 {CHAT_MODEL_OPTIONS.map((m) => (
                   <s-option key={m.id} value={m.id}>

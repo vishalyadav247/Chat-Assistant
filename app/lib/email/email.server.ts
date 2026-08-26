@@ -71,8 +71,24 @@ export async function sendEmail(message: EmailMessage): Promise<EmailResult> {
         signal: AbortSignal.timeout(10_000),
       });
       if (!res.ok) {
+        // Deliberately NOT logging the response body: Resend echoes the
+        // recipient address back in its error payload, and app_logs is read
+        // cross-tenant in the operator console — that would put shopper and
+        // staff email addresses on an operator's screen and pull app_logs into
+        // GDPR redact scope. The status and the provider error name are enough
+        // to diagnose a delivery failure.
         const body = await res.text().catch(() => "");
-        logError("email_send_failed", `Resend ${res.status}`, { status: res.status, response: body.slice(0, 300) });
+        let providerError = "";
+        try {
+          const parsed = JSON.parse(body) as { name?: unknown; message?: unknown };
+          providerError = typeof parsed.name === "string" ? parsed.name : "";
+        } catch {
+          /* non-JSON error body — status alone it is */
+        }
+        logError("email_send_failed", `Resend ${res.status}`, {
+          status: res.status,
+          providerError: providerError.slice(0, 80),
+        });
         return { delivered: false, provider: "resend", error: `Resend ${res.status}` };
       }
       return { delivered: true, provider: "resend" };
@@ -96,7 +112,19 @@ export async function sendEmail(message: EmailMessage): Promise<EmailResult> {
       return { delivered: false, provider: "smtp", error: "smtp" };
     }
   }
-  console.log(`[email:log] to=${message.to} subject="${message.subject}"\n${message.text}`);
+  // NEVER log the recipient or the body. Invite and password-reset mails carry
+  // one-time token URLs, and this branch is the DEFAULT (EMAIL_PROVIDER falls
+  // back to "log", and "resend" with a blank key lands here too) — so in
+  // production it would quietly print shopper/staff PII and live credentials to
+  // stdout, where every log shipper picks them up.
+  if (process.env.NODE_ENV === "production") {
+    logError(
+      "email_provider_missing",
+      `no email provider configured — "${message.subject}" was NOT delivered`,
+    );
+    return { delivered: false, provider: "log", error: "no_provider" };
+  }
+  console.log(`[email:log] to=<redacted> subject="${message.subject}" (body suppressed)`);
   return { delivered: false, provider: "log" };
 }
 

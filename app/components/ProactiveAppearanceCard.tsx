@@ -110,7 +110,7 @@ function ColorRow(props: {
         <s-color-field
           label={`${props.label} (custom)`}
           value={props.value}
-          onChange={(e) => {
+          onInput={(e) => {
             const hex = normalizeHex(e.currentTarget.value);
             if (hex) props.onChange(hex);
           }}

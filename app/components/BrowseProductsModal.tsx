@@ -271,6 +271,7 @@ export function BrowseProductsModal(props: {
         <input
           type="search"
           value={q}
+          aria-label="Search products"
           placeholder="Search products"
           onChange={(e) => {
             setQ(e.currentTarget.value);
@@ -291,7 +292,7 @@ export function BrowseProductsModal(props: {
             label="Vendor"
             labelAccessibilityVisibility="exclusive"
             value={vendor}
-            onChange={(e) => {
+            onInput={(e) => {
               setVendor(e.currentTarget.value);
               setPage(1);
             }}
@@ -307,7 +308,7 @@ export function BrowseProductsModal(props: {
             label="Tag"
             labelAccessibilityVisibility="exclusive"
             value={tag}
-            onChange={(e) => {
+            onInput={(e) => {
               setTag(e.currentTarget.value);
               setPage(1);
             }}
@@ -323,7 +324,7 @@ export function BrowseProductsModal(props: {
             label="Collection"
             labelAccessibilityVisibility="exclusive"
             value={collectionId}
-            onChange={(e) => {
+            onInput={(e) => {
               setCollectionId(e.currentTarget.value);
               setPage(1);
             }}

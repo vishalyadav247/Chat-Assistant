@@ -260,7 +260,7 @@ export function ChatboxAppearance(props: {
             <s-switch
               label="Use brand color"
               checked={!launcher.bgColor}
-              onChange={(e) =>
+              onInput={(e) =>
                 setLauncher({
                   bgColor: e.currentTarget.checked ? "" : launcher.customBgColor || brandHex,
                 })
@@ -414,7 +414,7 @@ export function ChatboxAppearance(props: {
               label="Launcher position"
               labelAccessibilityVisibility="exclusive"
               value={launcher.position}
-              onChange={(e) =>
+              onInput={(e) =>
                 setLauncher({ position: e.currentTarget.value as Launcher["position"] })
               }
             >
@@ -435,7 +435,7 @@ export function ChatboxAppearance(props: {
           details="Hide the small ChatConvert credit at the bottom of the chat panel."
           checked={appearance.removeBranding}
           disabled={!props.removeBrandingAllowed}
-          onChange={(e) => setAppearance({ removeBranding: e.currentTarget.checked })}
+          onInput={(e) => setAppearance({ removeBranding: e.currentTarget.checked })}
         />
         {!props.removeBrandingAllowed ? (
           <s-stack direction="inline" gap="small" alignItems="center">

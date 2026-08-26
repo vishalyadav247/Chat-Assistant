@@ -244,10 +244,16 @@ async function main(): Promise<void> {
     const p = await probe("/auth/login?shop=dev-shop.myshopify.com");
     ok("/auth/login does not serve a page", p.status !== 200, String(p.status));
     ok(
-      "/auth/login 404s rather than 500s",
-      p.status === 404,
+      "/auth/login redirects instead of erroring",
+      p.status === 302 || p.status === 301 || p.status === 404,
       `${p.status} — ${p.body.slice(0, 160).replace(/\s+/g, " ")}`,
     );
+    if (p.status === 302 || p.status === 301) {
+      // auth.login.tsx redirects to "/" (install entry point). A 404 would
+      // dead-end a stale bookmark; a redirect keeps the flow alive WITHOUT
+      // rendering the template shop-domain form that req 2.3.1 forbids.
+      ok("/auth/login redirects to the install entry point", (p.location ?? "") === "/", p.location ?? "");
+    }
 
     // Every declared OAuth redirect URL must have a route behind it.
     const start = toml.indexOf("redirect_urls = [");

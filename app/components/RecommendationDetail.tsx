@@ -123,7 +123,7 @@ export function RecommendationDetail(props: {
           <s-select
             label="Status"
             value={status}
-            onChange={(e) => setStatus(e.currentTarget.value)}
+            onInput={(e) => setStatus(e.currentTarget.value)}
           >
             <s-option value="active">Active</s-option>
             <s-option value="inactive">Inactive</s-option>

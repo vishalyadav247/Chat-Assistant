@@ -97,13 +97,18 @@ function truncate(value: string, max: number): string {
 /** Human-readable one-liner for the `message` column. */
 function describe(detail: unknown): string {
   if (detail === undefined || detail === null) return "";
-  if (detail instanceof Error) return truncate(`${detail.name}: ${detail.message}`, MESSAGE_MAX);
-  if (typeof detail === "string") return truncate(detail, MESSAGE_MAX);
+  // Strings and Error messages are passed through as the diagnostic, so this is
+  // the one place an address can reach the `message` column without any key for
+  // DENIED_KEY to catch. Scrub here too — see EMAIL_IN_TEXT.
+  if (detail instanceof Error) {
+    return truncate(scrubValue(`${detail.name}: ${detail.message}`), MESSAGE_MAX);
+  }
+  if (typeof detail === "string") return truncate(scrubValue(detail), MESSAGE_MAX);
   if (typeof detail === "number" || typeof detail === "boolean") return String(detail);
   try {
-    return truncate(JSON.stringify(detail) ?? "", MESSAGE_MAX);
+    return truncate(scrubValue(JSON.stringify(detail) ?? ""), MESSAGE_MAX);
   } catch {
-    return truncate(String(detail), MESSAGE_MAX);
+    return truncate(scrubValue(String(detail)), MESSAGE_MAX);
   }
 }
 
@@ -119,9 +124,26 @@ function shortStack(error: Error): string | undefined {
  * Strip PII/credentials and bound the size. Applied to caller context AND to
  * any object detail, so a call site cannot leak by passing the wrong bag.
  */
+/**
+ * Second line of defence behind DENIED_KEY.
+ *
+ * The denylist is keyed on the FIELD NAME, so an address that arrives inside an
+ * innocuously named value slips through — which is exactly what happened with a
+ * `response` field holding a third-party error body that echoed the recipient.
+ * app_logs is read cross-tenant in the operator console, so one such call site
+ * puts real addresses on an operator's screen and drags app_logs into GDPR
+ * redact scope. Scrubbing the VALUE too means no future call site can do it by
+ * accident, whatever the author names the field.
+ */
+const EMAIL_IN_TEXT = /[\w.+-]+@[\w-]+\.[\w.-]+/g;
+
+function scrubValue(value: string): string {
+  return value.replace(EMAIL_IN_TEXT, "[email-redacted]");
+}
+
 function sanitize(value: unknown, depth = 0): unknown {
   if (value === null || value === undefined) return value;
-  if (typeof value === "string") return truncate(value, STRING_MAX);
+  if (typeof value === "string") return truncate(scrubValue(value), STRING_MAX);
   if (typeof value === "number" || typeof value === "boolean") return value;
   if (value instanceof Date) return value.toISOString();
   if (depth >= 3) return "[deep]";

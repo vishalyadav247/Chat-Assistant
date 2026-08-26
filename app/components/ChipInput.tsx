@@ -62,6 +62,7 @@ export function ChipInput(props: {
       <input
         type="text"
         value={draft}
+        aria-label={props.label ?? props.placeholder ?? "Add an item"}
         placeholder={props.placeholder ?? "Type and press Enter"}
         maxLength={props.maxLength ?? 100}
         onChange={(e) => setDraft(e.currentTarget.value)}

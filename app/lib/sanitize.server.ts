@@ -62,5 +62,10 @@ export function stripToText(html: string): string {
     .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
     .replace(/<[^>]*>/g, " ")
     .replace(/\s+/g, " ")
+    // Replacing every tag with a space turns "<b>Rotterdam</b>." into
+    // "Rotterdam ." — and that stray spacing goes into embeddings and into the
+    // RAG context the model quotes back to shoppers. Reattach punctuation.
+    .replace(/\s+([.,;:!?%)\]}])/g, "$1")
+    .replace(/([([{])\s+/g, "$1")
     .trim();
 }

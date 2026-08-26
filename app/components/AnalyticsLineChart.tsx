@@ -109,7 +109,7 @@ export function AnalyticsLineChart(props: {
             label="Chart range"
             labelAccessibilityVisibility="exclusive"
             value={range}
-            onChange={(e) => props.onRangeChange(e.currentTarget.value as AnalyticsRange)}
+            onInput={(e) => props.onRangeChange(e.currentTarget.value as AnalyticsRange)}
           >
             {ANALYTICS_RANGES.map((r) => (
               <s-option key={r} value={r}>

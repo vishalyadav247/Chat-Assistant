@@ -261,8 +261,13 @@ export async function saveCampaign(
   if (!template.messageKinds.includes(settings.message.kind)) {
     return { ok: false, error: "That message type isn't available for this template.", code: "invalid" };
   }
-  if (settings.message.kind === "product_quiz" && !hasFeature(plan, "premium_campaign_templates")) {
-    return { ok: false, error: "Product Quiz requires a Pro or Plus plan.", code: "plan_gate" };
+  // Product Quiz has no runtime yet: widget-renderer.js has no quiz branch, so a
+  // saved quiz falls through to renderText() and the shopper gets a plain text
+  // bubble. Refusing it for EVERY plan is the honest behaviour until the
+  // renderer exists — gating it on Pro+ meant paying customers were the only
+  // ones who could configure something that silently does not work.
+  if (settings.message.kind === "product_quiz") {
+    return { ok: false, error: "Product Quiz isn't available yet.", code: "invalid" };
   }
   if (
     settings.message.kind === "product_recommendation" &&

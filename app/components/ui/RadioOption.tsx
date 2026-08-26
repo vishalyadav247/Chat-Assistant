@@ -35,7 +35,7 @@ export function RadioOption<T extends string>(props: {
           name={props.name}
           disabled={props.disabled}
           values={isSelected ? [props.value] : []}
-          onChange={(e) => {
+          onInput={(e) => {
             // A radio can only ever be turned ON; ignore the de-select event
             // the previously checked list fires so two clicks can't clear the
             // group.

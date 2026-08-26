@@ -164,7 +164,7 @@ export async function browseCheapestInBudget(
            NULL::text[] AS matched, 0::int AS coverage
     FROM "products"
     WHERE "shopId" = ${shopId}
-      AND "learnEnabled" = true AND "status" = 'active'
+      AND "learnEnabled" = true AND "status" = 'active' AND "publishedOnline" = true
       AND ${stockCondition(excludeOutOfStock)} AND "price" <= ${priceMax}
     ORDER BY "price" ASC
     LIMIT ${limit}
@@ -396,7 +396,7 @@ async function keywordSearch(
       await db.$queryRaw<Record<string, number>[]>(Prisma.sql`
         SELECT count(*)::int AS n, ${Prisma.join(dfExprs, ", ")}
         FROM "products"
-        WHERE "shopId" = ${shopId} AND "learnEnabled" = true AND "status" = 'active'`)
+        WHERE "shopId" = ${shopId} AND "learnEnabled" = true AND "status" = 'active' AND "publishedOnline" = true`)
     )[0];
     const n = Number(dfRow?.n ?? 0);
     if (n > 0) {
@@ -441,7 +441,7 @@ async function keywordSearch(
              ${matched} AS matched
       FROM "products"
       WHERE "shopId" = ${shopId}
-        AND "learnEnabled" = true AND "status" = 'active'
+        AND "learnEnabled" = true AND "status" = 'active' AND "publishedOnline" = true
         AND ${stockCondition(excludeOutOfStock)}
         AND (${priceMax}::float8 IS NULL OR "price" <= ${priceMax}::float8)
         AND "searchText" @@ ${anyQuery}
@@ -467,7 +467,7 @@ async function vectorSearch(
            NULL::text AS headline, FALSE AS "kwHit", NULL::text[] AS matched, 0::int AS coverage
     FROM "products"
     WHERE "shopId" = ${shopId}
-      AND "learnEnabled" = true AND "status" = 'active'
+      AND "learnEnabled" = true AND "status" = 'active' AND "publishedOnline" = true
       AND ${stockCondition(excludeOutOfStock)}
       AND (${priceMax}::float8 IS NULL OR "price" <= ${priceMax}::float8)
       AND "embedding" IS NOT NULL

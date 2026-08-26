@@ -7,6 +7,7 @@ import { recordEvent } from "../lib/analytics/events.server";
 import { PipelineFlowGuide, type FlowConfig } from "../components/PipelineFlowGuide";
 import { TestAiConsole } from "../components/TestAiConsole";
 import { PageHeader } from "../components/ui/PageHeader";
+import { DismissibleBanner } from "../components/ui/DismissibleBanner";
 import { requireShopAccess } from "../lib/access.server";
 import { getShopConfig } from "../lib/config/shop-config.server";
 import { routeError } from "../lib/ui/route-error";
@@ -171,10 +172,9 @@ function ImproveAiBanner() {
   if (dismissed) return null;
 
   return (
-    <s-banner
+    <DismissibleBanner
       tone="info"
       heading="Improve your AI"
-      dismissible
       onDismiss={() => {
         setDismissed(true);
         try {
@@ -187,6 +187,6 @@ function ImproveAiBanner() {
       <s-paragraph>
         Keep adding more data sources to enhance AI&apos;s capabilities, quality and efficiency.
       </s-paragraph>
-    </s-banner>
+    </DismissibleBanner>
   );
 }

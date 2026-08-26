@@ -31,7 +31,7 @@ export function SettingsSurvey(props: {
           labelAccessibilityVisibility="exclusive"
           name="survey-format"
           values={[value.format]}
-          onChange={(e) => {
+          onInput={(e) => {
             const format = (e.currentTarget.values[0] ?? "stars") as SurveyData["format"];
             onChange({ ...value, format });
           }}
@@ -67,12 +67,12 @@ export function SettingsSurvey(props: {
         <s-checkbox
           label="Conversation is resolved"
           checked={value.triggerOnResolve}
-          onChange={(e) => onChange({ ...value, triggerOnResolve: e.currentTarget.checked })}
+          onInput={(e) => onChange({ ...value, triggerOnResolve: e.currentTarget.checked })}
         />
         <s-checkbox
           label="When specific keywords appear in conversation"
           checked={value.triggerKeywords.enabled}
-          onChange={(e) =>
+          onInput={(e) =>
             onChange({
               ...value,
               triggerKeywords: { ...value.triggerKeywords, enabled: e.currentTarget.checked },

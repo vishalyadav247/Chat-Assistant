@@ -43,7 +43,7 @@ function LeaveMessageForm(props: {
       <s-select
         label="When customers can expect a reply"
         value={value.replyTime}
-        onChange={(e) =>
+        onInput={(e) =>
           onChange({ ...value, replyTime: e.currentTarget.value as LeaveMessageData["replyTime"] })
         }
       >
@@ -61,21 +61,21 @@ function LeaveMessageForm(props: {
       <s-checkbox
         label="Order number"
         checked={collect.orderNumber}
-        onChange={(e) =>
+        onInput={(e) =>
           onChange({ ...value, collect: { ...collect, orderNumber: e.currentTarget.checked } })
         }
       />
       <s-checkbox
         label="Phone number"
         checked={collect.phone}
-        onChange={(e) =>
+        onInput={(e) =>
           onChange({ ...value, collect: { ...collect, phone: e.currentTarget.checked } })
         }
       />
       <s-checkbox
         label="Photo upload"
         checked={collect.photoUpload}
-        onChange={(e) =>
+        onInput={(e) =>
           onChange({ ...value, collect: { ...collect, photoUpload: e.currentTarget.checked } })
         }
       />
@@ -176,7 +176,7 @@ export function InstructionsHandoverTab(props: { initial: HandoverConfigData }) 
                 label="AI cannot answer"
                 details={`Auto hand-off after ${triggers.cannotAnswer.threshold} consecutive low-confidence responses`}
                 checked={triggers.cannotAnswer.enabled}
-                onChange={(e) =>
+                onInput={(e) =>
                   setTriggers({
                     ...triggers,
                     cannotAnswer: { ...triggers.cannotAnswer, enabled: e.currentTarget.checked },
@@ -190,7 +190,7 @@ export function InstructionsHandoverTab(props: { initial: HandoverConfigData }) 
                   label="Low-confidence threshold"
                   labelAccessibilityVisibility="exclusive"
                   value={String(triggers.cannotAnswer.threshold)}
-                  onChange={(e) =>
+                  onInput={(e) =>
                     setTriggers({
                       ...triggers,
                       cannotAnswer: {
@@ -216,7 +216,7 @@ export function InstructionsHandoverTab(props: { initial: HandoverConfigData }) 
                 label="Customer repeats question"
                 details={`Auto hand-off when the same question is asked ${triggers.repeatedQuestion.threshold}+ times`}
                 checked={triggers.repeatedQuestion.enabled}
-                onChange={(e) =>
+                onInput={(e) =>
                   setTriggers({
                     ...triggers,
                     repeatedQuestion: {
@@ -233,7 +233,7 @@ export function InstructionsHandoverTab(props: { initial: HandoverConfigData }) 
                   label="Repeat threshold"
                   labelAccessibilityVisibility="exclusive"
                   value={String(triggers.repeatedQuestion.threshold)}
-                  onChange={(e) =>
+                  onInput={(e) =>
                     setTriggers({
                       ...triggers,
                       repeatedQuestion: {
@@ -259,7 +259,7 @@ export function InstructionsHandoverTab(props: { initial: HandoverConfigData }) 
                 label="Negative sentiment"
                 details="Auto hand-off on frustration or anger — wording, ALL CAPS, repeated punctuation, negative emojis (👎 😠 💩), or 2+ thumb-down reactions on AI replies"
                 checked={triggers.negativeSentiment.enabled}
-                onChange={(e) =>
+                onInput={(e) =>
                   setTriggers({
                     ...triggers,
                     negativeSentiment: { enabled: e.currentTarget.checked },
@@ -360,7 +360,7 @@ export function InstructionsHandoverTab(props: { initial: HandoverConfigData }) 
             labelAccessibilityVisibility="exclusive"
             name="handover-destination"
             values={[config.destination]}
-            onChange={(e) => {
+            onInput={(e) => {
               const destination = (e.currentTarget.values[0] ??
                 "inbox") as HandoverConfigData["destination"];
               setConfig((prev) => ({ ...prev, destination }));
@@ -423,7 +423,7 @@ export function InstructionsHandoverTab(props: { initial: HandoverConfigData }) 
                   label="When your team is offline, show customers"
                   name="inbox-offline-mode"
                   values={[inbox.offlineMode]}
-                  onChange={(e) => {
+                  onInput={(e) => {
                     const offlineMode = (e.currentTarget.values[0] ??
                       "leave_message") as HandoverConfigData["inbox"]["offlineMode"];
                     setInbox({ ...inbox, offlineMode });
@@ -453,7 +453,7 @@ export function InstructionsHandoverTab(props: { initial: HandoverConfigData }) 
                   label="While the customer waits for your team, let the AI keep replying"
                   name="inbox-ai-waiting"
                   values={[inbox.aiWhileWaiting]}
-                  onChange={(e) => {
+                  onInput={(e) => {
                     const aiWhileWaiting = (e.currentTarget.values[0] ??
                       "always") as HandoverConfigData["inbox"]["aiWhileWaiting"];
                     setInbox({ ...inbox, aiWhileWaiting });

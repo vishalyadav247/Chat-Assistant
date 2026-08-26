@@ -108,7 +108,7 @@ export function LearnCard(props: {
             label={props.switchLabel ?? `Learn ${props.title.toLowerCase()}`}
             checked={props.switchChecked}
             disabled={props.switchDisabled}
-            onChange={(e) => props.onSwitch?.(e.currentTarget.checked)}
+            onInput={(e) => props.onSwitch?.(e.currentTarget.checked)}
           />
         ) : null}
       </s-grid>
@@ -138,7 +138,7 @@ export function AutoSyncControl(props: {
           label="Auto sync"
           checked={props.available && props.enabled}
           disabled={!props.available || props.busy}
-          onChange={(e) => props.onChange(e.currentTarget.checked)}
+          onInput={(e) => props.onChange(e.currentTarget.checked)}
         />
       }
       info={

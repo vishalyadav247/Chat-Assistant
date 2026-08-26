@@ -128,7 +128,12 @@ export function runtimeConfig(): EffectiveRuntime {
     billingTestMode: stored.billingTestMode ?? envBool("BILLING_TEST_MODE") ?? false,
     billingForceTestCharges:
       stored.billingForceTestCharges ?? envBool("BILLING_FORCE_TEST_CHARGES") ?? false,
-    embedStatusEnabled: stored.embedStatusEnabled ?? envBool("EMBED_STATUS_ENABLED") ?? false,
+    // Default ON since 2026-08-26: read_themes is now a declared scope, so the
+    // themes query can actually succeed. It stays a flag so an operator can kill
+    // it without a deploy if Shopify throttles the themes API, and because a
+    // shop that authorised BEFORE the scope was added still lacks the grant —
+    // there, the query fails and getEmbedStatus falls back to "unknown".
+    embedStatusEnabled: stored.embedStatusEnabled ?? envBool("EMBED_STATUS_ENABLED") ?? true,
   };
 }
 
@@ -140,6 +145,14 @@ export function storedRuntimeConfig(): RuntimeConfig {
 
 /** Merge a patch into the stored config, sealing secrets, then reload. */
 export async function saveRuntimeConfig(patch: Partial<RuntimeConfig>): Promise<void> {
+  // Re-read before merging. Each section of /platform/settings saves a PATCH
+  // that is merged onto the in-memory snapshot — and that snapshot is up to
+  // REFRESH_TTL_MS old, so merging onto it silently reverts anything written
+  // in the meantime by another app instance (or another operator's browser
+  // hitting a different instance): saving "Links" would restore the previous
+  // email provider and wipe a Resend key that had just been rotated. Reading
+  // the row first makes a partial save actually partial (QA 2026-08-26).
+  await loadRuntimeConfig();
   const merged = runtimeConfigSchema.parse({ ...stored, ...patch });
   const forStorage: Record<string, unknown> = { ...merged };
   for (const field of SECRET_FIELDS) {

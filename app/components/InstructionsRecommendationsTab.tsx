@@ -94,7 +94,7 @@ export function InstructionsRecommendationsTab(props: {
           labelAccessibilityVisibility="exclusive"
           checked={row.status === "active"}
           disabled={busy}
-          onChange={(e) =>
+          onInput={(e) =>
             submit("toggle-recommendation", {
               id: row.id,
               status: e.currentTarget.checked ? "active" : "inactive",
@@ -163,7 +163,7 @@ export function InstructionsRecommendationsTab(props: {
           labelAccessibilityVisibility="exclusive"
           checked={row.status === "active"}
           disabled={busy}
-          onChange={(e) =>
+          onInput={(e) =>
             submit("toggle-custom", {
               id: row.id,
               status: e.currentTarget.checked ? "active" : "inactive",
@@ -211,7 +211,7 @@ export function InstructionsRecommendationsTab(props: {
             details="When off, unavailable products can appear in recommendations."
             checked={props.rules.excludeOutOfStock}
             disabled={busy}
-            onChange={(e) => submit("save-rules", { excludeOutOfStock: e.currentTarget.checked })}
+            onInput={(e) => submit("save-rules", { excludeOutOfStock: e.currentTarget.checked })}
           />
           <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="center">
             <s-switch

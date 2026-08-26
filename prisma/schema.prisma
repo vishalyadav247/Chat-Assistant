@@ -53,6 +53,11 @@ model Shop {
   usageLineItemId String? // AppSubscriptionLineItem gid for usage records
   aiEnabled     Boolean   @default(true)
   installedAt   DateTime  @default(now())
+  // Last time the storefront widget asked for its config. The theme app embed
+  // is the ONLY thing that makes that request, so a recent stamp is positive
+  // proof the embed is live — without the read_themes scope, which this app
+  // deliberately does not request (see lib/embed-status.server.ts).
+  widgetSeenAt  DateTime?
   uninstalledAt DateTime?
 
   @@map("shops")
@@ -74,6 +79,16 @@ model Product {
   stock            Int                          @default(0)
   imageUrl         String?
   handle           String                       @default("")
+  // Storefront URL from Shopify (Product.onlineStoreUrl). NULL means the product
+  // is not published to the Online Store, so a shopper cannot open it — Shopify
+  // status ACTIVE does NOT imply published. Recommendations must exclude these
+  // or the AI hands the shopper a 404. Also used as the card link, so a handle
+  // that drifts in Shopify cannot break the link.
+  onlineStoreUrl   String?
+  // Whether the product is published to the Online Store sales channel.
+  // Defaults TRUE so existing rows keep behaving until their first sync — a
+  // default of false would blank every merchant catalogue on deploy.
+  publishedOnline  Boolean                      @default(true)
   variants         Json?
   metafields       Json? // DEFINED product + variant metafields as synced (see metafields.server.ts)
   metafieldText    String                       @default("") // rendered ENABLED metafields — embedded + full-text indexed

@@ -74,7 +74,10 @@ function greetingFor(timezone: string): string {
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const access = await requireShopAccess(request, { permission: "dashboard" });
   const { shopId, shopDomain } = access;
-  const admin = await access.getAdmin();
+  // Used only for the one-off identity backfill below. The dashboard must render
+  // for a web-surface member even when no Shopify session is available, so a
+  // missing admin client skips the backfill rather than failing the page.
+  const admin = await access.getAdminOptional();
   const url = new URL(request.url);
   const rangeParam = url.searchParams.get("range");
   const range: DashboardRange = isRange(rangeParam) ? rangeParam : "7d";
@@ -90,7 +93,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   // Backfill shop identity (name / timezone / currency) once from the Admin
   // API — the greeting uses the shop timezone (spec 13 business rules).
-  if (shop && (!shop.name || !shop.timezone || !shop.currency)) {
+  if (admin && shop && (!shop.name || !shop.timezone || !shop.currency)) {
     try {
       const response = await admin.graphql(SHOP_INFO_QUERY);
       const body = (await response.json()) as {

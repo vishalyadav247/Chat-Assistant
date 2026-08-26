@@ -1,6 +1,26 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { InboxDetail } from "./InboxShared";
+import type { RecentOrder } from "../lib/inbox/recent-orders.server";
+
+/** Orders carry their OWN currency (presentment can differ from the shop's), so
+ *  they cannot reuse the conversation-scoped formatter below. */
+function formatMoney(value: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(value);
+  } catch {
+    return `${currency} ${value.toFixed(2)}`;
+  }
+}
+
+/** Shopify returns statuses as SHOUTING_SNAKE — render them as words. */
+function titleCase(value: string): string {
+  return value
+    .toLowerCase()
+    .split("_")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
 
 // Details column (design inbox.html): customer card, Assignee (v1 single-user
 // — Assign disabled, "Team coming soon"), meta accordions, Shopping cart card
@@ -81,6 +101,7 @@ function Star({ filled }: { filled: boolean }) {
 
 export function InboxDetails({
   active,
+  recentOrders,
   cartViewEnabled,
   currency,
   assignees,
@@ -89,6 +110,7 @@ export function InboxDetails({
   onDelete,
 }: {
   active: InboxDetail | null;
+  recentOrders: RecentOrder[];
   cartViewEnabled: boolean;
   currency: string;
   assignees: { id: string; name: string }[];
@@ -152,7 +174,34 @@ export function InboxDetails({
 
         <div className="cin-dcard rows">
           <DetailAccordion label="Visitor device">{device ?? "No info"}</DetailAccordion>
-          <DetailAccordion label="Recent orders">No info</DetailAccordion>
+          <DetailAccordion
+            label={recentOrders.length > 0 ? `Recent orders (${recentOrders.length})` : "Recent orders"}
+          >
+            {recentOrders.length > 0 ? (
+              recentOrders.map((order) => (
+                <a
+                  key={order.id}
+                  className="cin-order"
+                  href={order.adminUrl}
+                  target="_top"
+                  rel="noreferrer"
+                >
+                  <span className="cin-order-n">{order.name}</span>
+                  <span className="cin-order-m">
+                    {order.processedAt ? new Date(order.processedAt).toLocaleDateString() : "—"}
+                    {order.fulfillmentStatus ? ` · ${titleCase(order.fulfillmentStatus)}` : ""}
+                  </span>
+                  <span className="cin-order-t">
+                    {formatMoney(Number(order.total), order.currency)}
+                  </span>
+                </a>
+              ))
+            ) : active?.contact?.email || active?.contact?.shopifyCustomerId ? (
+              "No orders yet"
+            ) : (
+              "No info — this visitor hasn't shared an email"
+            )}
+          </DetailAccordion>
           <DetailAccordion
             label={pages.length > 0 ? `Browsed pages (${pages.length})` : "Browsed pages"}
           >

@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { Form, NavLink, useLocation } from "react-router";
 import { ensurePushSubscribed, pushState, subscribePush } from "../../lib/ui/push-client";
 import { useIsMobile } from "../../lib/ui/use-mobile";
+import { useNavDrawer } from "./use-nav-drawer";
 
 // Standalone web shell (spec 18): rail nav + account footer around the same
 // /app pages the Shopify admin renders. No App Bridge here — navigation is
@@ -48,54 +49,9 @@ export function WebShell(props: WebShellProps) {
   const inboxBadge = props.nav.find((item) => item.href === "/app/inbox")?.badge ?? 0;
 
   // Mobile drawer (spec 19): the same rail markup slides in ≤900px; CSS alone
-  // decides rail vs drawer so desktop DOM is unchanged.
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const navRef = useRef<HTMLElement>(null);
-  const railRef = useRef<HTMLElement>(null);
-  const menuBtnRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    setDrawerOpen(false);
-  }, [location.pathname, location.search]);
-  useEffect(() => {
-    if (!drawerOpen) return;
-    // Scroll lock + focus trap while the drawer is open; focus goes back to
-    // the hamburger on close (the rail is the only focusable region meanwhile).
-    document.documentElement.classList.add("ccws-drawerLock");
-    const opener = menuBtnRef.current; // captured for the cleanup (ref may change)
-    navRef.current?.querySelector<HTMLAnchorElement>("a")?.focus();
-    const focusable = () =>
-      Array.from(
-        railRef.current?.querySelectorAll<HTMLElement>(
-          'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        ) ?? [],
-      ).filter((el) => el.offsetParent !== null);
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setDrawerOpen(false);
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const items = focusable();
-      if (items.length === 0) return;
-      const first = items[0];
-      const last = items[items.length - 1];
-      const active = document.activeElement as HTMLElement | null;
-      if (event.shiftKey && (active === first || !railRef.current?.contains(active))) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && (active === last || !railRef.current?.contains(active))) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.documentElement.classList.remove("ccws-drawerLock");
-      opener?.focus();
-    };
-  }, [drawerOpen]);
+  // decides rail vs drawer so desktop DOM is unchanged. Scroll lock, focus trap
+  // and Escape live in useNavDrawer (shared with the /platform console).
+  const { open: drawerOpen, setOpen: setDrawerOpen, navRef, railRef, menuBtnRef } = useNavDrawer();
 
   // Push: re-sync silently when already granted; otherwise offer once.
   const [notice, setNotice] = useState<"hidden" | "offer" | "busy" | "error">("hidden");

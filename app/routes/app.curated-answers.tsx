@@ -527,7 +527,7 @@ export default function CuratedAnswersPage() {
                   <s-select
                     label="Status"
                     value={draft.status}
-                    onChange={(e) => {
+                    onInput={(e) => {
                       const status = e.currentTarget.value === "published" ? "published" : "draft";
                       setDraft((d) => ({ ...d, status }));
                     }}
@@ -538,7 +538,7 @@ export default function CuratedAnswersPage() {
                   <s-select
                     label="Priority"
                     value={draft.priority}
-                    onChange={(e) => {
+                    onInput={(e) => {
                       const value = e.currentTarget.value;
                       setDraft((d) => ({
                         ...d,

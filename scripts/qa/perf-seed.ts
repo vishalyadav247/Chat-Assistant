@@ -21,13 +21,19 @@ for (const line of readFileSync(join(process.cwd(), ".env"), "utf-8").split(/\r?
 export const PERF_SHOP_DOMAIN = "perf-test.myshopify.com";
 
 // ── Volume targets ──────────────────────────────────────────────────────────
-const N_PRODUCTS = 2_000;
-const N_CONTACTS = 5_000;
-const N_CONVERSATIONS = 20_000;
-const N_MESSAGES = 200_000;
-const N_EVENTS = 150_000;
-const N_KNOWLEDGE = 5_000;
-const N_CURATED = 1_000;
+// `--small` divides every target by 100. Full volume exists to expose bad query
+// plans and takes minutes to build; cache.test.ts only needs the fixture SHOP to
+// exist, so making it pay for 200k messages meant it was simply skipped instead.
+const SCALE = process.argv.includes("--small") ? 100 : 1;
+const scaled = (n: number) => Math.max(1, Math.round(n / SCALE));
+
+const N_PRODUCTS = scaled(2_000);
+const N_CONTACTS = scaled(5_000);
+const N_CONVERSATIONS = scaled(20_000);
+const N_MESSAGES = scaled(200_000);
+const N_EVENTS = scaled(150_000);
+const N_KNOWLEDGE = scaled(5_000);
+const N_CURATED = scaled(1_000);
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const YEAR_MS = 365 * DAY_MS;

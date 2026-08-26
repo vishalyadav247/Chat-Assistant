@@ -341,27 +341,27 @@ function AccountForm({ data }: { data: AccountData }) {
               <s-checkbox
                 label="A conversation is handed over to a human"
                 checked={prefs.push.handover}
-                onChange={(e) => savePrefs({ ...prefs, push: { ...prefs.push, handover: e.currentTarget.checked } })}
+                onInput={(e) => savePrefs({ ...prefs, push: { ...prefs.push, handover: e.currentTarget.checked } })}
               />
               <s-checkbox
                 label="A shopper replies in a conversation that's waiting for a human (mine or unassigned)"
                 checked={prefs.push.humanReply}
-                onChange={(e) => savePrefs({ ...prefs, push: { ...prefs.push, humanReply: e.currentTarget.checked } })}
+                onInput={(e) => savePrefs({ ...prefs, push: { ...prefs.push, humanReply: e.currentTarget.checked } })}
               />
               <s-checkbox
                 label="Any new conversation starts (noisy)"
                 checked={prefs.push.newConversation}
-                onChange={(e) => savePrefs({ ...prefs, push: { ...prefs.push, newConversation: e.currentTarget.checked } })}
+                onInput={(e) => savePrefs({ ...prefs, push: { ...prefs.push, newConversation: e.currentTarget.checked } })}
               />
               <s-checkbox
                 label="Play a sound in the inbox when something new arrives"
                 checked={prefs.sound}
-                onChange={(e) => savePrefs({ ...prefs, sound: e.currentTarget.checked })}
+                onInput={(e) => savePrefs({ ...prefs, sound: e.currentTarget.checked })}
               />
               <s-checkbox
                 label="Also email me handover requests"
                 checked={prefs.emailHandover}
-                onChange={(e) => savePrefs({ ...prefs, emailHandover: e.currentTarget.checked })}
+                onInput={(e) => savePrefs({ ...prefs, emailHandover: e.currentTarget.checked })}
               />
             </s-stack>
           </s-stack>

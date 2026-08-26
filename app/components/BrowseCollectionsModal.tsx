@@ -90,6 +90,7 @@ export function BrowseCollectionsModal(props: {
         <input
           type="search"
           value={q}
+          aria-label="Search collections"
           placeholder="Search collections"
           onChange={(e) => {
             setQ(e.currentTarget.value);

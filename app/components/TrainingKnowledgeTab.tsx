@@ -518,7 +518,7 @@ export function TrainingKnowledgeTab(props: {
               label="What to crawl"
               name="crawl-scope"
               values={[urlDraft.crawlScope]}
-              onChange={(e) => {
+              onInput={(e) => {
                 const value = e.currentTarget.values[0];
                 setUrlDraft({
                   ...urlDraft,
@@ -547,7 +547,7 @@ export function TrainingKnowledgeTab(props: {
             <s-checkbox
               label="Re-crawl weekly — keep knowledge fresh as your site changes"
               checked={urlDraft.reCrawlWeekly}
-              onChange={(e) => setUrlDraft({ ...urlDraft, reCrawlWeekly: e.currentTarget.checked })}
+              onInput={(e) => setUrlDraft({ ...urlDraft, reCrawlWeekly: e.currentTarget.checked })}
             />
             <StatusSelect
               value={urlDraft.status}
@@ -839,7 +839,7 @@ export function TrainingKnowledgeTab(props: {
                     labelAccessibilityVisibility="exclusive"
                     checked={policySelection.has(candidate.type)}
                     disabled={busy}
-                    onChange={(e) => {
+                    onInput={(e) => {
                       const next = new Set(policySelection);
                       if (e.currentTarget.checked) next.add(candidate.type);
                       else next.delete(candidate.type);
@@ -882,7 +882,7 @@ function StatusSelect(props: {
     <s-select
       label="Status"
       value={props.value}
-      onChange={(e) =>
+      onInput={(e) =>
         props.onChange(e.currentTarget.value === "inactive" ? "inactive" : "active")
       }
     >

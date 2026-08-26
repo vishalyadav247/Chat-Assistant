@@ -38,7 +38,14 @@ export interface InboxDetail {
   rating: number | null;
   pageContext: unknown;
   startedAt: string;
-  contact: { name: string | null; email: string | null; phone: string | null; type: string } | null;
+  contact: {
+    name: string | null;
+    email: string | null;
+    phone: string | null;
+    type: string;
+    /** Presence only — used to tell "no orders yet" from "anonymous visitor". */
+    shopifyCustomerId: string | null;
+  } | null;
   messages: InboxMessage[];
 }
 
@@ -63,6 +70,14 @@ export const FILTER_ORDER: FilterKey[] = [
   "blocked",
 ];
 
+/** Exact totals for every rail tab, computed server-side over ALL conversations. */
+export type InboxCounts = Record<FilterKey, number> & { unreadOpen: number };
+
+// These predicates mirror FILTER_WHERE in app/lib/inbox/inbox.server.ts, which
+// is the authority — filtering and counting both happen in the database now.
+// They survive for the labels and for client-side reasoning about a single row
+// (e.g. picking the right tab for a ?c= deep link). features.test.ts asserts the
+// two definitions agree row-for-row so they cannot drift apart.
 export const FILTERS: Record<FilterKey, { label: string; test: (c: InboxRow) => boolean }> = {
   all: { label: "All", test: (c) => !c.blocked },
   open: { label: "Open", test: (c) => c.status === "open" && !c.blocked },

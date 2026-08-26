@@ -37,6 +37,7 @@ const PRODUCTS_QUERY = `#graphql
         tags
         status
         handle
+        onlineStoreUrl
         featuredMedia { preview { image { url } } }
         priceRangeV2 { minVariantPrice { amount } }
         totalInventory
@@ -118,6 +119,12 @@ interface SyncedProduct {
   status: string;
   handle: string;
   imageUrl: string | null;
+  /** Shopify Product.onlineStoreUrl — NULL when not published to the storefront. */
+  onlineStoreUrl?: string | null;
+  /** On the Online Store sales channel. False = a shopper cannot open it.
+   *  Omit to leave the stored value untouched (an update whose payload does not
+   *  carry the field must not silently unpublish the product). */
+  publishedOnline?: boolean;
   price: number;
   stock: number;
   variants?: { id: string; title: string; price: number; available: boolean }[];
@@ -160,6 +167,7 @@ export async function fullCatalogSync(shopDomain: string): Promise<void> {
               tags: string[];
               status: string;
               handle: string;
+              onlineStoreUrl: string | null;
               featuredMedia: { preview: { image: { url: string } | null } | null } | null;
               priceRangeV2: { minVariantPrice: { amount: string } };
               totalInventory: number | null;
@@ -194,6 +202,11 @@ export async function fullCatalogSync(shopDomain: string): Promise<void> {
           tags: node.tags ?? [],
           status: node.status.toLowerCase(),
           handle: node.handle,
+          // NULL = not published to the Online Store. Shopify's ACTIVE status
+          // does NOT imply published, and an unpublished product 404s for the
+          // shopper — so recommendations must be able to exclude it.
+          onlineStoreUrl: node.onlineStoreUrl ?? null,
+          publishedOnline: Boolean(node.onlineStoreUrl),
           imageUrl: node.featuredMedia?.preview?.image?.url ?? null,
           price: Number(node.priceRangeV2.minVariantPrice.amount),
           stock: node.totalInventory ?? 0,
@@ -279,6 +292,10 @@ export async function upsertProductFromWebhook(shopDomain: string, payload: unkn
     tags?: string;
     status?: string;
     handle?: string;
+    // Null when the product is not on the Online Store sales channel. This is
+    // the webhook-payload equivalent of Product.onlineStoreUrl, and the reason
+    // an ACTIVE product can still 404 for a shopper.
+    published_at?: string | null;
     image?: { src?: string } | null;
     variants?: Array<{ price?: string; inventory_quantity?: number }>;
   };
@@ -364,6 +381,14 @@ export async function upsertProductFromWebhook(shopDomain: string, payload: unkn
       tags: (p.tags ?? "").split(",").map((t) => t.trim()).filter(Boolean),
       status: (p.status ?? "active").toLowerCase(),
       handle: p.handle ?? "",
+      // The webhook payload carries no onlineStoreUrl, so it is OMITTED here:
+      // writing null would wipe the URL the full sync stored, on every product
+      // update. published_at carries the same published/not signal.
+      // ABSENT means the payload did not say, so leave the stored value alone;
+      // only an explicit null means "not on the Online Store". Defaulting a
+      // missing field to false would unpublish the whole catalogue on the first
+      // webhook that happened to omit it.
+      publishedOnline: p.published_at === undefined ? undefined : Boolean(p.published_at),
       imageUrl: p.image?.src ?? null,
       price: Number.isFinite(price) ? price : 0,
       stock,

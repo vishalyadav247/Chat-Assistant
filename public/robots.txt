@@ -1,0 +1,11 @@
+# ChatConvert — every surface of this app is a private, authenticated tool
+# (embedded admin, the standalone web app, the operator console). There is
+# nothing here for a search engine to index, and the sign-in pages
+# (/web/login, /platform/login) must never appear in results.
+User-agent: *
+Disallow: /
+
+# NOTE: robots.txt is a crawl directive, not an index directive — a disallowed
+# URL can still be listed from an external link. Pair this with an
+# `X-Robots-Tag: noindex` response header (app/entry.server.tsx) to actually
+# keep these pages out of the index.

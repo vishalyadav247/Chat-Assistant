@@ -240,7 +240,7 @@ export default function PlatformSettings() {
                 <s-select
                   label="Provider"
                   value={provider}
-                  onChange={(e) => setProvider(e.currentTarget.value as typeof provider)}
+                  onInput={(e) => setProvider(e.currentTarget.value as typeof provider)}
                 >
                   <s-option value="log">Log only (no delivery)</s-option>
                   <s-option value="resend">Resend</s-option>
@@ -289,7 +289,7 @@ export default function PlatformSettings() {
                   <s-checkbox
                     label="Use TLS on connect (port 465)"
                     checked={smtpSecure}
-                    onChange={(e) => setSmtpSecure(e.currentTarget.checked)}
+                    onInput={(e) => setSmtpSecure(e.currentTarget.checked)}
                   />
                 </>
               ) : null}
@@ -364,19 +364,19 @@ export default function PlatformSettings() {
                 label="Billing test mode"
                 details="Uses the mock billing provider — no Shopify charges are created at all. Never enable in production."
                 checked={billingTestMode}
-                onChange={(e) => setBillingTestMode(e.currentTarget.checked)}
+                onInput={(e) => setBillingTestMode(e.currentTarget.checked)}
               />
               <s-switch
                 label="Force test charges"
                 details="Creates real Shopify subscriptions flagged test:true. Needed for App Store review and partner test stores."
                 checked={forceTestCharges}
-                onChange={(e) => setForceTestCharges(e.currentTarget.checked)}
+                onInput={(e) => setForceTestCharges(e.currentTarget.checked)}
               />
               <s-switch
                 label="Theme embed detection"
-                details="Queries the theme to detect whether the app embed is enabled. Requires the read_themes scope — leave off until it's granted."
+                details="Queries the published theme to detect whether the app embed is enabled. Needs the read_themes scope, declared since 2026-08-26. Storefront traffic already proves the embed is ON without this; the theme read is what can prove it is OFF. Turn off if Shopify throttles the themes API."
                 checked={embedStatus}
-                onChange={(e) => setEmbedStatus(e.currentTarget.checked)}
+                onInput={(e) => setEmbedStatus(e.currentTarget.checked)}
               />
               {billingTestMode && data.nodeEnv === "production" ? (
                 <s-banner tone="critical">Billing test mode is ON in production — merchants cannot be charged.</s-banner>

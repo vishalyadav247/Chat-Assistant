@@ -3,13 +3,22 @@ import { assertShopDomain } from "./tenancy.server";
 import { runtimeConfig } from "./platform/runtime-config.server";
 import { logError } from "./log.server";
 
-// Theme app-embed detection (spec 13): reads the published (MAIN) theme's
-// config/settings_data.json via the Admin GraphQL theme files API and looks
-// for our "chat-widget" app-embed block. Requires the read_themes scope —
-// which this app deliberately does NOT request (scope additions force a
-// merchant re-auth; see shopify.app.toml). Without it the query returns no
-// data and this resolves to "unknown" — never throws. The dashboard renders
-// the unknown state as a "Verify in theme editor" link.
+// Theme app-embed detection (spec 13). Two independent signals, cheapest first:
+//
+//   1. STOREFRONT TRAFFIC (no scope). Only the theme app embed calls
+//      /proxy/widget-config, so a recent request proves the embed is live.
+//      One-directional: silence is NOT evidence of "off", because a store with
+//      no traffic looks identical to one with the embed disabled.
+//   2. THEME READ (read_themes). Reads config/settings_data.json on the
+//      published (MAIN) theme and looks for our "chat-widget" app-embed block.
+//      This is the only signal that can prove "off".
+//
+// read_themes was added to shopify.app.toml on 2026-08-26 — deliberately BEFORE
+// launch, while no merchant had yet installed, because a scope added afterwards
+// forces every existing merchant through re-auth. A shop that authorised before
+// that still lacks the grant: there the query returns no data and this resolves
+// to "unknown" — it never throws. The dashboard renders the unknown state as a
+// "Verify in theme editor" link.
 
 export type EmbedStatus = "on" | "off" | "unknown";
 
@@ -86,9 +95,13 @@ export function parseEmbedStatus(content: string): EmbedStatus {
 
 export async function getEmbedStatus(shopDomain: string): Promise<EmbedStatus> {
   assertShopDomain(shopDomain);
-  // The themes query needs read_themes, which the app deliberately doesn't
-  // request yet — skip the guaranteed-to-fail Admin call (rate-limit + log
-  // noise, review m3) until the flag is enabled alongside the scope.
+  // Storefront traffic proves the embed is live and costs no scope or Admin
+  // call, so it is checked FIRST — most shops resolve here and never reach the
+  // themes query at all.
+  const fromTraffic = await embedStatusFromTraffic(shopDomain);
+  if (fromTraffic) return fromTraffic;
+  // Operator kill-switch for the themes query (rate limits, or a shop whose
+  // grant predates read_themes). Off → nothing further can be determined.
   if (!runtimeConfig().embedStatusEnabled) return "unknown";
   const hit = cache().get(shopDomain);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.status;
@@ -116,4 +129,58 @@ export async function getEmbedStatus(shopDomain: string): Promise<EmbedStatus> {
 /** Test/QA hook: drop the cached status for a shop. */
 export function invalidateEmbedStatus(shopDomain: string): void {
   cache().delete(shopDomain);
+}
+
+// ── Storefront-traffic signal (no extra scope) ───────────────────────────────
+
+/** Treat a widget-config request this recent as proof the embed is live. */
+const SEEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** Only write the stamp once an hour — the route is on every page view. */
+const SEEN_WRITE_EVERY_MS = 60 * 60 * 1000;
+
+const lastWrite = new Map<string, number>();
+
+/**
+ * Record that the storefront widget asked for its config.
+ *
+ * Called from proxy.widget-config, which ONLY the theme app embed calls — so a
+ * recent stamp is positive proof the embed is installed and enabled on the
+ * published theme, with no Admin call and no reliance on the read_themes grant.
+ *
+ * Never throws and never blocks the response: a failure here must not cost a
+ * shopper their widget.
+ */
+export async function touchWidgetSeen(shopId: string): Promise<void> {
+  const now = Date.now();
+  const previous = lastWrite.get(shopId) ?? 0;
+  if (now - previous < SEEN_WRITE_EVERY_MS) return;
+  lastWrite.set(shopId, now);
+  try {
+    const db = (await import("../db.server")).default;
+    await db.shop.update({ where: { id: shopId }, data: { widgetSeenAt: new Date(now) } });
+  } catch {
+    // Best-effort telemetry only.
+  }
+}
+
+/**
+ * "on" when the storefront has asked for its widget config recently.
+ *
+ * Deliberately one-directional: silence is NOT evidence the embed is off — a
+ * store with no traffic looks identical to one with the embed disabled — so
+ * this returns null rather than "off" and lets the caller fall through.
+ */
+export async function embedStatusFromTraffic(shopDomain: string): Promise<EmbedStatus | null> {
+  assertShopDomain(shopDomain);
+  try {
+    const db = (await import("../db.server")).default;
+    const shop = await db.shop.findUnique({
+      where: { domain: shopDomain },
+      select: { widgetSeenAt: true },
+    });
+    const seen = shop?.widgetSeenAt?.getTime();
+    return seen && Date.now() - seen < SEEN_TTL_MS ? "on" : null;
+  } catch {
+    return null;
+  }
 }

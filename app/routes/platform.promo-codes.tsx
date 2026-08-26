@@ -414,7 +414,7 @@ export default function PlatformPromoCodes() {
             <s-select
               label="Type"
               value={kind}
-              onChange={(e) =>
+              onInput={(e) =>
                 setKind(e.currentTarget.value === "fixed" ? "fixed" : "percent")
               }
             >
@@ -464,7 +464,7 @@ export default function PlatformPromoCodes() {
             <s-select
               label="Billing interval"
               value={intervals}
-              onChange={(e) =>
+              onInput={(e) =>
                 setIntervals(
                   e.currentTarget.value as "both" | "monthly" | "yearly",
                 )
@@ -486,7 +486,7 @@ export default function PlatformPromoCodes() {
                   key={p.id}
                   label={p.name}
                   checked={plans.includes(p.id)}
-                  onChange={(e) => togglePlan(p.id, e.currentTarget.checked)}
+                  onInput={(e) => togglePlan(p.id, e.currentTarget.checked)}
                 />
               ))}
             </s-stack>

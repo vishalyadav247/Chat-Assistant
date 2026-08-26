@@ -208,7 +208,7 @@ export function InstructionsGeneralTab(props: { initial: GeneralData }) {
             label="Default language"
             details="Used when the shopper's language can't be detected."
             value={form.defaultLanguage}
-            onChange={(e) => set("defaultLanguage", e.currentTarget.value)}
+            onInput={(e) => set("defaultLanguage", e.currentTarget.value)}
           >
             {LANGUAGE_OPTIONS.map((lang) => (
               <s-option key={lang.value} value={lang.value}>
@@ -220,7 +220,7 @@ export function InstructionsGeneralTab(props: { initial: GeneralData }) {
             label="Auto-detect shopper's language"
             details="When enabled, the assistant answers in the shopper's detected language."
             checked={form.autoDetectLanguage}
-            onChange={(e) => set("autoDetectLanguage", e.currentTarget.checked)}
+            onInput={(e) => set("autoDetectLanguage", e.currentTarget.checked)}
           />
         </s-stack>
       </s-section>

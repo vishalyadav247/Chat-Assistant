@@ -59,6 +59,27 @@ export interface ShopAccess {
   sessionId: string | null;
   /** Admin GraphQL client — live session in admin, offline token on web. */
   getAdmin: () => Promise<AdminApiContext>;
+  /**
+   * Same client, but `null` instead of a throw when one cannot be obtained.
+   *
+   * On the web surface `getAdmin()` resolves an OFFLINE Shopify session by shop
+   * domain, and throws if the row is missing — which happens whenever the app's
+   * session was purged but a team member still holds a valid web session. Any
+   * page that calls the Admin API only opportunistically must use this, or that
+   * throw becomes a hard 500 on a page that had no real need for Shopify at all.
+   */
+  getAdminOptional: () => Promise<AdminApiContext | null>;
+}
+
+/** Wrap a getAdmin so a missing/expired offline session degrades to `null`. */
+function optional(get: () => Promise<AdminApiContext>): () => Promise<AdminApiContext | null> {
+  return async () => {
+    try {
+      return await get();
+    } catch {
+      return null;
+    }
+  };
 }
 
 export function hasShopifySignals(request: Request): boolean {
@@ -94,6 +115,7 @@ export async function requireShopAccess(
     });
     if (!shop || shop.uninstalledAt) loginRedirect(request, true);
     const shopDomain = shop.domain;
+    const getAdmin = async () => (await unauthenticated.admin(shopDomain)).admin;
     access = {
       surface: "web",
       shopId: session.shopId,
@@ -101,7 +123,8 @@ export async function requireShopAccess(
       member: session.member,
       role: session.member.role,
       sessionId: session.sessionId,
-      getAdmin: async () => (await unauthenticated.admin(shopDomain)).admin,
+      getAdmin,
+      getAdminOptional: optional(getAdmin),
     };
   } else {
     const { session, admin } = await authenticate.admin(request);
@@ -114,6 +137,7 @@ export async function requireShopAccess(
       role: "owner",
       sessionId: null,
       getAdmin: async () => admin,
+      getAdminOptional: async () => admin,
     };
   }
 

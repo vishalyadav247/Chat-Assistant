@@ -103,7 +103,7 @@ export function SettingsPrivacy(props: {
         <s-select
           label="Keep transcripts for"
           value={String(props.retentionDays)}
-          onChange={(e) => props.onRetentionChange(Number(e.currentTarget.value) as RetentionDays)}
+          onInput={(e) => props.onRetentionChange(Number(e.currentTarget.value) as RetentionDays)}
         >
           {RETENTION_OPTIONS.map((option) => (
             <s-option key={option.value} value={String(option.value)}>
@@ -113,13 +113,38 @@ export function SettingsPrivacy(props: {
         </s-select>
       </s-section>
 
+      {/* This wording is read verbatim by Shopify's data-protection reviewer and
+          must match what the app actually stores (App Store requirement 1.1.4 —
+          factual information only). Update it whenever the Contact or Message
+          model changes, or whenever a sub-processor is added or removed. */}
+      <s-section heading="What ChatConvert stores">
+        <s-paragraph>
+          From a shopper: the chat transcript, and any contact details they choose to give —
+          name, email address and phone number. ChatConvert also records the pages a shopper
+          browsed during the chat, a coarse location derived from their connection, and, once a
+          shopper is matched to a customer in your store, that Shopify customer ID.
+        </s-paragraph>
+        <s-paragraph>
+          Chat content is sent to OpenAI to generate replies. Notification and invitation emails
+          are sent through Resend. If you enable order tracking, order lookups are sent to
+          17TRACK. No shopper data is sold or used to train models.
+        </s-paragraph>
+      </s-section>
+
       <s-section heading="How redaction works">
         <s-paragraph>
-          ChatConvert also honours Shopify&apos;s deletion webhooks automatically: a customer-redact
-          request deletes that customer&apos;s conversations and messages, and uninstalling the app
-          (followed by Shopify&apos;s shop-redact ~48h later) purges all of your store&apos;s
-          ChatConvert data. The only customer information ChatConvert stores is the email a shopper
-          optionally provides in chat.
+          ChatConvert honours Shopify&apos;s deletion webhooks automatically. A customer-redact
+          request deletes that customer&apos;s contact record, conversations and messages.
+        </s-paragraph>
+        <s-paragraph>
+          When you uninstall, ChatConvert keeps your data for 7 days so that reinstalling within
+          that window restores everything; after 7 days it is erased. Shopify&apos;s shop-redact
+          request (usually ~48h after uninstall) erases it immediately instead. Either way, only
+          an anonymous record that the erasure happened is kept.
+        </s-paragraph>
+        <s-paragraph>
+          The retention setting above applies while the app is installed: transcripts older than
+          the window you choose are deleted on a rolling basis.
         </s-paragraph>
       </s-section>
     </s-stack>

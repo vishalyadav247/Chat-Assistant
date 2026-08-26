@@ -98,7 +98,7 @@ export function TrainingDiscountsTab(props: {
                   label="Real-time sync"
                   checked={props.realtime && props.realtimeEnabled}
                   disabled={!props.realtime || pendingIntent === "discount-realtime"}
-                  onChange={(e) =>
+                  onInput={(e) =>
                     submit("discount-realtime", {
                       enabled: e.currentTarget.checked ? "true" : "false",
                     })
@@ -244,7 +244,7 @@ export function TrainingDiscountsTab(props: {
                     label={`AI learning for ${row.title}`}
                     labelAccessibilityVisibility="exclusive"
                     checked={row.learnEnabled}
-                    onChange={(e) =>
+                    onInput={(e) =>
                       submit("discounts-learn", {
                         ids: row.id,
                         enabled: e.currentTarget.checked ? "true" : "false",

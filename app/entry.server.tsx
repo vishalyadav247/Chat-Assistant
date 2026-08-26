@@ -45,10 +45,16 @@ export default async function handleRequest(
     responseHeaders.set("Cache-Control", "no-store");
     // Invite / reset / handoff URLs carry tokens — never leak them via Referer.
     if (webAuthPage || platformPage) responseHeaders.set("Referrer-Policy", "no-referrer");
+    // public/robots.txt only asks crawlers not to fetch. It does nothing about a
+    // URL discovered another way — and invite / reset / handoff links are shared
+    // by email and chat, which is exactly how a login page ends up indexed. This
+    // header refuses the indexing itself.
+    responseHeaders.set("X-Robots-Tag", "noindex, nofollow, noarchive");
   } else if (pathname === "/app" || pathname.startsWith("/app/")) {
     // Embedded admin documents render shopper PII (inbox transcripts, contacts).
     // Keep them out of shared/proxy caches and browser back-forward cache.
     responseHeaders.set("Cache-Control", "no-store");
+    responseHeaders.set("X-Robots-Tag", "noindex, nofollow, noarchive");
   }
   const userAgent = request.headers.get("user-agent");
   const callbackName = isbot(userAgent ?? '')

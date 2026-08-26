@@ -207,7 +207,7 @@ export function TrainingProductsTab(props: {
                     label={`Learn ${row.title}`}
                     labelAccessibilityVisibility="exclusive"
                     checked={row.learnEnabled}
-                    onChange={(e) =>
+                    onInput={(e) =>
                       submit("product-learn", {
                         id: row.id,
                         enabled: e.currentTarget.checked ? "true" : "false",

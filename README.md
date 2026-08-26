@@ -222,7 +222,14 @@ curl -s https://your-store.myshopify.com/apps/ccwidget/widget-config # -> 200 ap
 
 So the fallback transport seam (`window.__ccDirectStream`, spec `01-foundation.md`) is **not needed** for local development. The template README's warning about Cloudflare buffering response streams did not reproduce here.
 
-To re-check after any transport change, load any storefront page with `?ccprobe=1` and watch the console: `[ChatConvert probe]` frames ~500ms apart = streaming; all at once = buffered.
+To re-check after any transport change, paste this into the storefront DevTools console and watch the timings — frames ~500ms apart = streaming, all at once = buffered:
+
+```js
+const t = Date.now();
+const r = (await fetch("/apps/ccwidget/ping")).body.getReader();
+const d = new TextDecoder();
+for (let c; !(c = await r.read()).done; ) console.log(d.decode(c.value, { stream: true }), `+${Date.now() - t}ms`);
+```
 
 ---
 
@@ -379,7 +386,7 @@ A **404** (empty body) means no proxy is registered for that subpath *on this st
 
 ### Chat replies arrive all at once instead of streaming
 
-Not expected — SSE was verified streaming correctly through a Cloudflare quick tunnel on 2026-08-07 (frames ~500ms apart). If you see batching, check the transport before blaming the tunnel, then confirm with `?ccprobe=1` on any storefront page.
+Not expected — SSE was verified streaming correctly through a Cloudflare quick tunnel on 2026-08-07 (frames ~500ms apart). If you see batching, check the transport before blaming the tunnel, then confirm with the console snippet in the streaming section above.
 
 ### Theme extension edits aren't showing up
 

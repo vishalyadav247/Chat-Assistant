@@ -167,7 +167,7 @@ export default function PlatformLogs() {
                 <s-select
                   label="Level"
                   value={data.filters.level ?? ""}
-                  onChange={(e) => setParam("level", e.currentTarget.value)}
+                  onInput={(e) => setParam("level", e.currentTarget.value)}
                 >
                   <s-option value="">All levels</s-option>
                   <s-option value="error">Errors</s-option>
@@ -176,7 +176,7 @@ export default function PlatformLogs() {
                 <s-select
                   label="Event"
                   value={data.filters.event ?? ""}
-                  onChange={(e) => setParam("event", e.currentTarget.value)}
+                  onInput={(e) => setParam("event", e.currentTarget.value)}
                 >
                   <s-option value="">All events</s-option>
                   {data.eventOptions.map((event) => (
@@ -188,7 +188,7 @@ export default function PlatformLogs() {
                 <s-select
                   label="Store"
                   value={data.filters.shopId ?? ""}
-                  onChange={(e) => setParam("shop", e.currentTarget.value)}
+                  onInput={(e) => setParam("shop", e.currentTarget.value)}
                 >
                   <s-option value="">All stores</s-option>
                   {data.shopOptions.map((shop) => (

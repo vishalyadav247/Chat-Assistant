@@ -390,7 +390,7 @@ export function FaqManager(props: {
               label="Status"
               labelAccessibilityVisibility="exclusive"
               value={statusFilter || "all"}
-              onChange={(e) => {
+              onInput={(e) => {
                 const v = e.currentTarget.value;
                 setStatusFilter(v === "published" || v === "draft" ? v : "");
               }}
@@ -405,7 +405,7 @@ export function FaqManager(props: {
               label="Featured"
               labelAccessibilityVisibility="exclusive"
               value={featuredFilter || "all"}
-              onChange={(e) => {
+              onInput={(e) => {
                 const v = e.currentTarget.value;
                 setFeaturedFilter(v === "yes" || v === "no" ? v : "");
               }}
@@ -651,7 +651,7 @@ export function FaqManager(props: {
               <s-select
                 label="Status"
                 value={faqDraft.status}
-                onChange={(e) =>
+                onInput={(e) =>
                   setFaqDraft({
                     ...faqDraft,
                     status: e.currentTarget.value === "published" ? "published" : "draft",
@@ -664,7 +664,7 @@ export function FaqManager(props: {
               <s-select
                 label="Category"
                 value={faqDraft.categoryId}
-                onChange={(e) => setFaqDraft({ ...faqDraft, categoryId: e.currentTarget.value })}
+                onInput={(e) => setFaqDraft({ ...faqDraft, categoryId: e.currentTarget.value })}
               >
                 {tree.map((category) => (
                   <s-option key={category.id} value={category.id}>
@@ -677,7 +677,7 @@ export function FaqManager(props: {
               label="Featured question"
               details="Enable to show this question on the first page of chatbox. If not, it will only be shown in category."
               checked={faqDraft.featured}
-              onChange={(e) => setFaqDraft({ ...faqDraft, featured: e.currentTarget.checked })}
+              onInput={(e) => setFaqDraft({ ...faqDraft, featured: e.currentTarget.checked })}
             />
           </s-stack>
         ) : null}
@@ -774,7 +774,7 @@ export function FaqManager(props: {
               <s-select
                 label="Position"
                 value={String(categoryDraft.position)}
-                onChange={(e) =>
+                onInput={(e) =>
                   setCategoryDraft({
                     ...categoryDraft,
                     position: Number(e.currentTarget.value) || 1,
@@ -793,7 +793,7 @@ export function FaqManager(props: {
               <s-select
                 label="Status"
                 value={categoryDraft.status}
-                onChange={(e) =>
+                onInput={(e) =>
                   setCategoryDraft({
                     ...categoryDraft,
                     status: e.currentTarget.value === "draft" ? "draft" : "published",
@@ -808,7 +808,7 @@ export function FaqManager(props: {
               label="Feature category"
               details="Enable to show this category on the first page of FAQs chatbox. If not, it will only be shown when viewing all categories."
               checked={categoryDraft.featured}
-              onChange={(e) =>
+              onInput={(e) =>
                 setCategoryDraft({ ...categoryDraft, featured: e.currentTarget.checked })
               }
             />
@@ -893,7 +893,7 @@ export function FaqManager(props: {
           labelAccessibilityVisibility="exclusive"
           name="faq-export-scope"
           values={[exportScope]}
-          onChange={(e) => {
+          onInput={(e) => {
             const value = e.currentTarget.values[0];
             setExportScope(value === "published" ? "published" : "all");
           }}

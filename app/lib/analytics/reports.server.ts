@@ -1,12 +1,13 @@
 import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
-import { requirePlan } from "../billing/plans.server";
+import { getQuota, isUnlimitedQuota, requirePlan } from "../billing/plans.server";
 import {
   emptyCounters,
   rollupDay,
   utcDay,
   type DayCounters,
 } from "./rollup.server";
+import { ANALYTICS_RANGES } from "./shared";
 import type {
   AnalyticsRange,
   CsatSummary,
@@ -27,6 +28,35 @@ export * from "./shared";
 
 const RANGE_DAYS: Record<AnalyticsRange, number> = { "7d": 7, "30d": 30, "3m": 90, "12m": 365 };
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Clamp a requested range to what the shop's plan may look back over
+ * (`analytics_range_days`: 7 / 30 / 90 / 365 by tier).
+ *
+ * Applied inside every ranged report rather than only in the route loader,
+ * because the plan-gate rule is that gates are enforced SERVER-SIDE at the data
+ * source — a hand-crafted `?crange=12m` on a Free shop must not be able to read
+ * a year of history just because it skipped the loader's own clamp.
+ *
+ * Reads the plan straight from the shop row rather than the 60s-cached shop
+ * config: a billing change must bite immediately, and a gate that trails the
+ * cache by a minute is a gate a downgraded shop can still read a year through.
+ * It is a primary-key lookup, so the cost of doing it per report is noise.
+ */
+export async function clampRange(shopId: string, range: AnalyticsRange): Promise<AnalyticsRange> {
+  requireShopId(shopId);
+  const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
+  const allowedDays = getQuota(shop?.plan ?? "free", "analytics_range_days");
+  if (isUnlimitedQuota(allowedDays) || RANGE_DAYS[range] <= allowedDays) return range;
+  // Widest range that still fits the allowance; never wider than was asked for.
+  let best: AnalyticsRange = "7d";
+  for (const candidate of ANALYTICS_RANGES) {
+    if (RANGE_DAYS[candidate] <= allowedDays && RANGE_DAYS[candidate] <= RANGE_DAYS[range]) {
+      best = candidate;
+    }
+  }
+  return best;
+}
 
 function isoDate(day: Date): string {
   return day.toISOString().slice(0, 10);
@@ -89,6 +119,8 @@ export async function analyticsCounters(
   shopId: string,
   range: AnalyticsRange,
 ): Promise<Map<string, DayCounters>> {
+  // Plan gate: never read further back than analytics_range_days allows.
+  range = await clampRange(shopId, range);
   return countersForDays(shopId, [...windowDays(range, 1), ...windowDays(range)]);
 }
 
@@ -139,6 +171,8 @@ export async function conversationSeries(
   shopId: string,
   range: AnalyticsRange,
 ): Promise<SeriesPoint[]> {
+  // Plan gate: never read further back than analytics_range_days allows.
+  range = await clampRange(shopId, range);
   const days = windowDays(range);
   const map = await countersForDays(shopId, days);
   return days.map((day) => {
@@ -170,6 +204,8 @@ export async function resolutionBreakdown(
   shopId: string,
   range: AnalyticsRange,
 ): Promise<ResolutionBreakdown> {
+  // Plan gate: never read further back than analytics_range_days allows.
+  range = await clampRange(shopId, range);
   const days = windowDays(range);
   const total = sumCounters(await countersForDays(shopId, days), days);
   const [ai, human, un] = pctParts(
@@ -218,6 +254,8 @@ export async function recommendationFunnel(
   shopId: string,
   range: AnalyticsRange,
 ): Promise<RecommendationFunnel> {
+  // Plan gate: never read further back than analytics_range_days allows.
+  range = await clampRange(shopId, range);
   const days = windowDays(range);
   const total = sumCounters(await countersForDays(shopId, days), days);
   return { shown: total.recommendationsShown, atc: total.atc, purchased: null };
@@ -234,6 +272,8 @@ export async function responsePerformance(
   shopId: string,
   range: AnalyticsRange,
 ): Promise<ResponsePerformance> {
+  // Plan gate: never read further back than analytics_range_days allows.
+  range = await clampRange(shopId, range);
   const days = windowDays(range);
   const prevDays = windowDays(range, 1);
   // One backfill covering both windows (prevDays[0] … today).
@@ -377,6 +417,8 @@ export async function exportAnalyticsCsv(
   shopId: string,
   range: AnalyticsRange,
 ): Promise<string> {
+  // Plan gate: never read further back than analytics_range_days allows.
+  range = await clampRange(shopId, range);
   await requireExports(shopId);
   const days = windowDays(range);
   const map = await countersForDays(shopId, days);

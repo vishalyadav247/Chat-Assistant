@@ -49,7 +49,7 @@ export function DashboardOverview(props: {
             label="Date range"
             labelAccessibilityVisibility="exclusive"
             value={props.range}
-            onChange={(e) => props.onRangeChange(e.currentTarget.value as DashboardRange)}
+            onInput={(e) => props.onRangeChange(e.currentTarget.value as DashboardRange)}
           >
             {(Object.keys(RANGE_LABELS) as DashboardRange[]).map((range) => (
               <s-option key={range} value={range}>

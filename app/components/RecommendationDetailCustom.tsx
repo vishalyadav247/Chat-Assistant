@@ -142,7 +142,7 @@ export function RecommendationDetailCustom(props: {
             maxLength={100}
             onInput={(e) => setName(e.currentTarget.value)}
           />
-          <s-select label="Status" value={status} onChange={(e) => setStatus(e.currentTarget.value)}>
+          <s-select label="Status" value={status} onInput={(e) => setStatus(e.currentTarget.value)}>
             <s-option value="active">Active</s-option>
             <s-option value="inactive">Inactive</s-option>
           </s-select>

@@ -281,7 +281,7 @@ export function DataTable<Row extends { id: string }>(props: {
                 labelAccessibilityVisibility="exclusive"
                 checked={allVisibleSelected}
                 indeterminate={visibleSelected > 0 && !allVisibleSelected}
-                onChange={(e) => toggleVisible(e.currentTarget.checked)}
+                onInput={(e) => toggleVisible(e.currentTarget.checked)}
               />
               <s-text>{selected.size} selected</s-text>
               {selected.size < filtered.length ? (
@@ -309,7 +309,7 @@ export function DataTable<Row extends { id: string }>(props: {
                   labelAccessibilityVisibility="exclusive"
                   checked={allVisibleSelected}
                   indeterminate={visibleSelected > 0 && !allVisibleSelected}
-                  onChange={(e) => toggleVisible(e.currentTarget.checked)}
+                  onInput={(e) => toggleVisible(e.currentTarget.checked)}
                 />
               </s-table-header>
             ) : null}
@@ -363,7 +363,7 @@ export function DataTable<Row extends { id: string }>(props: {
                       label="Select row"
                       labelAccessibilityVisibility="exclusive"
                       checked={selected.has(row.id)}
-                      onChange={(e) => toggleRow(row.id, e.currentTarget.checked)}
+                      onInput={(e) => toggleRow(row.id, e.currentTarget.checked)}
                     />
                   </s-table-cell>
                 ) : null}
@@ -455,7 +455,7 @@ export function DataTable<Row extends { id: string }>(props: {
                 label="Items per page"
                 labelAccessibilityVisibility="exclusive"
                 value={String(perPage)}
-                onChange={(e) => {
+                onInput={(e) => {
                   setPerPage(Number(e.currentTarget.value));
                   setPage(1);
                 }}

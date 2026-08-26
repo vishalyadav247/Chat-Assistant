@@ -70,7 +70,10 @@ function parseType(raw: string | null): ContactType | undefined {
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const access = await requireShopAccess(request, { permission: "contacts" });
   const { shopId } = access;
-  const admin = await access.getAdmin();
+  // Opportunistic only — see below. A web-surface member whose shop has no
+  // usable Shopify session must still get their contacts list, so a missing
+  // admin client degrades the enrichment pass instead of 500ing the page.
+  const admin = await access.getAdminOptional();
   const type = parseType(new URL(request.url).searchParams.get("type"));
 
   // Opportunistic classification passes on every load (all no-ops once caught
@@ -79,7 +82,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   // soft). No contact-less-conversation backfill here — deleted contacts must
   // stay deleted (see deleteContact); new conversations bind one at creation.
   await reclassifyPendingContacts(shopId);
-  await matchContactsToShopifyCustomers(shopId, admin.graphql);
+  if (admin) await matchContactsToShopifyCustomers(shopId, admin.graphql);
 
   const [stats, contacts] = await Promise.all([
     contactStats(shopId),
@@ -88,10 +91,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return { stats, contacts, tab: type ?? ("all" as const) };
 };
 
+const SHOPIFY_UNAVAILABLE =
+  "Can't reach Shopify for this store right now. Reopen the app from your Shopify admin and try again.";
+
 export const action = async ({ request }: ActionFunctionArgs) => {
   const access = await requireShopAccess(request, { permission: "contacts" });
   const { shopId } = access;
-  const admin = await access.getAdmin();
+  // Only "convert-customer" and "contact-delete" reach Shopify. Resolving the
+  // client eagerly made every OTHER intent (export, convert-lead, contact-save)
+  // fail too whenever the shop had no usable Shopify session.
+  const admin = await access.getAdminOptional();
+  const needsAdmin = { intent: "shopify-unavailable" as const, ok: false, error: SHOPIFY_UNAVAILABLE };
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
   const joinedName = () =>
@@ -123,6 +133,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   // "Convert to customer" (contact3.png): creates the Shopify customer profile
   // too (write_customers) — or links the existing one if the email is taken.
   if (intent === "convert-customer") {
+    if (!admin) return needsAdmin;
     const result = await convertContactToShopifyCustomer(
       shopId,
       String(formData.get("id") ?? ""),
@@ -169,6 +180,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "contact-delete") {
+    if (!admin) return needsAdmin;
     const ok = await deleteContact(shopId, String(formData.get("id") ?? ""), admin.graphql);
     return { intent: "contact-delete" as const, ok };
   }
@@ -689,7 +701,7 @@ export default function ContactsPage() {
           label="Select contacts to export"
           name="contacts-export-scope"
           values={[exportScope]}
-          onChange={(e) => {
+          onInput={(e) => {
             const value = e.currentTarget.values[0];
             setExportScope(value === "all" ? "all" : "page");
           }}

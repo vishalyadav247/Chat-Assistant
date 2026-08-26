@@ -186,7 +186,7 @@ export function ProactiveCampaignTable(props: {
                   labelAccessibilityVisibility="exclusive"
                   checked={row.status === "active"}
                   disabled={props.busy}
-                  onChange={() => props.onToggle(row.id, row.status !== "active")}
+                  onInput={() => props.onToggle(row.id, row.status !== "active")}
                 />
                 <s-badge tone={row.status === "active" ? "success" : "neutral"}>
                   {row.status === "active" ? "Active" : "Inactive"}

@@ -84,9 +84,12 @@
 .cw-panel {
   width: 360px;
   max-width: calc(100vw - 40px);
-  /* Never collapse below 550px even with sparse content (e.g. FAQ answers). */
+  /* Never collapse below 550px even with sparse content (e.g. FAQ answers).
+     dvh tracks the mobile URL bar; vh lines stay first as the fallback. */
   min-height: min(550px, calc(100vh - 110px));
   max-height: min(640px, calc(100vh - 110px));
+  min-height: min(550px, calc(100dvh - 110px));
+  max-height: min(640px, calc(100dvh - 110px));
   background: var(--cw-surface);
   border: 1px solid var(--cw-border);
   border-radius: 18px;
@@ -105,9 +108,16 @@
     inset: 0;
     width: 100%;
     max-width: none;
+    /* min-height must be reset too: 550px is taller than a landscape phone
+       viewport, which pushed the composer off the bottom of the screen. */
+    min-height: 0;
     max-height: none;
+    height: 100vh;
+    height: 100dvh; /* excludes the URL bar; vh above is the fallback */
     border-radius: 0;
     margin: 0;
+    /* Clear the home indicator / gesture bar so the composer stays tappable. */
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 }
 
@@ -479,6 +489,11 @@ textarea.cw-inp { resize: vertical; min-height: 64px; font-family: inherit; line
 .cw-radio { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--cw-ink-strong); cursor: pointer; }
 .cw-radio input { position: absolute; opacity: 0; width: 1px; height: 1px; }
 .cw-dot { width: 16px; height: 16px; border-radius: 50%; border: 1.6px solid var(--cw-border-strong); flex: none; position: relative; }
+/* The input is a 1×1 transparent box, so the global :focus-visible ring would
+   paint on nothing. Move it to the visible dot (adjacent sibling — no :has
+   needed, so it works in every browser that supports :focus-visible). */
+.cw-radio input:focus-visible { outline: none; }
+.cw-radio input:focus-visible + .cw-dot { outline: 2px solid var(--cw1); outline-offset: 2px; }
 .cw-radio input:checked + .cw-dot { border-color: var(--cw1); }
 .cw-radio input:checked + .cw-dot::after { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--cw1); }
 /* .cw-root scope beats the `.cw-root button { background: none }` reset —

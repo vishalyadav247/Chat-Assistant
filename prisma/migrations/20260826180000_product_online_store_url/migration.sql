@@ -1,0 +1,11 @@
+-- Product.onlineStoreUrl — Shopify's Product.onlineStoreUrl.
+--
+-- NULL means the product is NOT published to the Online Store sales channel, so
+-- a shopper cannot open it. Shopify's `status: ACTIVE` does not imply published:
+-- on a real store this was 99 of 175 products, and the AI happily recommended
+-- them, handing shoppers a card whose "View" link 404s.
+--
+-- Existing rows are left NULL and the next catalog sync fills them in. Until
+-- then the search filters treat NULL as "unknown, still allowed" so a shop does
+-- not lose its whole catalogue between deploy and first sync.
+ALTER TABLE "products" ADD COLUMN "onlineStoreUrl" TEXT;

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { DismissibleBanner } from "./ui/DismissibleBanner";
 import type { MetafieldDefinitionRow } from "../lib/ingestion/metafields.server";
 import type { TrainingActionResult } from "../routes/app.ai-agent.training";
 import { BrowseModalShell } from "./BrowseProductsModal";
@@ -139,16 +140,17 @@ export function ManageMetafieldsModal(props: {
         </s-grid>
 
         {atLimit && !limitDismissed ? (
-          <s-banner tone="warning" onDismiss={() => setLimitDismissed(true)}>
+          <DismissibleBanner tone="warning" onDismiss={() => setLimitDismissed(true)}>
             You&apos;ve reached the metafields limit for your plan ({enabledCount} of {props.quota}{" "}
             enabled). Disable one to enable another, or upgrade for more.
-          </s-banner>
+          </DismissibleBanner>
         ) : null}
 
         <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="center">
           <input
             type="search"
             value={q}
+            aria-label="Search metafields"
             placeholder="Search metafield"
             onChange={(e) => setQ(e.currentTarget.value)}
             style={{
@@ -210,7 +212,7 @@ export function ManageMetafieldsModal(props: {
                       labelAccessibilityVisibility="exclusive"
                       checked={row.enabled}
                       disabled={pendingId === row.id}
-                      onChange={(e) =>
+                      onInput={(e) =>
                         submit("metafield-toggle", {
                           id: row.id,
                           enabled: e.currentTarget.checked ? "true" : "false",

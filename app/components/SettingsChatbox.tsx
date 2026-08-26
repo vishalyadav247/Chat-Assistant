@@ -25,7 +25,7 @@ function TrackingMode(props: {
         labelAccessibilityVisibility="exclusive"
         name="order-tracking-mode"
         values={selected ? [props.value] : []}
-        onChange={(e) => {
+        onInput={(e) => {
           // A radio can only ever be turned ON; ignore the de-select event the
           // previously checked list fires so two clicks can't clear the group.
           if (e.currentTarget.values.includes(props.value)) props.onSelect(props.value);
@@ -94,7 +94,7 @@ export function SettingsChatbox(props: {
           label="Open cart drawer after add to cart"
           details="When a shopper adds a product from the chat, minimize the chat and open your theme's cart drawer. Turn off to keep shoppers in the conversation."
           checked={props.cartDrawer}
-          onChange={(e) => props.onCartDrawerChange(e.currentTarget.checked)}
+          onInput={(e) => props.onCartDrawerChange(e.currentTarget.checked)}
         />
       </s-section>
 
@@ -150,13 +150,13 @@ export function SettingsChatbox(props: {
             <s-stack gap="small-300">
               <s-heading>Step 1. Select tracking provider</s-heading>
               <s-stack gap="small-300">
-                <s-checkbox label="17Track" checked disabled={false} onChange={() => {}} />
+                <s-checkbox label="17Track" checked disabled={false} onInput={() => {}} />
                 <s-stack direction="inline" gap="small" alignItems="center">
-                  <s-checkbox label="TrackingMore" checked={false} disabled onChange={() => {}} />
+                  <s-checkbox label="TrackingMore" checked={false} disabled onInput={() => {}} />
                   <s-badge tone="neutral">Coming soon</s-badge>
                 </s-stack>
                 <s-stack direction="inline" gap="small" alignItems="center">
-                  <s-checkbox label="Track123" checked={false} disabled onChange={() => {}} />
+                  <s-checkbox label="Track123" checked={false} disabled onInput={() => {}} />
                   <s-badge tone="neutral">Coming soon</s-badge>
                 </s-stack>
               </s-stack>

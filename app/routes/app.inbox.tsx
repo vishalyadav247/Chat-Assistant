@@ -9,12 +9,16 @@ import {
   blockConversation,
   deleteConversation,
   getConversationDetail,
+  getInboxCounts,
+  INBOX_FILTER_KEYS,
   listConversations,
   markRead,
   sendAgentReply,
   setResolved,
   setStarred,
 } from "../lib/inbox/inbox.server";
+import type { InboxFilterKey } from "../lib/inbox/inbox.server";
+import { recentOrdersForContact } from "../lib/inbox/recent-orders.server";
 import { InboxDetails } from "../components/InboxDetails";
 import { BRAND } from "../components/ui/tokens";
 import { assigneeOptions, isValidAssignee, parseNotifyPrefs } from "../lib/team/team.server";
@@ -26,7 +30,7 @@ import { OpenInWebButton } from "../components/web/OpenInWebButton";
 import { InboxFilters } from "../components/InboxFilters";
 import { InboxList } from "../components/InboxList";
 import { InboxThread } from "../components/InboxThread";
-import { FILTERS, displayName, unreadOpenCount } from "../components/InboxShared";
+import { FILTERS, displayName } from "../components/InboxShared";
 import type { FilterKey, InboxRow } from "../components/InboxShared";
 import { requireShopAccess } from "../lib/access.server";
 import { routeError } from "../lib/ui/route-error";
@@ -42,9 +46,24 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const access = await requireShopAccess(request, { permission: "inbox" });
   const { shopId } = access;
 
-  const conversations = await listConversations(shopId);
-
+  // Rail selection, search term and the Unread toggle live in the URL so the
+  // DATABASE applies them. Filtering the loaded page in the browser instead
+  // meant each tab only ever showed the part of its category that happened to
+  // fall inside the newest page of conversations.
   const url = new URL(request.url);
+  const rawFilter = url.searchParams.get("filter");
+  let filter: InboxFilterKey = (INBOX_FILTER_KEYS as readonly string[]).includes(rawFilter ?? "")
+    ? (rawFilter as InboxFilterKey)
+    : "all";
+  const search = (url.searchParams.get("q") ?? "").slice(0, 100);
+  const unreadOnly = url.searchParams.get("unread") === "1";
+
+  const [initialRows, counts] = await Promise.all([
+    listConversations(shopId, { filter, search, unreadOnly }),
+    getInboxCounts(shopId),
+  ]);
+  let conversations = initialRows;
+
   const requested = url.searchParams.get("c");
   // A deep link (?c=) to a conversation older than the first page must still
   // open it — getConversationDetail is shop-scoped, so the id alone is safe.
@@ -55,6 +74,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   if (!active && requested) {
     const fallbackId = conversations.find((c) => !c.blocked)?.id ?? conversations[0]?.id ?? null;
     active = fallbackId ? await getConversationDetail(shopId, fallbackId) : null;
+  }
+  // A deep link straight to a BLOCKED conversation (dashboard live feed, an
+  // email link) is the one case "all" cannot show, because every tab but
+  // "Blocked" excludes blocked rows. Land on the tab the thread actually lives
+  // in so the rail agrees with what is on screen. Only when the merchant has
+  // not chosen a tab themselves, and only for blocked — every other status is
+  // already inside "all".
+  if (!rawFilter && requested && active?.blocked) {
+    filter = "blocked";
+    conversations = await listConversations(shopId, { filter, search, unreadOnly });
   }
 
   const [shop, assignees, widget, shopSettings] = await Promise.all([
@@ -76,10 +105,29 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     name: storeName,
   };
 
+  // Drives the upgrade prompt only. The cart data itself is withheld inside
+  // getConversationDetail, so this flag being wrong cannot leak anything.
+  const cartViewEnabled = hasFeature(shop?.plan ?? "free", "inbox_cart_view");
+
+  // Recent orders for the details pane. Opportunistic: no Shopify session, an
+  // anonymous visitor, or a Shopify hiccup all degrade to an empty list rather
+  // than failing the page.
+  const recentOrders = await recentOrdersForContact(
+    await access.getAdminOptional(),
+    active?.contact ?? null,
+    access.shopDomain,
+  );
+
   return {
     conversations,
+    // Exact totals over every conversation, not just the loaded page.
+    counts,
+    filter,
+    search,
+    unreadOnly,
     active,
-    cartViewEnabled: hasFeature(shop?.plan ?? "free", "inbox_cart_view"),
+    recentOrders,
+    cartViewEnabled,
     currency: shop?.currency ?? "USD",
     // Assignable people: the owner + the team roster (spec 18 TeamMember table).
     assignees,
@@ -155,15 +203,45 @@ export default function InboxPage() {
 
   // Deep links (dashboard live feed → ?c=...) land on the tab the chat itself
   // belongs to, so the rail reflects what's on screen instead of "All".
-  const [filter, setFilter] = useState<FilterKey>(() => {
-    if (data.active && searchParams.get("c") === data.active.id) {
-      if (data.active.blocked) return "blocked";
-      return data.active.status === "resolved" ? "resolved" : "open";
-    }
-    return "all";
-  });
-  const [unreadOnly, setUnreadOnly] = useState(false);
-  const [search, setSearch] = useState("");
+  // Rail selection, Unread toggle and search are URL state, because the DATABASE
+  // applies them — filtering the loaded page in the browser showed each tab only
+  // the slice of its category that fell inside the newest page. The loader is
+  // the single source of truth; these mirror what it decided.
+  const filter = data.filter as FilterKey;
+  const unreadOnly = data.unreadOnly;
+
+  /** Patch the query string; dropping ?c= so the loader picks a thread that
+   *  exists in the new result set instead of stranding the old selection. */
+  const setParams = (patch: Record<string, string | null>, keepActive = false) => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        for (const [key, value] of Object.entries(patch)) {
+          if (value === null) next.delete(key);
+          else next.set(key, value);
+        }
+        if (!keepActive) next.delete("c");
+        return next;
+      },
+      { preventScrollReset: true, replace: true },
+    );
+  };
+
+  const setFilter = (key: FilterKey) => setParams({ filter: key });
+
+  // The search box stays local so typing is instant, and is pushed into the URL
+  // (and therefore the query) on a short debounce.
+  const [search, setSearch] = useState(data.search);
+  const committedSearch = data.search;
+  useEffect(() => {
+    if (search === committedSearch) return;
+    const id = setTimeout(() => setParams({ q: search || null }), 300);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- setParams identity is unstable
+  }, [search, committedSearch]);
+  // A revalidation that changes the committed term (back/forward, deep link)
+  // must win over stale local text.
+  useEffect(() => setSearch(committedSearch), [committedSearch]);
 
   const active = data.active;
   const activeId = active?.id ?? null;
@@ -301,15 +379,20 @@ export default function InboxPage() {
     }
   }, [sendFetcher.state, sendFetcher.data, shopify]);
 
+  // The rows ARE the answer — the database already applied filter, search and
+  // the Unread toggle. The only client-side work left is optimistic narrowing
+  // while the search debounce is still in flight, and that is only sound when
+  // the typed term EXTENDS the committed one: then the true result is a subset
+  // of what is on screen. Deleting characters widens the result set, which no
+  // amount of client filtering can reconstruct — so we wait for the server.
   const visibleRows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return data.conversations.filter((row) => {
-      if (!FILTERS[filter].test(row)) return false;
-      if (unreadOnly && !row.unread) return false;
-      if (q && !displayName(row.name).toLowerCase().includes(q)) return false;
-      return true;
-    });
-  }, [data.conversations, filter, unreadOnly, search]);
+    const typed = search.trim().toLowerCase();
+    const committed = committedSearch.trim().toLowerCase();
+    if (typed === committed || !typed.startsWith(committed)) return data.conversations;
+    return data.conversations.filter((row) =>
+      displayName(row.name).toLowerCase().includes(typed),
+    );
+  }, [data.conversations, search, committedSearch]);
 
   // Viewing a thread marks it read — but ONLY when the merchant explicitly
   // chose it (clicked a row, or arrived via a dashboard ?c= deep link). The
@@ -355,14 +438,14 @@ export default function InboxPage() {
         ref={gridRef}
         data-view={explicitSelection ? "thread" : "list"}
       >
-        <InboxFilters rows={data.conversations} filter={filter} onSelect={setFilter} />
+        <InboxFilters counts={data.counts} filter={filter} onSelect={setFilter} />
         <InboxList
           title={FILTERS[filter].label}
           rows={visibleRows}
           activeId={activeId}
-          unreadCount={unreadOpenCount(data.conversations)}
+          unreadCount={data.counts.unreadOpen}
           unreadOnly={unreadOnly}
-          onToggleUnread={() => setUnreadOnly((v) => !v)}
+          onToggleUnread={() => setParams({ unread: unreadOnly ? null : "1" })}
           search={search}
           onSearch={setSearch}
           onSelect={selectConversation}
@@ -398,6 +481,7 @@ export default function InboxPage() {
         />
         <InboxDetails
           active={active}
+          recentOrders={data.recentOrders}
           cartViewEnabled={data.cartViewEnabled}
           currency={data.currency}
           assignees={data.assignees}
@@ -421,7 +505,7 @@ export default function InboxPage() {
           >
             <div className="cin-fov-panel" role="dialog" aria-modal="true" aria-label="Conversation filters">
               <InboxFilters
-                rows={data.conversations}
+                counts={data.counts}
                 filter={filter}
                 onSelect={(key) => {
                   setFilter(key);
@@ -450,6 +534,7 @@ export default function InboxPage() {
               </button>
               <InboxDetails
                 active={active}
+                recentOrders={data.recentOrders}
                 cartViewEnabled={data.cartViewEnabled}
                 currency={data.currency}
                 assignees={data.assignees}
@@ -627,6 +712,14 @@ button.cin-send:disabled{opacity:.4;box-shadow:none;}
 .cin-av2{color:#6b6b73;}
 .cin-page-url{font-size:11.5px;color:#6b6b73;padding:0 0 6px;word-break:break-all;}
 .cin-page-url:last-child{padding-bottom:0;}
+/* Recent orders: number · date/status on one line, total right-aligned. Opens
+   the merchant own admin, so target=_top escapes the embedded iframe. */
+.cin-order{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:baseline;padding:5px 0;text-decoration:none;color:inherit;border-bottom:1px solid #f0eff4;}
+.cin-order:last-child{border-bottom:none;}
+.cin-order:hover .cin-order-n{text-decoration:underline;}
+.cin-order-n{font-size:12px;font-weight:600;color:#2b2b30;}
+.cin-order-m{font-size:11.5px;color:#6b6b73;}
+.cin-order-t{font-size:12px;font-weight:600;color:#2b2b30;justify-self:end;}
 .cin-cart-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;}
 .cin-upgrade{display:inline-flex;align-items:center;gap:5px;background:#fbe6a2;color:#8a5a00;font-size:11px;font-weight:750;border-radius:20px;padding:3px 9px;}
 .cin-cart-item{display:flex;align-items:center;gap:11px;padding:6px 0;}

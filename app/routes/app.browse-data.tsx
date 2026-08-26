@@ -39,6 +39,24 @@ export interface BrowseData {
     tags: string[];
     collections: { id: string; title: string }[];
   };
+  /** Set when the catalog could not be read; the modal shows this instead of an
+   *  empty list, so "no products" and "couldn't load" never look the same. */
+  error?: string;
+}
+
+/** Well-formed empty payload — lets a failure render as a message, not a crash. */
+function emptyBrowseData(kind: BrowseData["kind"], error: string): BrowseData {
+  return {
+    kind,
+    page: 1,
+    pageSize: 0,
+    total: 0,
+    currency: "USD",
+    products: [],
+    collections: [],
+    filters: { vendors: [], tags: [], collections: [] },
+    error,
+  };
 }
 
 // Uses the shared purchasable predicate (QA D4) so "Out of stock" here means
@@ -56,10 +74,18 @@ export const loader = async ({ request }: LoaderFunctionArgs): Promise<BrowseDat
   // agent-role surface (spec 18 roles).
   const access = await requireShopAccess(request, { permission: "ai_agent" });
   const { shopId } = access;
-  const admin = await access.getAdmin();
+  // This route genuinely needs Shopify, but the modal that calls it should show
+  // "couldn't load" rather than the caller seeing an unexplained 500.
+  const admin = await access.getAdminOptional();
 
   const url = new URL(request.url);
   const kind = url.searchParams.get("kind") === "collections" ? "collections" : "products";
+  if (!admin) {
+    return emptyBrowseData(
+      kind,
+      "Can't reach Shopify for this store right now. Reopen the app from your Shopify admin and try again.",
+    );
+  }
   const q = (url.searchParams.get("q") ?? "").trim();
   const vendor = (url.searchParams.get("vendor") ?? "").trim();
   const tag = (url.searchParams.get("tag") ?? "").trim();
