@@ -5,6 +5,48 @@ import type { ShopSettingsData } from "../lib/settings/schemas";
 
 type OrderTracking = ShopSettingsData["orderTracking"];
 
+/** One order-tracking mode: a single-choice radio plus, when it is the chosen
+ *  mode, its required details indented directly beneath it. All three share a
+ *  radio-group name so they read as one group to assistive tech; `mode` (not
+ *  the DOM) decides which is checked. */
+function TrackingMode(props: {
+  value: OrderTracking["mode"];
+  mode: OrderTracking["mode"];
+  label: string;
+  details: string;
+  onSelect: (mode: OrderTracking["mode"]) => void;
+  children?: React.ReactNode;
+}) {
+  const selected = props.mode === props.value;
+  return (
+    <s-stack gap="small-300">
+      <s-choice-list
+        label={props.label}
+        labelAccessibilityVisibility="exclusive"
+        name="order-tracking-mode"
+        values={selected ? [props.value] : []}
+        onChange={(e) => {
+          // A radio can only ever be turned ON; ignore the de-select event the
+          // previously checked list fires so two clicks can't clear the group.
+          if (e.currentTarget.values.includes(props.value)) props.onSelect(props.value);
+        }}
+      >
+        <s-choice value={props.value}>
+          {props.label}
+          <s-text slot="details">{props.details}</s-text>
+        </s-choice>
+      </s-choice-list>
+      {selected && props.children ? (
+        <s-box paddingInlineStart="large">
+          <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
+            <s-stack gap="base">{props.children}</s-stack>
+          </s-box>
+        </s-box>
+      ) : null}
+    </s-stack>
+  );
+}
+
 export function SettingsChatbox(props: {
   cartDrawer: boolean;
   orderTracking: OrderTracking;
@@ -21,6 +63,8 @@ export function SettingsChatbox(props: {
 }) {
   const connected = Boolean(props.savedTracking.apiKey);
   const keyDirty = props.orderTracking.apiKey.trim() !== props.savedTracking.apiKey;
+  const select = (mode: OrderTracking["mode"]) =>
+    props.onOrderTrackingChange({ ...props.orderTracking, mode });
   return (
     <s-stack gap="base">
       <s-section>
@@ -54,53 +98,55 @@ export function SettingsChatbox(props: {
         />
       </s-section>
 
+      {/* Order tracking. Each mode's required details are revealed directly
+          under that mode (user request) — they used to sit after the whole
+          list, and the integration setup in a separate card further down, so
+          it was never obvious which option a field belonged to.
+          s-choice-list can't host content between its options ("component
+          types other than choice can't be used as options"), so each mode is
+          its own single-choice list sharing one radio-group name; `mode` is
+          the single source of truth for which is selected. */}
       <s-section heading="Order tracking">
-        <s-paragraph>Set up how customers can track their orders via your chatbox.</s-paragraph>
-        <s-choice-list
-          label="Order tracking mode"
-          labelAccessibilityVisibility="exclusive"
-          name="order-tracking-mode"
-          values={[props.orderTracking.mode]}
-          onChange={(e) => {
-            const mode = (e.currentTarget.values[0] ?? "default") as OrderTracking["mode"];
-            props.onOrderTrackingChange({ ...props.orderTracking, mode });
-          }}
-        >
-          <s-choice value="default">
-            Default tracking
-            <s-text slot="details">Direct to the shipping carrier&apos;s tracking page</s-text>
-          </s-choice>
-          <s-choice value="custom">
-            Custom tracking
-            <s-text slot="details">
-              Direct to a custom tracking link for orders without tracking. Otherwise, use the
-              default link
-            </s-text>
-          </s-choice>
-          <s-choice value="integration">
-            Integrate with tracking app
-            <s-text slot="details">
-              Show real-time shipment status updates inside the chatbox for better customer support
-            </s-text>
-          </s-choice>
-        </s-choice-list>
-        {props.orderTracking.mode === "custom" ? (
-          <s-text-field
-            label="Custom tracking URL"
-            maxLength={500}
-            placeholder="www.delhivery.com/track-v2/package/"
-            details="The tracking number is added to the end — or put {number} where it belongs in the URL."
-            value={props.orderTracking.customUrl}
-            onInput={(e) =>
-              props.onOrderTrackingChange({ ...props.orderTracking, customUrl: e.currentTarget.value })
-            }
-          />
-        ) : null}
-      </s-section>
+        <s-stack gap="base">
+          <s-paragraph>Set up how customers can track their orders via your chatbox.</s-paragraph>
 
-      {props.orderTracking.mode === "integration" ? (
-        <s-section heading="Set up order tracking integration app">
-          <s-stack gap="base">
+          <TrackingMode
+            value="default"
+            mode={props.orderTracking.mode}
+            label="Default tracking"
+            details="Direct to the shipping carrier's tracking page"
+            onSelect={select}
+          />
+
+          <TrackingMode
+            value="custom"
+            mode={props.orderTracking.mode}
+            label="Custom tracking"
+            details="Direct to a custom tracking link for orders without tracking. Otherwise, use the default link"
+            onSelect={select}
+          >
+            <s-text-field
+              label="Custom tracking URL"
+              maxLength={500}
+              placeholder="www.delhivery.com/track-v2/package/"
+              details="The tracking number is added to the end — or put {number} where it belongs in the URL."
+              value={props.orderTracking.customUrl}
+              onInput={(e) =>
+                props.onOrderTrackingChange({
+                  ...props.orderTracking,
+                  customUrl: e.currentTarget.value,
+                })
+              }
+            />
+          </TrackingMode>
+
+          <TrackingMode
+            value="integration"
+            mode={props.orderTracking.mode}
+            label="Integrate with tracking app"
+            details="Show real-time shipment status updates inside the chatbox for better customer support"
+            onSelect={select}
+          >
             <s-stack gap="small-300">
               <s-heading>Step 1. Select tracking provider</s-heading>
               <s-stack gap="small-300">
@@ -127,7 +173,10 @@ export function SettingsChatbox(props: {
                 placeholder="Your 17Track security key"
                 value={props.orderTracking.apiKey}
                 onInput={(e) =>
-                  props.onOrderTrackingChange({ ...props.orderTracking, apiKey: e.currentTarget.value })
+                  props.onOrderTrackingChange({
+                    ...props.orderTracking,
+                    apiKey: e.currentTarget.value,
+                  })
                 }
               />
               <s-paragraph>
@@ -156,9 +205,9 @@ export function SettingsChatbox(props: {
                 ) : null}
               </s-stack>
             </s-stack>
-          </s-stack>
-        </s-section>
-      ) : null}
+          </TrackingMode>
+        </s-stack>
+      </s-section>
     </s-stack>
   );
 }

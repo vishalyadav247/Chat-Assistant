@@ -11,6 +11,7 @@ import { IconChip } from "../components/ui/IconChip";
 import { RADIUS } from "../components/ui/tokens";
 import { requireShopAccess } from "../lib/access.server";
 import { routeError } from "../lib/ui/route-error";
+import { APP_NAME } from "./app";
 
 // AI Agent home (spec 07, design ai-agent.html #viewAgent): master AI switch,
 // unresolved-questions card, 3-step setup grid, done-for-you promo. This route
@@ -137,8 +138,9 @@ export default function AiAgentPage() {
   };
 
   return (
-    <s-page heading="AI Agent">
+    <s-page heading={APP_NAME}>
       <s-stack gap="base">
+        <s-heading>AI Agent</s-heading>
         {/* Status + page actions stay INSIDE the page (user decision 2026-08-17). */}
         <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="center">
           <s-stack direction="inline" gap="small-200" alignItems="center">

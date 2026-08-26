@@ -20,6 +20,7 @@ import {
 import type { ShopSettingsData } from "../lib/settings/schemas";
 import { SaveBar } from "../components/SaveBar";
 import { TabPills } from "../components/ui/TabPills";
+import { canonicalTimezone, timezoneOptions, withSelected } from "../lib/format/timezones";
 import { SettingsGeneral } from "../components/SettingsGeneral";
 import { SettingsChatbox } from "../components/SettingsChatbox";
 import { SettingsAvailability } from "../components/SettingsAvailability";
@@ -32,6 +33,7 @@ import { getQuota } from "../lib/billing/plans.server";
 import { emailConfigured } from "../lib/email/email.server";
 import { formatDate as formatDateWithPrefs } from "../lib/format/datetime";
 import { routeError } from "../lib/ui/route-error";
+import { APP_NAME } from "./app";
 
 // Settings (spec 16): General / Chatbox / Privacy & Data Requests tabs plus
 // the Chat availability (?tab=availability) and Satisfaction survey
@@ -63,7 +65,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   ]);
   const ownerMember = members.find((m) => m.role === "owner") ?? null;
 
-  const timezone = shop?.timezone || "UTC";
+  // Legacy ids (Asia/Calcutta) are modernised so the saved value matches an
+  // option instead of appearing twice in the picker.
+  const timezone = canonicalTimezone(shop?.timezone || "UTC");
   const preview = await resolveAvailabilityFor(shopId, settings.availability, timezone);
   // Pre-formatted dates follow the shop's global date format (Store information).
   const dtPrefs = { dateFormat: settings.storeInfo.dateFormat, timeFormat: settings.storeInfo.timeFormat, timeZone: timezone };
@@ -80,6 +84,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     apiKey: process.env.SHOPIFY_API_KEY || "",
     settings,
     timezone,
+    // Built server-side: an offset depends on today's DST state, so
+    // recomputing it on hydration risks an SSR mismatch (see timezones.ts).
+    timezoneOptions: withSelected(timezoneOptions(), timezone),
     // Theme app-embed detection (spec 13's helper; "unknown" until read_themes).
     embedStatus: await (async () => {
       const { getEmbedStatus } = await import("../lib/embed-status.server");
@@ -201,6 +208,9 @@ function sliceFor(view: View, settings: ShopSettingsData, timezone: string): unk
     case "general":
       return {
         name: settings.storeInfo.name,
+        // Store time zone moved here from Chat availability (it belongs with
+        // the formats it applies to), so it saves under save-general now.
+        timezone,
         dateFormat: settings.storeInfo.dateFormat,
         timeFormat: settings.storeInfo.timeFormat,
         theme: settings.theme,
@@ -218,7 +228,7 @@ function sliceFor(view: View, settings: ShopSettingsData, timezone: string): unk
         },
       };
     case "availability":
-      return { availability: settings.availability, timezone };
+      return { availability: settings.availability };
     case "survey":
       return { survey: settings.survey };
     case "privacy":
@@ -348,7 +358,7 @@ export default function SettingsPage() {
             return { ...current, retentionDays: init.retentionDays };
         }
       });
-      if (view === "availability") setTimezone(data.timezone);
+      if (view === "general") setTimezone(data.timezone);
     },
     [data.settings, data.timezone],
   );
@@ -418,10 +428,11 @@ export default function SettingsPage() {
   const activeTab: View = inSubView ? "chatbox" : view;
 
   return (
-    <s-page heading="Settings">
+    <s-page heading={APP_NAME}>
       <SaveBar dirty={dirty} saving={saving} onSave={save} onDiscard={discard} />
 
       <s-stack gap="base">
+        <s-heading>Settings</s-heading>
         {lastResult && !lastResult.ok ? (
           <s-banner tone="critical" heading="Couldn't save settings">
             {lastResult.error ?? "Something went wrong — please try again."}
@@ -439,14 +450,15 @@ export default function SettingsPage() {
             name={draft.storeInfo.name}
             dateFormat={draft.storeInfo.dateFormat}
             timeFormat={draft.storeInfo.timeFormat}
-            timeZone={data.timezone}
+            timeZone={timezone}
+            timezoneOptions={data.timezoneOptions}
+            onTimeZoneChange={setTimezone}
             onDateFormatChange={(dateFormat) =>
               setDraft((d) => ({ ...d, storeInfo: { ...d.storeInfo, dateFormat } }))
             }
             onTimeFormatChange={(timeFormat) =>
               setDraft((d) => ({ ...d, storeInfo: { ...d.storeInfo, timeFormat } }))
             }
-            onOpenAvailability={() => go("availability")}
             placeholderName={data.defaultStoreName}
             logoUrl={draft.storeInfo.logoUrl}
             theme={draft.theme}
@@ -497,7 +509,7 @@ export default function SettingsPage() {
             timezone={timezone}
             preview={data.availabilityPreview}
             onChange={(availability) => setDraft((d) => ({ ...d, availability }))}
-            onTimezoneChange={setTimezone}
+            onOpenGeneral={() => go("general")}
             onCancel={cancelSubView}
           />
         ) : null}

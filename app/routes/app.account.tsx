@@ -1,17 +1,28 @@
 import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { useFetcher, useLoaderData, useRouteError } from "react-router";
+import { useFetcher, useLoaderData, useRevalidator, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { z } from "zod";
 import db from "../db.server";
 import { getVapidPublicKey } from "../lib/notify/vapid.server";
+import { sendPushToMembers } from "../lib/notify/push.server";
 import { requireShopAccess } from "../lib/access.server";
 import { verifyPassword } from "../lib/team/password.server";
 import { notifyPrefsSchema, parseNotifyPrefs, setPassword, updateMemberProfile } from "../lib/team/team.server";
 import { revokeMemberSessions } from "../lib/team/web-session.server";
 import { useAppBridge } from "../lib/ui/surface";
-import { hasPushSubscription, pushState, subscribePush, unsubscribePush, type PushState } from "../lib/ui/push-client";
+import {
+  hasPushSubscription,
+  needsIosInstall,
+  pushDiagnostics,
+  pushState,
+  type PushDiagnostics,
+  subscribePush,
+  unsubscribePush,
+  type PushState,
+} from "../lib/ui/push-client";
 import { routeError } from "../lib/ui/route-error";
+import { APP_NAME } from "./app";
 
 // Account page (spec 18) — web surface only: profile, password, browser
 // notification preferences, sign out everywhere. In the admin there is no
@@ -72,6 +83,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const ok = await updateMemberProfile(access.shopId, member.id, { notifyPrefs: parsed.data });
       return { ok, intent };
     }
+    case "push-test": {
+      // Proves the whole chain — VAPID keys, stored subscription, push service,
+      // service worker — instead of leaving "enabled" as a claim.
+      const result = await sendPushToMembers(access.shopId, [member.id], {
+        title: "ChatConvert",
+        body: "Test notification — push is working on this device.",
+        url: "/app/inbox",
+        tag: "push-test",
+      });
+      return {
+        ok: result.sent > 0,
+        intent,
+        error:
+          result.sent > 0
+            ? undefined
+            : "No device received it. Enable notifications on this device, then try again.",
+      };
+    }
     case "signout-all": {
       await revokeMemberSessions(access.shopId, member.id, access.sessionId ?? undefined);
       await db.pushSubscription.deleteMany({ where: { shopId: access.shopId, memberId: member.id } });
@@ -90,15 +119,63 @@ export default function AccountPage() {
   return <AccountForm data={data} />;
 }
 
+/** Per-device checklist. When notifications "are enabled" but nothing arrives,
+ *  this says which link of the chain is actually missing on THIS phone. */
+function PushChecklist({
+  diagnostics,
+  lastError,
+}: {
+  diagnostics: PushDiagnostics;
+  lastError: string | null;
+}) {
+  const rows: { label: string; ok: boolean; detail?: string }[] = [
+    { label: "Secure connection (https)", ok: diagnostics.secureContext, detail: diagnostics.origin },
+    {
+      label: "Browser supports notifications",
+      ok: diagnostics.serviceWorkerApi && diagnostics.pushApi && diagnostics.notificationApi,
+      detail: diagnostics.iosNeedsInstall ? "iPhone: add to Home Screen first" : undefined,
+    },
+    { label: "Permission allowed", ok: diagnostics.permission === "granted", detail: diagnostics.permission },
+    { label: "Background service running", ok: diagnostics.serviceWorkerRegistered },
+    {
+      label: "This device is registered",
+      ok: diagnostics.subscribedHere,
+      detail: diagnostics.endpointHost ?? undefined,
+    },
+  ];
+  return (
+    <details>
+      <summary style={{ cursor: "pointer", fontSize: 13 }}>Notifications not arriving on this device?</summary>
+      <s-stack gap="small-200">
+        {rows.map((row) => (
+          <s-text key={row.label} tone={row.ok ? "neutral" : "critical"}>
+            {row.ok ? "✓" : "✗"} {row.label}
+            {row.detail ? ` — ${row.detail}` : ""}
+          </s-text>
+        ))}
+        {lastError ? <s-text tone="critical">Last attempt — {lastError}</s-text> : null}
+        <s-text tone="neutral">
+          Every line must be ✓ on the device you want notified. Enabling on a computer does not cover your phone —
+          each device registers separately.
+        </s-text>
+      </s-stack>
+    </details>
+  );
+}
+
 function AccountUnavailable() {
   return (
-    <s-page heading="Account">
-      <s-section>
-        <s-paragraph>
-          Personal accounts belong to the ChatConvert web app. Use <strong>Open in web</strong> from the Inbox or
-          Settings → Team members to manage your web login and browser notifications.
-        </s-paragraph>
-      </s-section>
+    <s-page heading={APP_NAME}>
+      <s-stack gap="base">
+        <s-heading>Account</s-heading>
+        <s-section>
+          <s-paragraph>
+            Personal accounts belong to the ChatConvert web app. Use <strong>Open in web</strong> from the
+            Inbox or
+            Settings → Team members to manage your web login and browser notifications.
+          </s-paragraph>
+        </s-section>
+      </s-stack>
     </s-page>
   );
 }
@@ -120,9 +197,15 @@ function AccountForm({ data }: { data: AccountData }) {
   const [push, setPush] = useState<PushState>("unsupported");
   const [subscribedHere, setSubscribedHere] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
+  const [iosInstall, setIosInstall] = useState(false);
+  const [diagnostics, setDiagnostics] = useState<PushDiagnostics | null>(null);
+  const [lastPushError, setLastPushError] = useState<string | null>(null);
+  const revalidator = useRevalidator();
   useEffect(() => {
     setPush(pushState());
+    setIosInstall(needsIosInstall());
     hasPushSubscription().then(setSubscribedHere);
+    pushDiagnostics().then(setDiagnostics);
   }, []);
 
   const processed = useRef<unknown>(null);
@@ -135,6 +218,7 @@ function AccountForm({ data }: { data: AccountData }) {
         profile: "Profile saved",
         password: "Password updated — other devices were signed out",
         "notify-prefs": "Notification preferences saved",
+        "push-test": "Test notification sent",
         "signout-all": "Signed out everywhere else",
       };
       shopify.toast.show(msg[d.intent] ?? "Saved");
@@ -158,8 +242,17 @@ function AccountForm({ data }: { data: AccountData }) {
     const result = await subscribePush(data.vapidPublicKey);
     setPushBusy(false);
     setPush(result.state);
+    // The checklist is a snapshot — re-read it so it reflects THIS attempt
+    // rather than the state the page loaded with.
+    pushDiagnostics().then(setDiagnostics);
+    setLastPushError(
+      result.ok ? null : `${result.reason ?? "failed"}: ${result.detail ?? result.error ?? ""}`,
+    );
     if (result.ok) {
       setSubscribedHere(true);
+      // The "N devices enabled" count comes from the loader — refresh it so it
+      // reflects this device immediately.
+      revalidator.revalidate();
       shopify.toast.show("Browser notifications enabled on this device");
     } else {
       shopify.toast.show(result.error ?? "Couldn't enable notifications", { isError: true });
@@ -170,6 +263,7 @@ function AccountForm({ data }: { data: AccountData }) {
     await unsubscribePush();
     setPushBusy(false);
     setSubscribedHere(false);
+    revalidator.revalidate();
     shopify.toast.show("Browser notifications disabled on this device");
   };
 
@@ -177,7 +271,13 @@ function AccountForm({ data }: { data: AccountData }) {
     !data.vapidPublicKey
       ? "Browser notifications aren't configured on this server yet."
       : push === "unsupported"
-        ? "This browser doesn't support notifications."
+        ? diagnostics && !diagnostics.secureContext
+          ? "Notifications need a secure connection. This page is on " +
+            diagnostics.origin +
+            " — open the app on its https:// address instead (a plain http:// address, like a LAN IP, can't register notifications)."
+          : iosInstall
+            ? "On iPhone and iPad, notifications only work once ChatConvert is on your Home Screen: tap Share → Add to Home Screen, open it from there, then come back to enable them."
+            : "This browser doesn't support notifications."
         : push === "denied"
           ? "Notifications are blocked for this site — allow them in your browser's site settings, then reload."
           : subscribedHere
@@ -185,8 +285,9 @@ function AccountForm({ data }: { data: AccountData }) {
             : "Enable notifications on this device to get alerted even when the tab is in the background.";
 
   return (
-    <s-page heading="Account">
+    <s-page heading={APP_NAME}>
       <s-stack gap="base">
+        <s-heading>Account</s-heading>
         <s-section heading="Profile">
           <s-stack gap="base">
             <s-box maxInlineSize="420px">
@@ -221,11 +322,20 @@ function AccountForm({ data }: { data: AccountData }) {
                     Enable on this device
                   </s-button>
                 )}
+                {data.subscribedDevices > 0 ? (
+                  <s-button
+                    disabled={busy}
+                    onClick={() => fetcher.submit({ intent: "push-test" }, { method: "post" })}
+                  >
+                    Send test
+                  </s-button>
+                ) : null}
                 <s-text tone="neutral">
                   {data.subscribedDevices} device{data.subscribedDevices === 1 ? "" : "s"} enabled
                 </s-text>
               </s-stack>
             ) : null}
+            {diagnostics ? <PushChecklist diagnostics={diagnostics} lastError={lastPushError} /> : null}
             <s-stack gap="small-200">
               <s-text type="strong">Notify me when…</s-text>
               <s-checkbox

@@ -413,6 +413,10 @@ model Message {
   shopId         String
   role           String // in | out | sys
   author         String    @default("ai") // ai | agent | shopper | system
+  // Which team member sent an agent reply (null = AI, system, shopper, or a
+  // reply sent from the Shopify admin where there is no member identity).
+  // Drives the per-author avatar and caption in the inbox thread.
+  authorMemberId String?
   content        String
   productCards   Json?
   sourceLayer    String? // banned | curated | router | buy | question | chat | handover

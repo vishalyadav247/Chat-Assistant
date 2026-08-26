@@ -2,6 +2,7 @@ import type {
   HeadersFunction,
   LinksFunction,
   LoaderFunctionArgs,
+  MetaFunction,
 } from "react-router";
 import { Outlet, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -30,6 +31,9 @@ import appLoadingStylesHref from "../components/app-loading.css?url";
 
 // icon: Polaris icon name, shown only in the web shell's mobile drawer
 // (spec 20) — the desktop rail and admin <s-app-nav> stay text-only.
+/** Merchant-facing app name. Also what the admin calls the app (see meta). */
+export const APP_NAME = "ChatConvert";
+
 const NAV: Array<{ href: string; label: string; permission: Permission; icon: string }> = [
   { href: "/app", label: "Dashboard", permission: "dashboard", icon: "home" },
   { href: "/app/inbox", label: "Inbox", permission: "inbox", icon: "chat" },
@@ -56,6 +60,13 @@ const NAV: Array<{ href: string; label: string; permission: Permission; icon: st
 // Served as a <link> (not a CSS module) so the stylesheet survives a client
 // re-render of the document — in dev a hydration mismatch anywhere would
 // otherwise drop Vite's injected styles and unstyle the web shell.
+// The Shopify admin labels the whole app frame with the App Bridge title bar
+// title, and App Bridge takes that from <s-page heading> falling back to
+// document.title. With neither set to the app name, the admin's "..." menu
+// asked "Uninstall Inbox?" — i.e. the current PAGE name. Every /app route
+// inherits this title unless it exports its own meta.
+export const meta: MetaFunction = () => [{ title: APP_NAME }];
+
 export const links: LinksFunction = () => [
   { rel: "stylesheet", href: webShellStylesHref },
   { rel: "stylesheet", href: appMobileStylesHref },

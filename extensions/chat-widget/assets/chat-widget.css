@@ -396,25 +396,46 @@
 
 .cw-input {
   display: flex;
-  align-items: center;
+  /* flex-end so the send button stays on the bottom line as the composer
+     grows (inputBar auto-grows it to 3 lines, then it scrolls). */
+  align-items: flex-end;
   gap: 10px;
   padding: 11px 12px;
   background: var(--cw-surface);
   box-shadow: inset 0 1px 0 var(--cw-border);
   flex: none;
 }
-.cw-input input {
+.cw-input .cw-composer {
   flex: 1;
   background: var(--cw-surface-2);
   border: 1px solid var(--cw-border-strong);
-  border-radius: 10px;
+  border-radius: 3px;
   padding: 9px 12px;
   font-size: 12.5px;
+  line-height: 1.45;
   color: var(--cw-ink);
   outline: none;
   min-width: 0;
+  /* The JS sets an explicit height every keystroke; the manual drag handle
+     would fight it, and overflow starts hidden until the 3-line cap. */
+  resize: none;
+  overflow-y: hidden;
+  display: block;
 }
-.cw-input input:focus { border-color: var(--cw1); }
+.cw-input .cw-composer:focus { border-color: transparent; }
+/* Same slim scrollbar as .cw-body and the admin panels (tokens.ts .cc-scroll):
+   invisible at rest, 8px thumb that fades in. Revealed on FOCUS as well as
+   hover — unlike a passive panel, the composer is scrolled by typing, when
+   the pointer is usually nowhere near it. */
+.cw-input .cw-composer { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+.cw-input .cw-composer:hover,
+.cw-input .cw-composer:focus { scrollbar-color: #c9c9d2 transparent; }
+.cw-input .cw-composer::-webkit-scrollbar { width: 8px; height: 8px; }
+.cw-input .cw-composer::-webkit-scrollbar-track { background: transparent; }
+.cw-input .cw-composer::-webkit-scrollbar-thumb { background: transparent; border-radius: 8px; }
+.cw-input .cw-composer:hover::-webkit-scrollbar-thumb,
+.cw-input .cw-composer:focus::-webkit-scrollbar-thumb { background: #c9c9d2; }
+.cw-input .cw-composer::-webkit-scrollbar-thumb:hover { background: #adadb8; }
 .cw-send {
   width: 34px;
   height: 34px;
@@ -615,43 +636,192 @@ textarea.cw-inp { resize: vertical; min-height: 64px; font-family: inherit; line
 .cw-root .cw-star-emoji { font-size: 28px; color: inherit; filter: grayscale(1); opacity: 0.55; margin-top:5px;}
 .cw-root .cw-star:hover, .cw-root .cw-star[aria-checked="true"] { filter: none; opacity: 1; transform: scale(1.12); }
 
-/* ── Proactive campaign bubble (spec 12) ───────────────────────────────── */
+/* ── Proactive campaign bubble (spec 12) ───────────────────────────────────
+   Colors come from the campaign's own Appearance card as custom properties
+   (--cwp-*), set by widget-renderer.applyBubbleTheme — NOT from the chatbox
+   theme, so one shop can run a white welcome bubble and a black cart nudge. */
 .cw-proactive {
+  --cwp-bg: #ffffff;
+  --cwp-ink: #1a1a1f;
+  --cwp-btn: #1a1a1f;
+  --cwp-btn-ink: #ffffff;
   position: relative;
-  width: 300px;
+  width: 316px;
   max-width: calc(100vw - 40px);
-  background: var(--cw-surface);
-  border: 1px solid var(--cw-border);
-  border-radius: 14px;
+  background: var(--cwp-bg);
+  color: var(--cwp-ink);
+  border: 1px solid rgba(20, 20, 25, 0.08);
+  border-radius: 16px;
   box-shadow: var(--cw-shadow-md);
-  padding: 14px 14px 12px;
+  padding: 16px 14px 14px;
   margin-bottom: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
   animation: cw-pa-in 0.25s ease;
 }
 .cw-pos-top_right .cw-proactive,
 .cw-pos-top_left .cw-proactive { margin-bottom: 0; margin-top: 10px; }
+/* Templates with an overlapping headline pill need room for it. */
+.cw-pa--product_recommendation,
+.cw-pa--floater { margin-top: 16px; padding-top: 22px; }
+.cw-pos-top_right .cw-pa--product_recommendation,
+.cw-pos-top_left .cw-pa--product_recommendation,
+.cw-pos-top_right .cw-pa--floater,
+.cw-pos-top_left .cw-pa--floater { margin-top: 22px; }
+.cw-pa--tappable { cursor: pointer; }
 @keyframes cw-pa-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: none; }
 }
-.cw-pa-x { position: absolute; top: 6px; right: 6px; color: var(--cw-muted-2); padding: 4px; line-height: 0; }
-.cw-pa-x:hover { color: var(--cw-ink); }
-.cw-pa-msg { font-size: 12.5px; color: var(--cw-ink); line-height: 1.5; padding-right: 18px; }
-.cw-pa-cta {
-  background: linear-gradient(135deg, var(--cw1), var(--cw2));
-  color: #fff;
-  border-radius: 10px;
+
+.cw-pa-body { display: flex; flex-direction: column; gap: 10px; }
+.cw-pa-x {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  color: var(--cwp-ink);
+  opacity: 0.45;
+  padding: 4px;
+  line-height: 0;
+  z-index: 2;
+}
+.cw-pa-x:hover { opacity: 1; }
+
+/* Headline pill, overlapping the top edge like the design. */
+.cw-pa-badge {
+  position: absolute;
+  top: -11px;
+  left: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 40px);
+  padding: 5px 11px;
+  border-radius: 20px;
+  background: var(--cwp-btn);
+  color: var(--cwp-btn-ink);
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 1.3;
+  box-shadow: 0 4px 12px rgba(20, 20, 25, 0.18);
+}
+.cw-pa-badge-i { display: inline-flex; line-height: 0; flex: none; }
+.cw-pa-badge span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cw-pa-msg { font-size: 13px; color: var(--cwp-ink); line-height: 1.5; padding-right: 16px; }
+.cw-pa-msg p { margin: 0 0 6px; }
+.cw-pa-msg p:last-child { margin-bottom: 0; }
+.cw-pa-msg ul, .cw-pa-msg ol { margin: 0 0 6px; padding-left: 18px; }
+.cw-pa-msg a { color: inherit; text-decoration: underline; }
+.cw-pa-note {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--cwp-ink);
+  opacity: 0.72;
+  border-left: 2px solid currentColor;
+  padding-left: 8px;
+}
+
+/* Product row (recommendation cards + the floater's anchor product). */
+.cw-pa-prod {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 12px;
+  background: rgba(127, 127, 140, 0.09);
+}
+.cw-pa-prod-img {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border-radius: 8px;
+  object-fit: cover;
+  background: rgba(127, 127, 140, 0.16);
+}
+.cw-pa-prod-body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.cw-pa-prod-t {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--cwp-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cw-pa-prod-p { font-size: 12px; color: var(--cwp-ink); opacity: 0.75; }
+
+/* Variant chips (Smart Product Page). */
+.cw-pa-variants { display: flex; flex-wrap: wrap; gap: 4px; }
+.cw-pa-variant {
+  min-width: 26px;
+  padding: 3px 7px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--cwp-ink);
+  background: transparent;
+  border: 1px solid rgba(127, 127, 140, 0.35);
+  line-height: 1.4;
+}
+.cw-pa-variant.is-on {
+  background: var(--cwp-btn);
+  color: var(--cwp-btn-ink);
+  border-color: var(--cwp-btn);
+}
+.cw-pa-variant--out { opacity: 0.4; text-decoration: line-through; }
+.cw-pa-rec { font-size: 10.5px; font-weight: 600; color: #e07a1f; }
+
+/* Actions. */
+.cw-pa-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.cw-pa-btn {
+  flex: 1 1 0;
+  min-width: 96px;
+  border-radius: 9px;
   padding: 9px 12px;
   font-size: 12.5px;
   font-weight: 650;
-  align-self: flex-start;
+  line-height: 1.2;
+  text-align: center;
+  border: 1px solid transparent;
 }
-.cw-proactive .cw-cards { margin: 0 -2px; }
-.cw-proactive .cw-card { width: 132px; }
-.cw-proactive .cw-card-img { height: 92px; }
+.cw-pa-btn--solid { background: var(--cwp-btn); color: var(--cwp-btn-ink); }
+.cw-pa-btn--ghost {
+  background: transparent;
+  color: var(--cwp-ink);
+  border-color: rgba(127, 127, 140, 0.35);
+}
+.cw-pa-btn--block { flex: none; width: 100%; }
+.cw-pa-btn[disabled] { opacity: 0.6; cursor: default; }
+
+/* Quick-question chips (Text → Quick question). */
+.cw-pa-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.cw-pa-chip {
+  border-radius: 20px;
+  padding: 6px 11px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cwp-ink);
+  background: transparent;
+  border: 1px solid rgba(127, 127, 140, 0.35);
+}
+.cw-pa-chip:hover { background: rgba(127, 127, 140, 0.12); }
+
+/* Lead-capture form (Subscribe newsletter). */
+.cw-pa-form { display: flex; flex-direction: column; gap: 8px; }
+.cw-pa-input {
+  width: 100%;
+  border-radius: 9px;
+  border: 1px solid rgba(127, 127, 140, 0.35);
+  background: transparent;
+  color: var(--cwp-ink);
+  padding: 9px 11px;
+  font-size: 12.5px;
+  font-family: inherit;
+}
+.cw-pa-input::placeholder { color: var(--cwp-ink); opacity: 0.5; }
+.cw-pa-input:focus { outline: 2px solid var(--cwp-btn); outline-offset: -1px; }
 
 /* ── Footer ────────────────────────────────────────────────────────────── */
 .cw-foot { text-align: center; font-size: 10.5px; color: var(--cw-muted-2); padding: 8px; background: var(--cw-surface); flex: none; }

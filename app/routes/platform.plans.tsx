@@ -191,6 +191,9 @@ export default function PlatformPlans() {
             QUOTA_DIMENSIONS.map((dim) => [dim, Math.floor(num(draft.quotas[dim], defaults.quotas[dim]))]),
           ),
           features: draft.features,
+          // Stamp the list this screen actually offered, so features shipped
+          // later are not mistaken for ones deliberately switched off.
+          knownFeatures: GATED_FEATURES,
         }),
       },
       { method: "post" },

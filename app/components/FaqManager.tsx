@@ -17,6 +17,10 @@ import { htmlTextLength, RichTextEditor } from "./ui/RichTextEditor";
 // free emoji input). Legacy rows may still hold an emoji; CategoryIcon falls
 // back to rendering it as text.
 const ICON_PRESETS = [
+  // "page" is the default a new category is created with (faq.server.ts) and
+  // MUST stay in this list: CategoryIcon renders anything it doesn't know as
+  // literal text, which is what printed "page Warranty" in the tree.
+  "page",
   "exchange",
   "cart",
   "return",
@@ -31,11 +35,13 @@ const ICON_PRESETS = [
 type FaqIcon = (typeof ICON_PRESETS)[number];
 
 function CategoryIcon(props: { icon: string }) {
-  return (ICON_PRESETS as readonly string[]).includes(props.icon) ? (
-    <s-icon type={props.icon as FaqIcon} size="small" />
-  ) : (
-    <>{props.icon}</>
-  );
+  if ((ICON_PRESETS as readonly string[]).includes(props.icon)) {
+    return <s-icon type={props.icon as FaqIcon} size="small" />;
+  }
+  // Legacy emoji rows render as text (see note above). An unrecognised icon
+  // SLUG must not — that just prints the slug beside the category name.
+  const isEmoji = (props.icon.codePointAt(0) ?? 0) > 127;
+  return isEmoji ? <>{props.icon}</> : <s-icon type="page" size="small" />;
 }
 
 // Row hover elevation (design faq.png — Chatty-style): inline styles can't

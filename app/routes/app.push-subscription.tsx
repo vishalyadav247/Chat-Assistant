@@ -4,6 +4,7 @@ import { z } from "zod";
 import db from "../db.server";
 import { requireWebSurface } from "../lib/access.server";
 import { hasFeature } from "../lib/billing/plans.server";
+import { logWarn } from "../lib/log.server";
 
 // Web Push subscription store (spec 18). Web surface only — the browser posts
 // PushSubscription.toJSON() after permission is granted; DELETE drops it.
@@ -33,6 +34,27 @@ const subscriptionSchema = z.object({
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { shopId, member } = await requireWebSurface(request);
   const body = await request.json().catch(() => null);
+
+  // Client-side failure report (push-client.ts). Enabling notifications fails
+  // on the member's own device, where no server log would otherwise see it —
+  // this puts the real cause in /platform/logs.
+  if (body && typeof body === "object" && "report" in body) {
+    const raw = (body as { report: Record<string, unknown> }).report ?? {};
+    const pick = (key: string) => String(raw[key] ?? "").slice(0, 200);
+    logWarn(
+      "push_enable_failed",
+      `${pick("reason")} — ${pick("detail")}`,
+      {
+        shopId,
+        memberId: member.id,
+        state: pick("state"),
+        origin: pick("origin"),
+        standalone: Boolean(raw.standalone),
+        userAgent: request.headers.get("user-agent")?.slice(0, 300) ?? null,
+      },
+    );
+    return { ok: true };
+  }
 
   if (request.method === "DELETE") {
     const endpoint = typeof body?.endpoint === "string" ? body.endpoint : "";

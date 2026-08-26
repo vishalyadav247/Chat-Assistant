@@ -12,6 +12,7 @@ import {
   type DateFormat,
   type TimeFormat,
 } from "../lib/format/datetime";
+import type { TimezoneOption } from "../lib/format/timezones";
 import type { MemberRow } from "../lib/team/team.server";
 import type { TeamIntentResult } from "../lib/team/team-intents.server";
 import { BrowseModalShell } from "./BrowseProductsModal";
@@ -49,10 +50,13 @@ export function SettingsGeneral(props: {
   /** Global date/time display format (spec 16 delta 2026-08-19). */
   dateFormat: DateFormat;
   timeFormat: TimeFormat;
+  /** Store time zone — lives here with the formats it applies to. */
   timeZone: string;
+  /** Offset-sorted, offset-labelled IANA list built in the loader. */
+  timezoneOptions: TimezoneOption[];
+  onTimeZoneChange: (value: string) => void;
   onDateFormatChange: (value: DateFormat) => void;
   onTimeFormatChange: (value: TimeFormat) => void;
-  onOpenAvailability: () => void;
   placeholderName: string;
   logoUrl: string | null;
   theme: Theme;
@@ -201,84 +205,112 @@ export function SettingsGeneral(props: {
   return (
     <s-stack gap="base">
       <s-section heading="Store information">
-        <s-paragraph>Name and logo will be shown in conversations with customers</s-paragraph>
         <s-stack gap="base">
-          <s-box maxInlineSize="360px">
-            <s-text-field
-              label="Name"
-              maxLength={100}
-              value={props.name}
-              placeholder={props.placeholderName}
-              onInput={(e) => props.onNameChange(e.currentTarget.value)}
-            />
-          </s-box>
-          {/* Logo below the name (user request 2026-08-17); ✕ removes it
-              (immediate, like the upload — own fetcher, not the save bar). */}
-          <s-stack gap="small">
-            <s-text>Logo</s-text>
-            <s-stack direction="inline" gap="base" alignItems="center">
-              <div style={{ position: "relative" }}>
-                {/* Same box + placeholder as the chatbox header logo (user
-                    request 2026-08-17) — no initials avatar here. */}
-                <s-thumbnail size="large" src={props.logoUrl ?? undefined} alt="Store logo" />
-                {props.logoUrl ? (
-                  <button
-                    type="button"
-                    aria-label="Remove logo"
-                    title="Remove logo"
-                    disabled={removing || uploading}
-                    onClick={() => {
-                      const fd = new FormData();
-                      fd.set("intent", "remove-logo");
-                      uploadFetcher.submit(fd, { method: "post" });
-                    }}
-                    style={{
-                      position: "absolute",
-                      top: -6,
-                      right: -6,
-                      width: 18,
-                      height: 18,
-                      padding: 0,
-                      borderRadius: "50%",
-                      border: "1px solid var(--s-color-border, #d4d4d8)",
-                      background: "var(--s-color-bg, #fff)",
-                      boxShadow: "0 1px 2px rgba(20,20,25,.18)",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      cursor: "pointer",
-                      fontSize: 10,
-                      lineHeight: 1,
-                      color: "var(--s-color-text-secondary, #5a5a63)",
-                    }}
+          <s-paragraph>Name and logo will be shown in conversations with customers</s-paragraph>
+          <s-stack gap="base">
+            <s-box maxInlineSize="360px">
+              <s-text-field
+                label="Name"
+                maxLength={100}
+                value={props.name}
+                placeholder={props.placeholderName}
+                onInput={(e) => props.onNameChange(e.currentTarget.value)}
+              />
+            </s-box>
+            {/* Logo below the name (user request 2026-08-17); ✕ removes it
+                (immediate, like the upload — own fetcher, not the save bar). */}
+            <s-stack gap="small">
+              <s-text>Logo</s-text>
+              <s-stack direction="inline" gap="base" alignItems="center">
+                <div style={{ position: "relative" }}>
+                  {/* Same box + placeholder as the chatbox header logo (user
+                      request 2026-08-17) — no initials avatar here. */}
+                  <s-thumbnail size="large" src={props.logoUrl ?? undefined} alt="Store logo" />
+                  {props.logoUrl ? (
+                    <button
+                      type="button"
+                      aria-label="Remove logo"
+                      title="Remove logo"
+                      disabled={removing || uploading}
+                      onClick={() => {
+                        const fd = new FormData();
+                        fd.set("intent", "remove-logo");
+                        uploadFetcher.submit(fd, { method: "post" });
+                      }}
+                      style={{
+                        position: "absolute",
+                        top: -6,
+                        right: -6,
+                        width: 18,
+                        height: 18,
+                        padding: 0,
+                        borderRadius: "50%",
+                        border: "1px solid var(--s-color-border, #d4d4d8)",
+                        background: "var(--s-color-bg, #fff)",
+                        boxShadow: "0 1px 2px rgba(20,20,25,.18)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        cursor: "pointer",
+                        fontSize: 10,
+                        lineHeight: 1,
+                        color: "var(--s-color-text-secondary, #5a5a63)",
+                      }}
+                    >
+                      ✕
+                    </button>
+                  ) : null}
+                </div>
+                <s-stack gap="small-200">
+                  <s-button
+                    icon="upload"
+                    disabled={uploading || removing}
+                    onClick={() => fileRef.current?.click()}
                   >
-                    ✕
-                  </button>
-                ) : null}
-              </div>
-              <s-stack gap="small-200">
-                <s-button
-                  icon="upload"
-                  disabled={uploading || removing}
-                  onClick={() => fileRef.current?.click()}
-                >
-                  {uploading ? "Uploading…" : props.logoUrl ? "Change logo" : "Upload logo"}
-                </s-button>
-                {/* Same file guidance as the chatbox logo/icon uploads. */}
-                <s-text tone="neutral">SVG, PNG or JPG · square, up to 2MB</s-text>
+                    {uploading ? "Uploading…" : props.logoUrl ? "Change logo" : "Upload logo"}
+                  </s-button>
+                  {/* Same file guidance as the chatbox logo/icon uploads. */}
+                  <s-text tone="neutral">SVG, PNG or JPG · square, up to 2MB</s-text>
+                </s-stack>
               </s-stack>
             </s-stack>
           </s-stack>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/svg+xml"
+            style={{ display: "none" }}
+            aria-label="Upload store logo"
+            onChange={onFile}
+          />
         </s-stack>
-        {/* ── Date & time format (global; merchants worldwide) ─────────── */}
-        <s-stack gap="small-200">
-          <s-text type="strong">Date &amp; time format</s-text>
-          <s-text tone="neutral">
-            Used everywhere in ChatConvert — inbox, contacts, analytics, exports. Times are shown in your store
-            time zone ({props.timeZone}) —{" "}
-            <s-link onClick={props.onOpenAvailability}>change it in Chat availability</s-link>.
-          </s-text>
-          <s-grid gridTemplateColumns={isMobile ? "minmax(0,1fr)" : "minmax(0,1fr) minmax(0,1fr)"} gap="base">
+      </s-section>
+
+      {/* Store time zone + the formats it feeds, together in one card: the
+          zone used to live under Chat availability, where merchants looking
+          for a display setting never found it (user request). */}
+      <s-section heading="Date & time settings">
+        <s-stack gap="base">
+          <s-paragraph>
+            Applies everywhere in ChatConvert — inbox, contacts, analytics and exports — and to
+            the working hours you set in Chat availability.
+          </s-paragraph>
+          <s-select
+            label="Store time zone"
+            details="Times are displayed, and working hours interpreted, in this zone."
+            value={props.timeZone}
+            onChange={(e) => props.onTimeZoneChange(e.currentTarget.value)}
+          >
+            {props.timezoneOptions.map((tz) => (
+              <s-option key={tz.value} value={tz.value}>
+                {tz.label}
+              </s-option>
+            ))}
+          </s-select>
+          <s-grid
+            gridTemplateColumns={isMobile ? "minmax(0,1fr)" : "minmax(0,1fr) minmax(0,1fr)"}
+            gap="base"
+          >
             <s-select
               label="Date format"
               value={props.dateFormat}
@@ -304,241 +336,243 @@ export function SettingsGeneral(props: {
           </s-grid>
           <s-text tone="neutral">
             Example:{" "}
-            {formatDateTime(SAMPLE_INSTANT, { dateFormat: props.dateFormat, timeFormat: props.timeFormat, timeZone: props.timeZone })}
+            {formatDateTime(SAMPLE_INSTANT, {
+              dateFormat: props.dateFormat,
+              timeFormat: props.timeFormat,
+              timeZone: props.timeZone,
+            })}
           </s-text>
         </s-stack>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/png,image/jpeg,image/webp,image/svg+xml"
-          style={{ display: "none" }}
-          aria-label="Upload store logo"
-          onChange={onFile}
-        />
       </s-section>
 
       <s-section heading="Theme">
-        <s-select
-          label="Storefront theme"
-          value={props.theme}
-          details="Helps the widget talk to your theme's cart (count bubble + drawer). Auto-detect works for most stores — pick your theme family only if the cart drawer doesn't open after an add to cart."
-          onChange={(e) => props.onThemeChange(e.currentTarget.value as Theme)}
-        >
-          <s-option value="auto">Auto-detect (recommended)</s-option>
-          <s-option value="dawn">Dawn</s-option>
-          <s-option value="refresh">Refresh</s-option>
-          <s-option value="craft">Craft</s-option>
-          <s-option value="custom">Custom</s-option>
-        </s-select>
-        <s-divider />
-        <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">
-          <s-stack direction="inline" gap="small" alignItems="center">
-            <s-text>App is embedded to your theme</s-text>
-            <s-badge tone={embedBadge.tone}>{embedBadge.label}</s-badge>
-          </s-stack>
-          <s-button
-            onClick={() =>
-              window.open(
-                `https://${props.shopDomain}/admin/themes/current/editor?context=apps${props.apiKey ? `&activateAppId=${props.apiKey}/chat-widget` : ""}`,
-                "_blank",
-              )
-            }
+        <s-stack gap="base">
+          <s-select
+            label="Storefront theme"
+            value={props.theme}
+            details="Helps the widget talk to your theme's cart (count bubble + drawer). Auto-detect works for most stores — pick your theme family only if the cart drawer doesn't open after an add to cart."
+            onChange={(e) => props.onThemeChange(e.currentTarget.value as Theme)}
           >
-            Turn on
-          </s-button>
+            <s-option value="auto">Auto-detect (recommended)</s-option>
+            <s-option value="dawn">Dawn</s-option>
+            <s-option value="refresh">Refresh</s-option>
+            <s-option value="craft">Craft</s-option>
+            <s-option value="custom">Custom</s-option>
+          </s-select>
+          <s-divider />
+          <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">
+            <s-stack direction="inline" gap="small" alignItems="center">
+              <s-text>App is embedded to your theme</s-text>
+              <s-badge tone={embedBadge.tone}>{embedBadge.label}</s-badge>
+            </s-stack>
+            <s-button
+              onClick={() =>
+                window.open(
+                  `https://${props.shopDomain}/admin/themes/current/editor?context=apps${props.apiKey ? `&activateAppId=${props.apiKey}/chat-widget` : ""}`,
+                  "_blank",
+                )
+              }
+            >
+              Turn on
+            </s-button>
+          </s-stack>
         </s-stack>
       </s-section>
 
       <s-section heading="Inbox">
-        <s-switch
-          label="Automatic resolution"
-          details="Auto resolve conversations since the last message was sent by your team"
-          checked={props.inbox.autoResolve}
-          onChange={(e) => props.onInboxChange({ ...props.inbox, autoResolve: e.currentTarget.checked })}
-        />
-        {props.inbox.autoResolve ? (
-          <s-stack direction="inline" gap="base" alignItems="end">
-            <s-box minInlineSize="150px">
-              <s-number-field
-                label="Auto resolve after"
-                min={1}
-                value={String(props.inbox.after)}
-                onChange={(e) => {
-                  const after = Math.max(1, Math.floor(Number(e.currentTarget.value) || 1));
-                  props.onInboxChange({ ...props.inbox, after });
-                }}
-              />
-            </s-box>
-            <s-box minInlineSize="150px">
-              <s-select
-                label="Unit"
-                labelAccessibilityVisibility="exclusive"
-                value={props.inbox.unit}
-                onChange={(e) =>
-                  props.onInboxChange({ ...props.inbox, unit: e.currentTarget.value as Inbox["unit"] })
-                }
-              >
-                <s-option value="minute">Minute</s-option>
-                <s-option value="hour">Hour</s-option>
-                <s-option value="day">Day</s-option>
-              </s-select>
-            </s-box>
-          </s-stack>
-        ) : null}
+        <s-stack gap="base">
+          <s-switch
+            label="Automatic resolution"
+            details="Auto resolve conversations since the last message was sent by your team"
+            checked={props.inbox.autoResolve}
+            onChange={(e) => props.onInboxChange({ ...props.inbox, autoResolve: e.currentTarget.checked })}
+          />
+          {props.inbox.autoResolve ? (
+            <s-stack direction="inline" gap="base" alignItems="end">
+              <s-box minInlineSize="150px">
+                <s-number-field
+                  label="Auto resolve after"
+                  min={1}
+                  value={String(props.inbox.after)}
+                  onChange={(e) => {
+                    const after = Math.max(1, Math.floor(Number(e.currentTarget.value) || 1));
+                    props.onInboxChange({ ...props.inbox, after });
+                  }}
+                />
+              </s-box>
+              <s-box minInlineSize="150px">
+                <s-select
+                  label="Unit"
+                  labelAccessibilityVisibility="exclusive"
+                  value={props.inbox.unit}
+                  onChange={(e) =>
+                    props.onInboxChange({ ...props.inbox, unit: e.currentTarget.value as Inbox["unit"] })
+                  }
+                >
+                  <s-option value="minute">Minute</s-option>
+                  <s-option value="hour">Hour</s-option>
+                  <s-option value="day">Day</s-option>
+                </s-select>
+              </s-box>
+            </s-stack>
+          ) : null}
+        </s-stack>
       </s-section>
 
       <s-section heading="Team members">
-        <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">
-          <s-paragraph>
-            Invite teammates to review and reply to conversations in the ChatConvert web app —
-            no Shopify staff account needed.
-          </s-paragraph>
-          <s-stack direction="inline" gap="small" alignItems="center">
-            <OpenInWebButton />
-            <s-button
-              icon="person-add"
-              variant="primary"
-              disabled={seatsLeft === 0}
-              onClick={() => setInviteOpen(true)}
-            >
-              Invite member
-            </s-button>
+        <s-stack gap="base">
+          <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">
+            <s-paragraph>
+              Invite teammates to review and reply to conversations in the ChatConvert web app —
+              no Shopify staff account needed.
+            </s-paragraph>
+            <s-stack direction="inline" gap="small" alignItems="center">
+              <OpenInWebButton />
+              <s-button
+                icon="person-add"
+                variant="primary"
+                disabled={seatsLeft === 0}
+                onClick={() => setInviteOpen(true)}
+              >
+                Invite member
+              </s-button>
+            </s-stack>
           </s-stack>
-        </s-stack>
-        <s-text tone="neutral">
-          {props.team.seatQuota === null
-            ? `${props.team.seatsUsed} team member${props.team.seatsUsed === 1 ? "" : "s"}`
-            : `${props.team.seatsUsed} of ${props.team.seatQuota} team seat${props.team.seatQuota === 1 ? "" : "s"} used${seatsLeft === 0 ? " — upgrade your plan to invite more." : ""}`}
-        </s-text>
-        {!props.team.emailConfigured ? (
-          <s-banner tone="info">
-            Invitation emails aren&apos;t configured on this server yet — after inviting someone, copy the
-            invitation link and send it to them yourself.
-          </s-banner>
-        ) : null}
-        <s-search-field
-          label="Search team members"
-          labelAccessibilityVisibility="exclusive"
-          placeholder="Search team member by name or email"
-          value={teamQuery}
-          onInput={(e) => setTeamQuery(e.currentTarget.value)}
-        />
-        <s-table variant="auto">
-          <s-table-header-row>
-            <s-table-header>Name</s-table-header>
-            <s-table-header>Email</s-table-header>
-            <s-table-header>Member since</s-table-header>
-            <s-table-header>Role</s-table-header>
-            <s-table-header>Status</s-table-header>
-            <s-table-header> </s-table-header>
-          </s-table-header-row>
-          <s-table-body>
-            {ownerVisible ? (
-              <s-table-row>
-                <s-table-cell>
-                  <s-stack direction="inline" gap="small" alignItems="center">
-                    <s-avatar size="small" initials={initials} alt={props.owner.name} />
-                    <s-text>{props.owner.name}</s-text>
-                  </s-stack>
-                </s-table-cell>
-                <s-table-cell>{props.owner.email}</s-table-cell>
-                <s-table-cell>{props.owner.since}</s-table-cell>
-                <s-table-cell>Owner</s-table-cell>
-                <s-table-cell>
-                  <s-badge tone="success">Active</s-badge>
-                </s-table-cell>
-                <s-table-cell> </s-table-cell>
-              </s-table-row>
-            ) : null}
-            {visibleMembers.map((member) => {
-              const isSelf = props.team.selfId === member.id;
-              return (
-                <s-table-row key={member.id}>
+          <s-text tone="neutral">
+            {props.team.seatQuota === null
+              ? `${props.team.seatsUsed} team member${props.team.seatsUsed === 1 ? "" : "s"}`
+              : `${props.team.seatsUsed} of ${props.team.seatQuota} team seat${props.team.seatQuota === 1 ? "" : "s"} used${seatsLeft === 0 ? " — upgrade your plan to invite more." : ""}`}
+          </s-text>
+          {!props.team.emailConfigured ? (
+            <s-banner tone="info">
+              Invitation emails aren&apos;t configured on this server yet — after inviting someone, copy the
+              invitation link and send it to them yourself.
+            </s-banner>
+          ) : null}
+          <s-search-field
+            label="Search team members"
+            labelAccessibilityVisibility="exclusive"
+            placeholder="Search team member by name or email"
+            value={teamQuery}
+            onInput={(e) => setTeamQuery(e.currentTarget.value)}
+          />
+          <s-table variant="auto">
+            <s-table-header-row>
+              <s-table-header>Name</s-table-header>
+              <s-table-header>Email</s-table-header>
+              <s-table-header>Member since</s-table-header>
+              <s-table-header>Role</s-table-header>
+              <s-table-header>Status</s-table-header>
+              <s-table-header> </s-table-header>
+            </s-table-header-row>
+            <s-table-body>
+              {ownerVisible ? (
+                <s-table-row>
                   <s-table-cell>
                     <s-stack direction="inline" gap="small" alignItems="center">
-                      <s-avatar size="small" initials={memberInitials(member.name)} alt={member.name} />
-                      <s-text>
-                        {member.name}
-                        {isSelf ? " (you)" : ""}
-                      </s-text>
+                      <s-avatar size="small" initials={initials} alt={props.owner.name} />
+                      <s-text>{props.owner.name}</s-text>
                     </s-stack>
                   </s-table-cell>
-                  <s-table-cell>{member.email}</s-table-cell>
-                  <s-table-cell>{member.since || "—"}</s-table-cell>
+                  <s-table-cell>{props.owner.email}</s-table-cell>
+                  <s-table-cell>{props.owner.since}</s-table-cell>
+                  <s-table-cell>Owner</s-table-cell>
                   <s-table-cell>
-                    <s-select
-                      label={`Role for ${member.name}`}
-                      labelAccessibilityVisibility="exclusive"
-                      value={member.role}
-                      disabled={teamBusy || isSelf}
-                      onChange={(e) =>
-                        submitTeam("team-role", { id: member.id, role: e.currentTarget.value })
-                      }
-                    >
-                      <s-option value="admin">Admin</s-option>
-                      <s-option value="agent">Agent</s-option>
-                    </s-select>
+                    <s-badge tone="success">Active</s-badge>
                   </s-table-cell>
-                  <s-table-cell>{statusBadge(member)}</s-table-cell>
-                  <s-table-cell>
-                    <s-stack direction="inline" gap="small-200" alignItems="center">
-                      {member.status === "invited" ? (
-                        <s-button
-                          variant="tertiary"
-                          icon="email"
-                          accessibilityLabel={`Resend invitation to ${member.name}`}
-                          disabled={teamBusy}
-                          onClick={() => submitTeam("team-resend", { id: member.id })}
-                        >
-                          Resend invite
-                        </s-button>
-                      ) : null}
-                      {member.status === "active" && !isSelf ? (
-                        <s-button
-                          variant="tertiary"
-                          icon="key"
-                          accessibilityLabel={`Password reset link for ${member.name}`}
-                          disabled={teamBusy}
-                          onClick={() => submitTeam("team-reset-link", { id: member.id })}
-                        >
-                          Reset link
-                        </s-button>
-                      ) : null}
-                      {member.status !== "invited" && !isSelf ? (
-                        <s-button
-                          variant="tertiary"
-                          accessibilityLabel={`${member.status === "disabled" ? "Enable" : "Disable"} ${member.name}`}
-                          disabled={teamBusy}
-                          onClick={() =>
-                            submitTeam("team-status", {
-                              id: member.id,
-                              status: member.status === "disabled" ? "active" : "disabled",
-                            })
-                          }
-                        >
-                          {member.status === "disabled" ? "Enable" : "Disable"}
-                        </s-button>
-                      ) : null}
-                      {!isSelf ? (
-                        <s-button
-                          variant="tertiary"
-                          tone="critical"
-                          icon="delete"
-                          accessibilityLabel={`Remove ${member.name}`}
-                          disabled={teamBusy}
-                          onClick={() => setRemoveTarget(member)}
-                        />
-                      ) : null}
-                    </s-stack>
-                  </s-table-cell>
+                  <s-table-cell> </s-table-cell>
                 </s-table-row>
-              );
-            })}
-          </s-table-body>
-        </s-table>
-        {!ownerVisible && visibleMembers.length === 0 ? (
-          <s-text tone="neutral">No team members match your search.</s-text>
-        ) : null}
+              ) : null}
+              {visibleMembers.map((member) => {
+                const isSelf = props.team.selfId === member.id;
+                return (
+                  <s-table-row key={member.id}>
+                    <s-table-cell>
+                      <s-stack direction="inline" gap="small" alignItems="center">
+                        <s-avatar size="small" initials={memberInitials(member.name)} alt={member.name} />
+                        <s-text>
+                          {member.name}
+                          {isSelf ? " (you)" : ""}
+                        </s-text>
+                      </s-stack>
+                    </s-table-cell>
+                    <s-table-cell>{member.email}</s-table-cell>
+                    <s-table-cell>{member.since || "—"}</s-table-cell>
+                    <s-table-cell>
+                      <s-select
+                        label={`Role for ${member.name}`}
+                        labelAccessibilityVisibility="exclusive"
+                        value={member.role}
+                        disabled={teamBusy || isSelf}
+                        onChange={(e) =>
+                          submitTeam("team-role", { id: member.id, role: e.currentTarget.value })
+                        }
+                      >
+                        <s-option value="admin">Admin</s-option>
+                        <s-option value="agent">Agent</s-option>
+                      </s-select>
+                    </s-table-cell>
+                    <s-table-cell>{statusBadge(member)}</s-table-cell>
+                    <s-table-cell>
+                      <s-stack direction="inline" gap="small-200" alignItems="center">
+                        {member.status === "invited" ? (
+                          <s-button
+                            variant="tertiary"
+                            icon="email"
+                            accessibilityLabel={`Resend invitation to ${member.name}`}
+                            disabled={teamBusy}
+                            onClick={() => submitTeam("team-resend", { id: member.id })}
+                          >
+                            Resend invite
+                          </s-button>
+                        ) : null}
+                        {member.status === "active" && !isSelf ? (
+                          <s-button
+                            variant="tertiary"
+                            icon="key"
+                            accessibilityLabel={`Password reset link for ${member.name}`}
+                            disabled={teamBusy}
+                            onClick={() => submitTeam("team-reset-link", { id: member.id })}
+                          >
+                            Reset link
+                          </s-button>
+                        ) : null}
+                        {member.status !== "invited" && !isSelf ? (
+                          <s-button
+                            variant="tertiary"
+                            accessibilityLabel={`${member.status === "disabled" ? "Enable" : "Disable"} ${member.name}`}
+                            disabled={teamBusy}
+                            onClick={() =>
+                              submitTeam("team-status", {
+                                id: member.id,
+                                status: member.status === "disabled" ? "active" : "disabled",
+                              })
+                            }
+                          >
+                            {member.status === "disabled" ? "Enable" : "Disable"}
+                          </s-button>
+                        ) : null}
+                        {!isSelf ? (
+                          <s-button
+                            variant="tertiary"
+                            tone="critical"
+                            icon="delete"
+                            accessibilityLabel={`Remove ${member.name}`}
+                            disabled={teamBusy}
+                            onClick={() => setRemoveTarget(member)}
+                          />
+                        ) : null}
+                      </s-stack>
+                    </s-table-cell>
+                  </s-table-row>
+                );
+              })}
+            </s-table-body>
+          </s-table>
+          {!ownerVisible && visibleMembers.length === 0 ? (
+            <s-text tone="neutral">No team members match your search.</s-text>
+          ) : null}
+        </s-stack>
       </s-section>
 
       {/* ── Leave a review (manual fallback for merchants the review modal

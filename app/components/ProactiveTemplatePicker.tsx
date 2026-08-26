@@ -115,7 +115,7 @@ export function ProactiveTemplatePicker(props: {
                         padding: "4px 10px",
                       }}
                     >
-                      {tpl.defaults.ctaLabel}
+                      {tpl.previewCta}
                     </span>
                   </div>
                 </div>

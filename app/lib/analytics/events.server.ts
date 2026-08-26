@@ -45,6 +45,7 @@ export type AnalyticsEventType =
   | "campaign_click"
   | "campaign_atc"
   | "campaign_order"
+  | "campaign_lead"
   // 08 test AI
   | "test_feedback"
   // 15 billing

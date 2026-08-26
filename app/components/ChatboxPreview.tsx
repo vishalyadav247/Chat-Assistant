@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { WidgetSettingsData } from "../lib/settings/schemas";
 import { useIsMobile } from "../lib/ui/use-mobile";
+import { ensureWidgetPreviewAssets } from "../lib/ui/widget-preview-assets";
 
 // Live preview (spec 06) with parity BY CONSTRUCTION: it injects the exact
 // storefront assets (extensions/chat-widget/assets/widget-renderer.js + .css,
@@ -64,9 +65,6 @@ declare global {
   }
 }
 
-const STYLE_ID = "chatconvert-preview-widget-css";
-const SCRIPT_ID = "chatconvert-preview-renderer-js";
-
 // Admin-only layout overrides: un-fix the widget (it renders inside the
 // preview column, not the viewport) — visual styling stays 100% storefront CSS.
 const PREVIEW_CSS = `
@@ -83,23 +81,6 @@ const PREVIEW_CSS = `
 .ccpv .cw-body{max-height:none;}
 }
 `;
-
-function ensureAssets(rendererJs: string, widgetCss: string): boolean {
-  if (typeof document === "undefined") return false;
-  if (!document.getElementById(STYLE_ID)) {
-    const style = document.createElement("style");
-    style.id = STYLE_ID;
-    style.textContent = widgetCss + PREVIEW_CSS;
-    document.head.appendChild(style);
-  }
-  if (!window.ChatConvertRenderer && !document.getElementById(SCRIPT_ID)) {
-    const script = document.createElement("script");
-    script.id = SCRIPT_ID;
-    script.textContent = rendererJs; // executes synchronously on append
-    document.head.appendChild(script);
-  }
-  return Boolean(window.ChatConvertRenderer);
-}
 
 export function ChatboxPreview(props: {
   settings: WidgetSettingsData;
@@ -134,7 +115,14 @@ export function ChatboxPreview(props: {
   isMobileRef.current = isMobile;
 
   useEffect(() => {
-    setReady(ensureAssets(props.rendererJs, props.widgetCss));
+    setReady(
+      ensureWidgetPreviewAssets(
+        props.rendererJs,
+        props.widgetCss,
+        "chatconvert-preview-chatbox-css",
+        PREVIEW_CSS,
+      ),
+    );
   }, [props.rendererJs, props.widgetCss]);
 
   // Runs on mount (desktop: no-op) and whenever the viewport crosses the

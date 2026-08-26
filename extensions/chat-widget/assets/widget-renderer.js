@@ -115,7 +115,11 @@
   }
 
   function welcomeText(template, customerName) {
-    return String(template || "").replace(/\{\{\s*customer_name\s*\}\}/g, customerName || "there");
+    // typeof guard, not String(): a non-string here means the caller and this
+    // builder disagree about the payload shape, and String({}) would paint
+    // "[object Object]" into the shopper's bubble rather than failing quietly.
+    var text = typeof template === "string" ? template : "";
+    return text.replace(/\{\{\s*customer_name\s*\}\}/g, customerName || "there");
   }
 
   /* Campaign message merge tags (spec 12): {{customer_name}} + {{cart_total}}.
@@ -494,24 +498,55 @@
     return wrap;
   }
 
-  /** Message input bar. cb.onSend(text). */
+  /** Message input bar. cb.onSend(text).
+   *  The field is a textarea, not an input, so a long message grows the box
+   *  instead of scrolling sideways — up to COMPOSER_MAX_ROWS lines, then it
+   *  scrolls. (The Shift+Enter branch below was already written but was dead
+   *  on an <input>, which cannot hold a newline.) */
+  var COMPOSER_MAX_ROWS = 3;
   function inputBar(cb) {
     var bar = el("div", "cw-input");
-    var input = el("input", null, {
-      type: "text",
+    var input = el("textarea", "cw-composer", {
+      rows: "1",
       placeholder: "Type your message…",
       "aria-label": "Type your message",
       maxlength: "2000",
     });
     var send = el("button", "cw-send", { type: "button", "aria-label": "Send message" });
     svg(send, ICONS.send);
+    // Height is measured from the LIVE computed style rather than a constant:
+    // the merchant's theme font and the 16px mobile override both change the
+    // line height, so a hard-coded px cap would be wrong on half of stores.
+    function autoGrow() {
+      input.style.height = "auto";
+      // The bar is created display:none and only shown on the chat screen; a
+      // hidden textarea measures 0, which would lock in a collapsed height.
+      // Leave the CSS one-row height alone and let the next keystroke size it.
+      if (!input.scrollHeight) {
+        input.style.height = "";
+        return;
+      }
+      var cs = window.getComputedStyle(input);
+      var line = parseFloat(cs.lineHeight);
+      if (!line) line = parseFloat(cs.fontSize) * 1.45 || 18;
+      // scrollHeight covers content + padding; border-box height adds borders.
+      var chrome =
+        (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+      var pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+      var max = Math.ceil(line * COMPOSER_MAX_ROWS + pad + chrome);
+      var full = input.scrollHeight + chrome;
+      input.style.height = Math.min(full, max) + "px";
+      input.style.overflowY = full > max ? "auto" : "hidden";
+    }
     function submit() {
       var text = input.value.trim();
       if (!text) return;
       input.value = "";
+      autoGrow();
       if (cb && cb.onSend) cb.onSend(text);
     }
     send.addEventListener("click", submit);
+    input.addEventListener("input", autoGrow);
     input.addEventListener("keydown", function (e) {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
@@ -520,7 +555,10 @@
     });
     bar.appendChild(input);
     bar.appendChild(send);
-    return { el: bar, inputEl: input, sendEl: send };
+    // The first measurement has to wait until the bar is in the document —
+    // getComputedStyle on a detached node reports no line-height.
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(autoGrow);
+    return { el: bar, inputEl: input, sendEl: send, autoGrow: autoGrow };
   }
 
   // ── order tracking screen ────────────────────────────────────────────────
@@ -1143,53 +1181,361 @@
   }
 
   // ── proactive campaign bubble (spec 12) ──────────────────────────────────
-  /** Bubble/floater rendered above the launcher when a campaign fires.
-   *  campaign: lean widget shape {message, ctaLabel, products[], ...}.
-   *  cb: onDismiss(), onCta(api), onAdd(card, api). api.confirm(text) swaps
-   *  the message for a confirmation and drops the CTA. */
+  /* One builder for every proactive-chat message type. Shared verbatim by the
+   * storefront shell and the admin "Message Preview" card, so what a merchant
+   * approves in the editor is byte-for-byte what a shopper sees.
+   *
+   * campaign — the lean widget shape from campaigns.server.ts:
+   *   { id, templateType, message: {...}, appearance: {...}, products: [] }
+   * opts     — { currency, customerName, cartTotal, anchor, preview }
+   *            anchor = the page's product (Smart Product Page chips + the
+   *            {{ option }} merge tag); preview:true disables network actions.
+   * cb       — { onDismiss, onCta(api, seed), onView(card, api),
+   *              onLead(values, api), onSelectVariant(option) }
+   *   api.confirm(text) swaps the body for a confirmation and drops the
+   *   actions; api.showLead() advances the discount flow to the lead form.
+   */
+
+  function escapeHtml(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  /* Merge tags inside the merchant's rich text. The HTML itself was allow-list
+   * sanitized server-side, but the SUBSTITUTED values are shopper data — they
+   * are escaped here so a customer named `<b>` can't inject markup. */
+  function campaignHtml(html, opts) {
+    opts = opts || {};
+    var name = escapeHtml(opts.customerName || "there");
+    var total =
+      typeof opts.cartTotal === "number"
+        ? escapeHtml(formatPrice(opts.cartTotal, opts.currency))
+        : "your cart";
+    // Same guard as welcomeText — never stringify a non-string into markup.
+    return (typeof html === "string" ? html : "")
+      .replace(/\{\{\s*customer_name\s*\}\}/g, name)
+      .replace(/\{\{\s*cart_total\s*\}\}/g, total);
+  }
+
+  /** {{ option }} → the anchor product's first variant-option name ("Size"). */
+  function floaterText(template, opts) {
+    var optionName = (opts && opts.anchor && opts.anchor.optionName) || "option";
+    return campaignText(String(template || "").replace(/\{\{\s*option\s*\}\}/g, optionName), opts);
+  }
+
+  /** Per-campaign colors ride as custom properties so the CSS stays static. */
+  function applyBubbleTheme(node, look) {
+    look = look || {};
+    node.style.setProperty("--cwp-bg", look.background || "#ffffff");
+    node.style.setProperty("--cwp-ink", look.textColor || "#1a1a1f");
+    node.style.setProperty("--cwp-btn", look.buttonBackground || "#1a1a1f");
+    node.style.setProperty("--cwp-btn-ink", look.buttonLabelColor || "#ffffff");
+  }
+
+  var SPARK =
+    '<svg width="12" height="12" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M10 1.5l1.6 4.6 4.6 1.6-4.6 1.6L10 14l-1.6-4.7L3.8 7.7l4.6-1.6L10 1.5Zm5.6 9.4l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2Z"/></svg>';
+
+  /** Headline pill that overlaps the bubble's top edge. */
+  function campaignBadge(text) {
+    var badge = el("span", "cw-pa-badge");
+    var mark = el("span", "cw-pa-badge-i");
+    svg(mark, SPARK);
+    badge.appendChild(mark);
+    var label = el("span");
+    label.textContent = text;
+    badge.appendChild(label);
+    return badge;
+  }
+
+  /** Compact product row: thumb | title + price (+ optional extra block). */
+  function campaignProductRow(card, currency, extra) {
+    var row = el("div", "cw-pa-prod");
+    if (card.imageUrl) {
+      row.appendChild(el("img", "cw-pa-prod-img", { src: card.imageUrl, alt: "", loading: "lazy" }));
+    } else {
+      row.appendChild(el("div", "cw-pa-prod-img"));
+    }
+    var body = el("div", "cw-pa-prod-body");
+    var title = el("div", "cw-pa-prod-t");
+    title.textContent = card.title;
+    body.appendChild(title);
+    if (extra) {
+      body.appendChild(extra);
+    } else {
+      var price = el("div", "cw-pa-prod-p");
+      price.textContent = formatPrice(card.price, currency);
+      body.appendChild(price);
+    }
+    row.appendChild(body);
+    return row;
+  }
+
+  /* Shopper-facing label for the recommendation source. Mirrors the editor's
+   * radio labels so the merchant recognises the bubble they configured. */
+  var RECOMMEND_LABELS = {
+    best_sellers: "Recommend best sellers",
+    new_arrivals: "Recommend new arrivals",
+    similar: "Recommend similar products",
+    complementary: "Recommend complementary products",
+    custom: "Recommended for you",
+  };
+
   function campaignBubble(campaign, opts, cb) {
     cb = cb || {};
-    var wrap = el("div", "cw-proactive", { role: "dialog", "aria-label": "Message from the store" });
+    opts = opts || {};
+    campaign = campaign || {};
+    var m = campaign.message || {};
+    var kind = m.kind || "text";
+    var currency = opts.currency;
+
+    var wrap = el("div", "cw-proactive cw-pa--" + kind, {
+      role: "dialog",
+      "aria-label": "Message from the store",
+    });
+    applyBubbleTheme(wrap, campaign.appearance);
 
     var x = el("button", "cw-pa-x", { type: "button", "aria-label": "Dismiss message" });
     svg(x, ICONS.close);
-    x.addEventListener("click", function () {
+    x.addEventListener("click", function (e) {
+      e.stopPropagation();
       if (cb.onDismiss) cb.onDismiss();
     });
     wrap.appendChild(x);
 
-    var msg = el("div", "cw-pa-msg");
-    setText(msg, campaignText(campaign.message, opts));
-    wrap.appendChild(msg);
+    // Everything below the badge lives in `body` so api.confirm() can replace
+    // the whole flow in one go without disturbing the dismiss button.
+    var body = el("div", "cw-pa-body");
+    wrap.appendChild(body);
 
-    var ctaBtn = null;
     var api = {
       confirm: function (text) {
-        setText(msg, text);
-        if (ctaBtn && ctaBtn.parentNode) ctaBtn.parentNode.removeChild(ctaBtn);
+        body.textContent = "";
+        var line = el("div", "cw-pa-msg");
+        setText(line, text);
+        body.appendChild(line);
+        var badge = wrap.querySelector(".cw-pa-badge");
+        if (badge && badge.parentNode) badge.parentNode.removeChild(badge);
+      },
+      showLead: function () {
+        renderLead();
       },
     };
 
-    if (campaign.products && campaign.products.length > 0) {
-      wrap.appendChild(
-        productCards(campaign.products, opts && opts.currency, {
-          onAdd: function (card) {
-            if (cb.onAdd) cb.onAdd(card, api);
-          },
+    function richText(html) {
+      var node = el("div", "cw-pa-msg");
+      // Server-sanitized allow-list HTML (sanitize.server.ts), same trust
+      // boundary as FAQ answers — see htmlBubble().
+      node.innerHTML = campaignHtml(html, opts);
+      return node;
+    }
+
+    function actionsRow() {
+      return el("div", "cw-pa-actions");
+    }
+
+    function solidButton(text, onClick) {
+      var btn = el("button", "cw-pa-btn cw-pa-btn--solid", { type: "button" });
+      btn.textContent = text;
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        onClick();
+      });
+      return btn;
+    }
+
+    function ghostButton(text, onClick) {
+      var btn = el("button", "cw-pa-btn cw-pa-btn--ghost", { type: "button" });
+      btn.textContent = text;
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        onClick();
+      });
+      return btn;
+    }
+
+    // ── text ────────────────────────────────────────────────────────────────
+    function renderText() {
+      body.appendChild(richText(m.bodyHtml));
+      // Quick question mode drops the merchant's copy in favour of the
+      // chatbox's own conversation starters, tapped straight into the chat.
+      var chips = opts.starters || [];
+      if (m.contentMode === "quick_question" && chips.length) {
+        var row = el("div", "cw-pa-chips");
+        chips.slice(0, 3).forEach(function (chip) {
+          var b = el("button", "cw-pa-chip", { type: "button" });
+          b.textContent = chip.label || chip;
+          b.addEventListener("click", function (e) {
+            e.stopPropagation();
+            if (cb.onCta) cb.onCta(api, chip.label || chip);
+          });
+          row.appendChild(b);
+        });
+        body.appendChild(row);
+      } else {
+        // No button in the design — the whole bubble opens the chat.
+        wrap.className += " cw-pa--tappable";
+        wrap.addEventListener("click", function () {
+          if (cb.onCta) cb.onCta(api);
+        });
+      }
+    }
+
+    // ── product recommendation ──────────────────────────────────────────────
+    function renderRecommendation() {
+      wrap.appendChild(campaignBadge(RECOMMEND_LABELS[m.recommendation] || RECOMMEND_LABELS.custom));
+      body.appendChild(richText(m.bodyHtml));
+      var cards = campaign.products || [];
+      if (cards.length === 0) {
+        // Nothing in stock to show — the copy alone still opens the chat.
+        wrap.className += " cw-pa--tappable";
+        wrap.addEventListener("click", function () {
+          if (cb.onCta) cb.onCta(api);
+        });
+        return;
+      }
+      cards.slice(0, 3).forEach(function (card) {
+        body.appendChild(campaignProductRow(card, currency));
+      });
+      var first = cards[0];
+      var actions = actionsRow();
+      if (m.secondaryButtonText) {
+        actions.appendChild(
+          ghostButton(m.secondaryButtonText, function () {
+            if (cb.onView) cb.onView(first, api);
+          }),
+        );
+      }
+      actions.appendChild(
+        solidButton(m.primaryButtonText || "Ask about it", function () {
+          if (cb.onCta) cb.onCta(api);
         }),
       );
+      body.appendChild(actions);
     }
 
-    if (campaign.ctaLabel) {
-      ctaBtn = el("button", "cw-pa-cta", { type: "button" });
-      ctaBtn.textContent = campaign.ctaLabel;
-      ctaBtn.addEventListener("click", function () {
+    // ── Smart Product Page floater ──────────────────────────────────────────
+    function renderFloater() {
+      wrap.appendChild(campaignBadge(floaterText(m.floaterMessage, opts)));
+      var sub = el("div", "cw-pa-msg");
+      setText(sub, campaignText(m.subtitle, opts));
+      body.appendChild(sub);
+
+      var anchor = opts.anchor;
+      if (anchor) {
+        var chips = el("div", "cw-pa-variants");
+        var values = anchor.options || [];
+        var selected = values.length > 1 ? values[Math.floor(values.length / 2)] : values[0];
+        values.forEach(function (option) {
+          var chip = el("button", "cw-pa-variant", { type: "button" });
+          chip.textContent = option.value;
+          if (!option.available) chip.className += " cw-pa-variant--out";
+          if (selected && option.value === selected.value) chip.className += " is-on";
+          chip.addEventListener("click", function (e) {
+            e.stopPropagation();
+            var current = chips.querySelector(".is-on");
+            if (current) current.className = current.className.replace(" is-on", "");
+            chip.className += " is-on";
+            selected = option;
+            if (cb.onSelectVariant) cb.onSelectVariant(option);
+          });
+          chips.appendChild(chip);
+        });
+        var block = el("div");
+        block.appendChild(chips);
+        if (values.length > 1) {
+          var hint = el("div", "cw-pa-rec");
+          hint.textContent = "★ Recommended";
+          block.appendChild(hint);
+        }
+        body.appendChild(campaignProductRow(anchor, currency, block));
+      }
+
+      var cta = solidButton(m.ctaText || "Ask about it", function () {
         if (cb.onCta) cb.onCta(api);
       });
-      wrap.appendChild(ctaBtn);
+      cta.className += " cw-pa-btn--block";
+      body.appendChild(cta);
     }
 
-    return { el: wrap, confirm: api.confirm };
+    // ── discount / newsletter ───────────────────────────────────────────────
+    function renderDiscount() {
+      body.textContent = "";
+      body.appendChild(richText(m.bodyHtml));
+      if (m.usageInstruction) {
+        var note = el("div", "cw-pa-note");
+        setText(note, m.usageInstruction);
+        body.appendChild(note);
+      }
+      var cta = solidButton(m.triggerButtonText || "Yes, sure!", function () {
+        // With lead capture on, the first tap only advances to the form — the
+        // click is counted server-side when the form is submitted, and calling
+        // onCta here would open the chat panel over the form we just drew.
+        if (m.lead) renderLead();
+        else if (cb.onCta) cb.onCta(api);
+      });
+      cta.className += " cw-pa-btn--block";
+      body.appendChild(cta);
+    }
+
+    function renderLead() {
+      var lead = m.lead || {};
+      body.textContent = "";
+      var intro = el("div", "cw-pa-msg");
+      setText(intro, lead.introduction || "Subscribe to get hot deals, exclusive updates and rewards.");
+      body.appendChild(intro);
+
+      var form = el("form", "cw-pa-form");
+      var email = el("input", "cw-pa-input", {
+        type: "email",
+        required: "required",
+        placeholder: "Email address",
+        "aria-label": "Email address",
+      });
+      form.appendChild(email);
+      var name = null;
+      if (lead.askName) {
+        name = el("input", "cw-pa-input", { type: "text", placeholder: "Name", "aria-label": "Name" });
+        form.appendChild(name);
+      }
+      var phone = null;
+      if (lead.askPhone) {
+        phone = el("input", "cw-pa-input", { type: "tel", placeholder: "Phone", "aria-label": "Phone" });
+        form.appendChild(phone);
+      }
+      var submit = el("button", "cw-pa-btn cw-pa-btn--solid cw-pa-btn--block", { type: "submit" });
+      submit.textContent = "Subscribe";
+      form.appendChild(submit);
+      form.addEventListener("submit", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!email.value) return;
+        submit.disabled = true;
+        if (cb.onLead) {
+          cb.onLead(
+            {
+              email: email.value,
+              name: name ? name.value : "",
+              phone: phone ? phone.value : "",
+            },
+            api,
+          );
+        } else {
+          // Preview: no network — show the configured success copy.
+          api.confirm(lead.successMessage || "Thank you for subscribing!");
+        }
+      });
+      body.appendChild(form);
+    }
+
+    if (kind === "product_recommendation") renderRecommendation();
+    else if (kind === "floater") renderFloater();
+    else if (kind === "discount") renderDiscount();
+    else renderText();
+
+    return { el: wrap, confirm: api.confirm, showLead: api.showLead };
   }
 
   // ── footer ───────────────────────────────────────────────────────────────

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Form, NavLink, useLocation } from "react-router";
 import { ensurePushSubscribed, pushState, subscribePush } from "../../lib/ui/push-client";
+import { useIsMobile } from "../../lib/ui/use-mobile";
 
 // Standalone web shell (spec 18): rail nav + account footer around the same
 // /app pages the Shopify admin renders. No App Bridge here — navigation is
@@ -42,6 +43,7 @@ const DISMISS_KEY = "cc_push_notice_dismissed";
 
 export function WebShell(props: WebShellProps) {
   const location = useLocation();
+  const isMobile = useIsMobile();
   const adminUrl = `https://admin.shopify.com/store/${props.shopDomain.replace(".myshopify.com", "")}/apps`;
   const inboxBadge = props.nav.find((item) => item.href === "/app/inbox")?.badge ?? 0;
 
@@ -230,9 +232,13 @@ export function WebShell(props: WebShellProps) {
               <span className="ccws-userRole">{props.member.role} · Account</span>
             </span>
           </NavLink>
-          <a className="ccws-railLink" href={adminUrl} target="_blank" rel="noopener noreferrer">
-            Open Shopify admin ↗
-          </a>
+          {/* Agents are ChatConvert-only accounts — they have no Shopify staff
+              access, so the admin link is a dead end for them. */}
+          {props.member.role === "agent" ? null : (
+            <a className="ccws-railLink" href={adminUrl} target="_blank" rel="noopener noreferrer">
+              Open Shopify admin ↗
+            </a>
+          )}
           <Form method="post" action="/web/logout">
             <button type="submit" className="ccws-railLink">
               Sign out
@@ -246,16 +252,23 @@ export function WebShell(props: WebShellProps) {
             <span>
               {notice === "error"
                 ? noticeError
-                : "Get a browser notification when a shopper needs a human — even when this tab is in the background."}
+                : isMobile
+                  ? "Get notified when a shopper needs a human."
+                  : "Get a browser notification when a shopper needs a human — even when this tab is in the background."}
             </span>
             <span className="ccws-noticeActions">
               {notice !== "error" ? (
                 <button type="button" className="ccws-noticeButton" onClick={enable} disabled={notice === "busy"}>
-                  {notice === "busy" ? "Enabling…" : "Enable notifications"}
+                  {notice === "busy" ? "Enabling…" : isMobile ? "Enable" : "Enable notifications"}
                 </button>
               ) : null}
-              <button type="button" className="ccws-noticeGhost" onClick={dismiss}>
-                {notice === "error" ? "Dismiss" : "Not now"}
+              <button
+                type="button"
+                className="ccws-noticeGhost"
+                onClick={dismiss}
+                aria-label={notice === "error" ? "Dismiss" : "Not now"}
+              >
+                {isMobile ? "✕" : notice === "error" ? "Dismiss" : "Not now"}
               </button>
             </span>
           </div>

@@ -102,6 +102,8 @@ export interface InboxThreadMessage {
   id: string;
   role: string;
   author: string;
+  /** Team member who sent an agent reply (null = AI / admin reply / legacy). */
+  authorMemberId: string | null;
   content: string;
   createdAt: string; // ISO
   seenAt: string | null;
@@ -145,7 +147,15 @@ export async function getConversationDetail(
       where: { shopId, conversationId: convo.id },
       orderBy: { createdAt: "asc" },
       take: 500,
-      select: { id: true, role: true, author: true, content: true, createdAt: true, seenAt: true },
+      select: {
+        id: true,
+        role: true,
+        author: true,
+        authorMemberId: true,
+        content: true,
+        createdAt: true,
+        seenAt: true,
+      },
     }),
   ]);
 
@@ -166,6 +176,7 @@ export async function getConversationDetail(
       id: m.id,
       role: m.role,
       author: m.author,
+      authorMemberId: m.authorMemberId,
       content: m.content,
       createdAt: m.createdAt.toISOString(),
       seenAt: m.seenAt ? m.seenAt.toISOString() : null,
@@ -184,6 +195,9 @@ export async function sendAgentReply(
   shopId: string,
   conversationId: string,
   content: string,
+  /** Team member who sent it (web surface). Null from the Shopify admin,
+   *  where the replier is the store owner and has no member row. */
+  memberId?: string | null,
 ): Promise<boolean> {
   requireShopId(shopId);
   touchAgentPresence(shopId);
@@ -195,7 +209,7 @@ export async function sendAgentReply(
   });
   if (updated.count === 0) return false;
   await db.message.create({
-    data: { shopId, conversationId, role: "out", author: "agent", content },
+    data: { shopId, conversationId, role: "out", author: "agent", content, authorMemberId: memberId ?? null },
   });
   await recordEvent(shopId, "human_replied", { conversationId });
   return true;

@@ -23,6 +23,7 @@ import { BrowseProductsModal, BrowseThumb } from "../components/BrowseProductsMo
 import { SaveBar } from "../components/SaveBar";
 import { requireShopAccess } from "../lib/access.server";
 import { routeError } from "../lib/ui/route-error";
+import { APP_NAME } from "./app";
 
 // Curated Answers admin (spec 09): KPI row + quota meter, searchable list
 // (10/page), add/edit view with synonyms chips, talking points, hand-picked
@@ -338,9 +339,10 @@ export default function CuratedAnswersPage() {
   );
 
   return (
-    <s-page heading="Curated Answers">
+    <s-page heading={APP_NAME}>
       <SaveBar dirty={dirty} saving={saving} onSave={save} onDiscard={discard} />
       <s-stack gap="base">
+        <s-heading>Curated Answers</s-heading>
         <s-section heading="Overview">
           <StatGrid>
             <StatTile

@@ -6,23 +6,78 @@
 (function () {
   "use strict";
 
-  /* ── Proactive campaigns: PURE trigger evaluator (spec 12) ───────────────
-   * ctx: { pageType, path, seen?: {id:1}, cart?: {itemCount,totalValue},
-   *        elapsedMs?: number }. Exposed on window.ChatConvertCampaigns for
-   * node-based unit tests (scripts/test-campaign-triggers.ts) — keep pure. */
-  function ccEvalTrigger(campaign, ctx) {
+  /* ── Proactive campaigns: PURE evaluator (spec 12) ───────────────────────
+   * Answers "may this campaign fire on this page, for this shopper?" — page
+   * scope + every Conditions rule. The TIMING controls (dwell, scroll depth,
+   * exit intent) are armed separately by the runtime further down, because
+   * they need timers and listeners.
+   *
+   * ctx: { pageType, path, productId, collectionId, seen:{id:1},
+   *        cart:{itemCount,totalValue}|null, cartRemoved, isCustomer,
+   *        device:"desktop"|"mobile", online, today:"YYYY-MM-DD", country }
+   *
+   * Exposed on window.ChatConvertCampaigns so scripts/test-campaign-triggers.ts
+   * can run it in a node vm with no DOM — keep it pure. */
+  function ccEvalCampaign(campaign, ctx) {
     if (!campaign) return false;
-    var t = campaign.trigger || {};
+    ctx = ctx || {};
     if (ctx.seen && ctx.seen[campaign.id]) return false; // once per session
-    var pts = t.pageTypes && t.pageTypes.length ? t.pageTypes : ["any"];
-    if (pts.indexOf("any") === -1 && pts.indexOf(ctx.pageType) === -1) return false;
-    if (t.urlContains && String(ctx.path || "").indexOf(t.urlContains) === -1) return false;
-    if (typeof ctx.elapsedMs === "number" && (t.delaySeconds || 0) * 1000 > ctx.elapsedMs) return false;
-    if ((t.cartMinItems || 0) > 0 || (t.cartMinValue || 0) > 0) {
+
+    var t = campaign.trigger || {};
+    var c = campaign.conditions || {};
+    var scope = t.pageScope || "all_pages";
+    var path = String(ctx.path || "");
+
+    // ── page scope ──
+    if (scope === "home" && ctx.pageType !== "home") return false;
+    if (scope === "search" && ctx.pageType !== "search") return false;
+    if (scope === "cart" && ctx.pageType !== "cart") return false;
+    if (scope === "specific_pages") {
+      if (!t.urlContains || path.indexOf(t.urlContains) === -1) return false;
+    }
+    if (scope === "all_product_pages" && ctx.pageType !== "product") return false;
+    if (scope === "specific_product_pages") {
+      if (ctx.pageType !== "product") return false;
+      var pids = t.pageProductIds || [];
+      // An empty list would mean "no page qualifies" — the save path already
+      // rejects that, so treat it as "any product page" rather than silence.
+      if (pids.length && pids.indexOf(ctx.productId) === -1) return false;
+    }
+    if (scope === "all_collection_pages" && ctx.pageType !== "collection") return false;
+    if (scope === "specific_collection_pages") {
+      if (ctx.pageType !== "collection") return false;
+      var cids = t.pageCollectionIds || [];
+      if (cids.length && cids.indexOf(ctx.collectionId) === -1) return false;
+    }
+
+    // ── conditions ──
+    if (c.audience === "customers" && !ctx.isCustomer) return false;
+    if (c.audience === "visitors" && ctx.isCustomer) return false;
+    if (c.device === "desktop" && ctx.device !== "desktop") return false;
+    if (c.device === "mobile" && ctx.device !== "mobile") return false;
+    if (c.displayTime === "business_hours" && !ctx.online) return false;
+    if (c.displayDuration === "custom" && ctx.today) {
+      if (c.startDate && ctx.today < c.startDate) return false;
+      if (c.endDate && ctx.today > c.endDate) return false;
+    }
+    if (c.countryMode === "selected") {
+      var wanted = c.countries || [];
+      if (!ctx.country || wanted.indexOf(ctx.country) === -1) return false;
+    }
+
+    // ── cart window ──
+    var hasMax = t.cartMaxValue !== null && t.cartMaxValue !== undefined && t.cartMaxValue > 0;
+    if ((t.cartMinItems || 0) > 0 || (t.cartMinValue || 0) > 0 || hasMax) {
       if (!ctx.cart) return false; // cart state required but unknown
       if ((t.cartMinItems || 0) > 0 && (ctx.cart.itemCount || 0) < t.cartMinItems) return false;
       if ((t.cartMinValue || 0) > 0 && (ctx.cart.totalValue || 0) < t.cartMinValue) return false;
+      if (hasMax && (ctx.cart.totalValue || 0) > t.cartMaxValue) return false;
     }
+
+    // "Remove items from cart" is an EVENT, not a page — it only fires on the
+    // page view that follows an actual removal.
+    if (campaign.templateType === "remove_items" && !ctx.cartRemoved) return false;
+
     return true;
   }
   /** Shopify request.page_type → campaign page type. */
@@ -32,7 +87,7 @@
     return raw || "";
   }
   if (typeof window !== "undefined") {
-    window.ChatConvertCampaigns = { evalTrigger: ccEvalTrigger, pageType: ccPageType };
+    window.ChatConvertCampaigns = { evalCampaign: ccEvalCampaign, pageType: ccPageType };
   }
 
   var host = document.getElementById("chatconvert-root");
@@ -44,6 +99,13 @@
   var rendererSrc = host.getAttribute("data-renderer-src");
   var transportSrc = host.getAttribute("data-transport-src");
   var cssSrc = host.getAttribute("data-css-src");
+  // Proactive-chat page context (spec 12). Product/collection ids are emitted
+  // as GIDs so they compare directly against the catalog mirror's stored ids;
+  // country comes from the storefront's active market, not the browser locale.
+  var productGid = host.getAttribute("data-product-id") || "";
+  var collectionGid = host.getAttribute("data-collection-id") || "";
+  var storeCountry = (host.getAttribute("data-country") || "").toUpperCase();
+  var isLoggedIn = host.getAttribute("data-logged-in") === "1";
 
   /* CSS loads only after the config confirms the widget is active (review m4):
    * disabled/uninstalled shops pay zero style bytes. Launcher mounts on the
@@ -845,6 +907,12 @@
         // immediately, and future messages carry it in pageContext.
         refreshCartSnapshot().then(function (snapshot) {
           beacon("added_to_cart", { product: card.title, variantId: card.variantId }, snapshot);
+          // The add belongs to the campaign that opened this chat, if any —
+          // one credit per campaign, not one per item added.
+          if (attributedCampaignId) {
+            beacon("campaign_atc", { campaignId: attributedCampaignId, product: card.title });
+            attributedCampaignId = null;
+          }
         });
         if (config.cartDrawer) {
           // Honor "open cart drawer after add to cart" (spec 16): minimize the
@@ -882,15 +950,39 @@
   }
 
   // ── proactive campaigns runtime (spec 12) ────────────────────────────────
-  // Thin scheduler in the shell; bubble UI lives in the lazy renderer, which
-  // is injected only when a campaign actually fires. One campaign per page
-  // view, once per session (sessionStorage key per campaign id).
+  // Thin scheduler in the shell; the bubble UI lives in the lazy renderer, so
+  // a page where no campaign matches downloads nothing extra. One campaign per
+  // page view, once per session (sessionStorage key per campaign id).
   var CAMP_SEEN_PREFIX = "cc:camp:";
+  var CART_COUNT_KEY = "cc:cartn";
   var campaignShown = false;
   var campaignCartTotal = null; // set when /cart.js was fetched — {{cart_total}} source
+  var campaignArmed = null; // teardown for the currently armed timing listener
 
   function campSeen(id) {
     return read(sessionStorage, CAMP_SEEN_PREFIX + id) === "1";
+  }
+
+  /** Everything the pure evaluator needs that the shell can read synchronously. */
+  function campaignContext() {
+    var now = new Date();
+    var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+    return {
+      pageType: ccPageType(pageType),
+      path: window.location.pathname,
+      productId: productGid,
+      collectionId: collectionGid,
+      cart: null,
+      cartRemoved: false,
+      isCustomer: Boolean(customerName) || isLoggedIn,
+      device: window.matchMedia && window.matchMedia("(max-width: 768px)").matches ? "mobile" : "desktop",
+      online: Boolean(config && config.availability && config.availability.status === "online"),
+      // Local calendar date — the merchant picked the window in their own
+      // shop's terms and shoppers read it in theirs; an ISO UTC date would
+      // start and end campaigns a day early for half the world.
+      today: now.getFullYear() + "-" + pad(now.getMonth() + 1) + "-" + pad(now.getDate()),
+      country: storeCountry,
+    };
   }
 
   function initCampaigns() {
@@ -900,33 +992,46 @@
       if (!campSeen(list[i].id)) candidates.push(list[i]);
     }
     if (candidates.length === 0) return;
-    var ctx = { pageType: ccPageType(pageType), path: window.location.pathname, cart: null };
-    // /cart.js is fetched ONLY when a candidate campaign has cart conditions
-    // or renders the {{cart_total}} merge tag.
+    var ctx = campaignContext();
+
+    // /cart.js is fetched ONLY when a candidate campaign actually needs cart
+    // state — a cart window, a removal trigger, or the {{cart_total}} tag.
     var needsCart = candidates.some(function (c) {
       var t = c.trigger || {};
+      if (c.templateType === "remove_items") return true;
       if ((t.cartMinItems || 0) > 0 || (t.cartMinValue || 0) > 0) return true;
-      return /\{\{\s*cart_total\s*\}\}/.test(String(c.message || ""));
+      if (t.cartMaxValue !== null && t.cartMaxValue !== undefined && t.cartMaxValue > 0) return true;
+      return /\{\{\s*cart_total\s*\}\}/.test(String((c.message && c.message.bodyHtml) || ""));
     });
+
     var ready = needsCart
       ? fetch("/cart.js", { headers: { Accept: "application/json" } })
           .then(function (res) { return res.ok ? res.json() : null; })
           .then(function (cart) {
-            if (cart) {
-              ctx.cart = { itemCount: cart.item_count || 0, totalValue: (cart.total_price || 0) / 100 };
-              campaignCartTotal = ctx.cart.totalValue;
-            }
+            if (!cart) return;
+            var count = cart.item_count || 0;
+            ctx.cart = { itemCount: count, totalValue: (cart.total_price || 0) / 100 };
+            campaignCartTotal = ctx.cart.totalValue;
+            // Removal detection without theme hooks: the previous page view's
+            // line-item count is kept per tab, so a drop between views means
+            // the shopper took something out.
+            var previous = parseInt(read(sessionStorage, CART_COUNT_KEY) || "", 10);
+            ctx.cartRemoved = !isNaN(previous) && count < previous;
+            store(sessionStorage, CART_COUNT_KEY, String(count));
           })
           .catch(function () { /* cart unknown → cart campaigns stay silent */ })
       : Promise.resolve();
+
     ready.then(function () {
       // Server sends campaigns priority-ordered — first match wins.
       for (var j = 0; j < candidates.length; j++) {
-        if (ccEvalTrigger(candidates[j], ctx)) return armCampaign(candidates[j]);
+        if (ccEvalCampaign(candidates[j], ctx)) return armCampaign(candidates[j]);
       }
     });
   }
 
+  /** Attach the campaign's timing control. Returns nothing; the campaign fires
+   *  (at most once) through fireCampaign. */
   function armCampaign(c) {
     var t = c.trigger || {};
     if (t.exitIntent) {
@@ -937,95 +1042,171 @@
         }
       };
       document.addEventListener("mouseout", onOut);
-    } else {
-      setTimeout(function () { fireCampaign(c); }, (t.delaySeconds || 0) * 1000);
+      campaignArmed = function () { document.removeEventListener("mouseout", onOut); };
+      return;
     }
+    if (t.sendAfter === "scroll") {
+      var target = Math.min(100, Math.max(1, t.scrollPercent || 50));
+      var onScroll = function () {
+        var doc = document.documentElement;
+        var scrollable = (doc.scrollHeight || 0) - (window.innerHeight || 0);
+        // A page shorter than the viewport can never reach a percentage —
+        // treat it as fully scrolled so the campaign isn't silently dead.
+        var pct = scrollable > 0 ? ((window.pageYOffset || doc.scrollTop || 0) / scrollable) * 100 : 100;
+        if (pct >= target) {
+          window.removeEventListener("scroll", onScroll);
+          fireCampaign(c);
+        }
+      };
+      window.addEventListener("scroll", onScroll, { passive: true });
+      campaignArmed = function () { window.removeEventListener("scroll", onScroll); };
+      onScroll(); // short pages qualify immediately
+      return;
+    }
+    var timer = setTimeout(function () { fireCampaign(c); }, (t.delaySeconds || 0) * 1000);
+    campaignArmed = function () { clearTimeout(timer); };
+  }
+
+  /** Contextual product data (Smart Product Page chips, similar/complementary
+   *  cards) can't ride the shared 5-minute config cache — fetch it per page. */
+  function fetchCampaignProducts(c) {
+    if (!c.needsContextualProducts || !productGid) return Promise.resolve(null);
+    return fetch(
+      base + "/campaign-products?campaign=" + encodeURIComponent(c.id) + "&product=" + encodeURIComponent(productGid),
+      { headers: { Accept: "application/json" } },
+    )
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .catch(function () { return null; });
   }
 
   function fireCampaign(c) {
     if (campaignShown || state.open || campSeen(c.id)) return;
     campaignShown = true;
     store(sessionStorage, CAMP_SEEN_PREFIX + c.id, "1");
-    ensureModules()
-      .then(function () {
+    Promise.all([ensureModules(), fetchCampaignProducts(c)])
+      .then(function (results) {
         if (state.open) return;
+        var extra = results[1] || {};
+        var campaign = c;
+        if (extra.products && extra.products.length) {
+          // Shallow copy — never mutate the cached config payload.
+          campaign = {};
+          for (var k in c) if (Object.prototype.hasOwnProperty.call(c, k)) campaign[k] = c[k];
+          campaign.products = extra.products;
+        }
+        var selectedVariant = null;
         var bubble = R.campaignBubble(
-          c,
-          { currency: config.currency, customerName: customerName, cartTotal: campaignCartTotal },
+          campaign,
+          {
+            currency: config.currency,
+            customerName: customerName,
+            cartTotal: campaignCartTotal,
+            anchor: extra.anchor || null,
+            starters: campaignStarters(),
+          },
           {
             onDismiss: removeCampaignBubble,
-            onCta: function (api) { handleCampaignCta(c, api); },
-            onAdd: function (card, api) { campaignAdd(c, card, api); },
+            onCta: function (api, seed) { handleCampaignCta(campaign, api, seed, selectedVariant); },
+            onView: function (card) { window.location.href = "/products/" + card.handle; },
+            onLead: function (values, api) { submitCampaignLead(campaign, values, api); },
+            onSelectVariant: function (option) { selectedVariant = option; },
           },
         );
         ui.campaign = bubble.el;
         ui.root.insertBefore(bubble.el, ui.panel || ui.launcher);
-        beacon("campaign_view", { campaignId: c.id, templateType: c.templateType });
+        beacon("campaign_view", { campaignId: campaign.id, templateType: campaign.templateType });
       })
       .catch(function () { /* renderer failed — no bubble, no errors */ });
   }
 
+  /** Conversation starters reused as the Text template's "Quick question" chips. */
+  function campaignStarters() {
+    var starters = (config && config.widget && config.widget.starters) || {};
+    if (!starters.enabled) return [];
+    return (starters.items || []).map(function (item) {
+      return { label: item.question || item.label || "" };
+    }).filter(function (item) { return item.label; });
+  }
+
   function removeCampaignBubble() {
+    if (campaignArmed) { campaignArmed(); campaignArmed = null; }
     if (ui.campaign && ui.campaign.parentNode) ui.campaign.parentNode.removeChild(ui.campaign);
     ui.campaign = null;
   }
 
-  function handleCampaignCta(c, api) {
-    beacon("campaign_click", { campaignId: c.id, templateType: c.templateType });
-    if (c.ctaAction === "apply_code" && c.discountCode) {
-      // Shopify share-link endpoint sets the discount cookie for checkout.
-      fetch("/discount/" + encodeURIComponent(c.discountCode))
-        .then(function () { api.confirm("Code " + c.discountCode + " will be applied at checkout ✓"); })
-        .catch(function () { api.confirm("Use code " + c.discountCode + " at checkout"); });
-    } else if (
-      c.ctaAction === "link" &&
-      c.ctaUrl &&
-      (c.ctaUrl.charAt(0) === "/" || /^https?:\/\//i.test(c.ctaUrl))
-    ) {
-      // Defense in depth: schema validates on save, but never navigate to a
-      // non-http(s)/relative URL from merchant config (review M3).
-      window.location.href = c.ctaUrl;
-    } else {
-      removeCampaignBubble();
-      togglePanel();
-    }
+  /** Open the panel straight into the chat screen, optionally seeding a first
+   *  message (floater "Ask about it", quick-question chips). */
+  function openChatWith(seed) {
+    removeCampaignBubble();
+    ensureModules()
+      .then(function () {
+        if (!state.open) {
+          state.screen = "chat";
+          openPanel();
+        }
+        showScreen("chat");
+        if (seed) trySend(seed);
+      })
+      .catch(function () { /* modules failed — nothing to open */ });
   }
 
-  /** Campaign product-card ATC — carries campaignId through the beacon and
-   *  stamps the cart attribute `chatconvert_campaign` for order attribution. */
-  function campaignAdd(c, card, api) {
-    if (!card.variantId) {
-      window.location.href = "/products/" + card.handle;
+  function handleCampaignCta(c, api, seed, variant) {
+    beacon("campaign_click", { campaignId: c.id, templateType: c.templateType });
+    attributeCampaign(c);
+    var m = c.message || {};
+    if (m.kind === "discount" && !m.lead && m.discountCode) {
+      // Shopify share-link endpoint sets the discount cookie for checkout.
+      fetch("/discount/" + encodeURIComponent(m.discountCode))
+        .then(function () { api.confirm("Code " + m.discountCode + " will be applied at checkout ✓"); })
+        .catch(function () { api.confirm("Use code " + m.discountCode + " at checkout"); });
       return;
     }
-    fetch("/cart/add.js", {
+    if (seed) return openChatWith(seed);
+    if (m.kind === "floater" && variant && variant.value) {
+      return openChatWith("I'm looking at this in " + variant.value + " — is it a good fit?");
+    }
+    openChatWith(null);
+  }
+
+  function submitCampaignLead(c, values, api) {
+    var lead = (c.message && c.message.lead) || {};
+    fetch(base + "/campaign-lead", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        items: [{ id: Number(card.variantId), quantity: 1 }],
-        sections: CART_SECTIONS,
-        sections_url: window.location.pathname,
+        campaignId: c.id,
+        sessionId: sessionId(false),
+        email: values.email,
+        name: values.name || undefined,
+        phone: values.phone || undefined,
       }),
     })
-      .then(function (res) {
-        if (!res.ok) throw new Error("cart add failed");
-        return res.json();
-      })
+      .then(function (res) { return res.ok ? res.json() : null; })
       .then(function (data) {
-        applyCartSections(data, false); // refresh the header badge in place
-        refreshCartSnapshot();
-        fetch("/cart/update.js", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({ attributes: { chatconvert_campaign: c.id } }),
-        }).catch(function () { /* attribution is best-effort */ });
-        beacon("campaign_atc", { campaignId: c.id, revenue: card.price, product: card.title });
-        api.confirm("Added " + card.title + " to your cart ✓");
+        var text = (data && data.message) || lead.successMessage || "Thank you for subscribing!";
+        var code = (data && data.discountCode) || (c.message && c.message.discountCode);
+        api.confirm(code ? text + "\n\nYour code: " + code : text);
+        if (code) {
+          fetch("/discount/" + encodeURIComponent(code)).catch(function () { /* best effort */ });
+        }
       })
       .catch(function () {
-        // Theme rejected the AJAX add — let the product page handle it.
-        window.location.href = "/products/" + card.handle;
+        api.confirm("We couldn't save that just now — please try again later.");
       });
+  }
+
+  /** Attribution for the chat the campaign opened. The design's bubbles hand
+   *  the shopper to chat rather than adding to cart inline, so the add happens
+   *  later, on the in-chat product cards — stamp the cart NOW and remember the
+   *  campaign so that add can still be credited (spec 12 revenue attribution). */
+  var attributedCampaignId = null;
+  function attributeCampaign(c) {
+    attributedCampaignId = c.id;
+    fetch("/cart/update.js", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ attributes: { chatconvert_campaign: c.id } }),
+    }).catch(function () { /* attribution is best-effort */ });
   }
 
   // ── order tracking ───────────────────────────────────────────────────────

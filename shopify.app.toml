@@ -105,3 +105,27 @@ redirect_urls = [
 url = "https://stop-connecting-magical-gospel.trycloudflare.com/proxy"
 subpath = "ccwidget"
 prefix = "apps"
+
+# ⚠️ CLI WORKAROUND (added 2026-08-24), NOT A FEATURE WE USE.
+# Since ~2026-08 the app-config module specs Shopify returns for this org list
+# `events` (the App Events / event-subscription module) as REQUIRED, so every
+# `shopify app dev` aborts before it starts with:
+#
+#   Validation error in shopify.app.toml:
+#   [events]: Required
+#
+# The requirement is SERVER-SIDE, not a CLI regression — CLI 4.6.1 and 4.7.0
+# (latest) both fail identically, and the CLI's own local schema has this module
+# optional. The only way through is to declare an empty module. api_version must
+# be exactly "unstable"; the dev session rejects a dated version. This mirrors
+# the `[definitions]: Required` outage of June 2026, which Shopify later fixed
+# server-side — recheck periodically and DELETE this block once `npm run dev`
+# works without it.
+#
+# 🚨 SUBMISSION GATE — untested on the deploy path. In the `[definitions]`
+# incident the equivalent stub passed dev validation but broke `shopify app
+# deploy`. Run a deploy from a throwaway app version before submitting, and
+# drop this block the moment the server stops demanding it.
+[events]
+api_version = "unstable"
+subscription = []

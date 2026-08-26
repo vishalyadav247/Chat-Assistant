@@ -17,6 +17,21 @@ export function useInboxLive(onFrame: (frame: InboxLiveFrame) => void): void {
     let stopped = false;
     let attempt = 0;
     let controller: AbortController | null = null;
+    // Cuts a pending backoff sleep short (set while sleeping).
+    let wake: (() => void) | null = null;
+
+    const sleep = (ms: number) =>
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          wake = null;
+          resolve();
+        }, ms);
+        wake = () => {
+          clearTimeout(timer);
+          wake = null;
+          resolve();
+        };
+      });
 
     const connect = async () => {
       while (!stopped) {
@@ -64,13 +79,30 @@ export function useInboxLive(onFrame: (frame: InboxLiveFrame) => void): void {
         // Server ends the stream every ~10 min; errors back off up to 30s.
         attempt += 1;
         const delay = Math.min(30_000, 1000 * 2 ** Math.min(attempt, 5));
-        await new Promise((resolve) => setTimeout(resolve, attempt === 1 ? 250 : delay));
+        await sleep(attempt === 1 ? 250 : delay);
       }
     };
     void connect();
 
+    // Phones freeze a backgrounded tab: the stream dies on screen-lock or an
+    // app switch, and the backoff timer stops ticking with it. Coming back to
+    // the app must feel instant, so drop the (probably dead) stream, cut any
+    // pending sleep short, and ask the caller to revalidate right away.
+    const onResume = () => {
+      if (stopped || document.visibilityState !== "visible") return;
+      attempt = 0;
+      handler.current({ type: "changed" });
+      wake?.();
+      controller?.abort();
+    };
+    document.addEventListener("visibilitychange", onResume);
+    window.addEventListener("pageshow", onResume);
+
     return () => {
       stopped = true;
+      document.removeEventListener("visibilitychange", onResume);
+      window.removeEventListener("pageshow", onResume);
+      wake?.();
       controller?.abort();
     };
   }, []);

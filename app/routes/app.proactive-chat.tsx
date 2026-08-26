@@ -15,6 +15,8 @@ import {
   type CampaignRow,
 } from "../lib/campaigns/campaigns.server";
 import { campaignTemplate, type CampaignTemplate } from "../lib/campaigns/templates";
+import { getShopConfig } from "../lib/config/shop-config.server";
+import { getWidgetCssText, getWidgetRendererJs } from "../lib/widget/renderer-assets.server";
 import type { BrowseItemMeta } from "../components/BrowseProductsModal";
 import { ProactiveCampaignEditor, type CampaignDraft } from "../components/ProactiveCampaignEditor";
 import { campaignCtr, ProactiveCampaignTable } from "../components/ProactiveCampaignTable";
@@ -23,24 +25,46 @@ import { SaveBar } from "../components/SaveBar";
 import { StatGrid, StatTile } from "../components/ui/StatTile";
 import { requireShopAccess } from "../lib/access.server";
 import { routeError } from "../lib/ui/route-error";
+import { APP_NAME } from "./app";
 
-// Proactive Chat admin (spec 12, design proactive-chat.html): dashboard
-// (overview KPIs + campaign table) ⇄ template picker ⇄ minimal editor.
-// KPI counters are all-time in v1 (range chip is static "Last 7 days" —
-// event-based range aggregation lands with analytics, spec 14).
+// Proactive Chat admin (spec 12): dashboard (overview KPIs + campaign table)
+// ⇄ template picker ⇄ campaign editor. KPI counters are all-time in v1 (the
+// range chip is static — event-based range aggregation lands with analytics,
+// spec 14).
+
+/** Discount codes shown in the editor's Message → Discount picker. */
+const DISCOUNT_LIMIT = 200;
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { shopId } = await requireShopAccess(request, { permission: "proactive" });
 
-  const [shop, campaigns] = await Promise.all([
+  const [shop, campaigns, discounts, config] = await Promise.all([
     db.shop.findUnique({ where: { id: shopId }, select: { plan: true, currency: true } }),
     listCampaigns(shopId),
+    db.discount.findMany({
+      where: { shopId, status: "active", method: "code" },
+      orderBy: { updatedAt: "desc" },
+      take: DISCOUNT_LIMIT,
+      select: { title: true, summary: true },
+    }),
+    getShopConfig(shopId),
   ]);
 
   // Resolve titles/thumbnails for products/collections referenced by campaigns
-  // (editor pick lists). Newly browsed items arrive via the modal's meta.
-  const productGids = [...new Set(campaigns.flatMap((c) => c.settings.productIds))];
-  const collectionGids = [...new Set(campaigns.flatMap((c) => c.settings.collectionIds))];
+  // (editor pick lists + preview). Newly browsed items arrive via the modal.
+  const productGids = [
+    ...new Set(
+      campaigns.flatMap((c) => [...c.settings.message.productIds, ...c.settings.trigger.pageProductIds]),
+    ),
+  ];
+  const collectionGids = [
+    ...new Set(
+      campaigns.flatMap((c) => [
+        ...c.settings.message.collectionIds,
+        ...c.settings.trigger.pageCollectionIds,
+      ]),
+    ),
+  ];
   const [products, collections] = await Promise.all([
     productGids.length
       ? db.product.findMany({
@@ -62,12 +86,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   for (const c of collections) collectionMeta[c.shopifyCollectionId] = { title: c.title, imageUrl: null };
 
   const plan = shop?.plan ?? "free";
+  const starters = config.widget.starters?.enabled
+    ? (config.widget.starters.items ?? []).map((item) => ({ label: item.question }))
+    : [];
+
   return {
     campaigns,
     currency: shop?.currency ?? "USD",
     premiumAllowed: hasFeature(plan, "premium_campaign_templates"),
     productMeta,
     collectionMeta,
+    starters,
+    // Discount.title holds the code for code-method discounts (sync mirror).
+    discounts: discounts.map((d) => ({ code: d.title, summary: d.summary })),
+    // Storefront assets, so the Message Preview renders through the widget's
+    // own builder instead of a lookalike (see ProactiveCampaignPreview).
+    rendererJs: getWidgetRendererJs(),
+    widgetCss: getWidgetCssText(),
   };
 };
 
@@ -143,7 +178,7 @@ export default function ProactiveChatPage() {
 
   const startFromTemplate = (tpl: CampaignTemplate) => {
     const { name, ...settings } = tpl.defaults;
-    const next: CampaignDraft = { id: null, templateType: tpl.type, name, status: "active", settings };
+    const next: CampaignDraft = { id: null, templateType: tpl.type, name, status: "inactive", settings };
     setSaveError(null);
     setDraft(next);
     setBaseline(JSON.stringify(next));
@@ -212,7 +247,10 @@ export default function ProactiveChatPage() {
     }
     // Toggle / reorder used to fail silently — the row just snapped back.
     if (result.intent === "toggle" && !result.ok) {
-      shopify.toast.show("Couldn't update the campaign — please try again", { isError: true });
+      shopify.toast.show(
+        result.error ?? "Couldn't update the campaign — please try again",
+        { isError: true },
+      );
     }
     if (result.intent === "reorder" && !result.ok) {
       shopify.toast.show("Couldn't reorder the campaign — please try again", { isError: true });
@@ -220,11 +258,12 @@ export default function ProactiveChatPage() {
   }, [fetcher.state, fetcher.data, shopify]);
 
   return (
-    <s-page heading="Proactive Chat">
+    <s-page heading={APP_NAME}>
       <SaveBar dirty={dirty} saving={busy} onSave={save} onDiscard={discard} />
       <s-stack gap="base">
         {view === "dashboard" ? (
           <>
+            <s-heading>Proactive Chat</s-heading>
             <s-section>
               <div
                 style={{
@@ -345,6 +384,12 @@ export default function ProactiveChatPage() {
               error={saveError}
               productMeta={data.productMeta}
               collectionMeta={data.collectionMeta}
+              discounts={data.discounts}
+              currency={data.currency}
+              starters={data.starters}
+              premiumAllowed={data.premiumAllowed}
+              rendererJs={data.rendererJs}
+              widgetCss={data.widgetCss}
               onCancel={() => {
                 setSaveError(null);
                 setView(draft.id ? "dashboard" : "picker");

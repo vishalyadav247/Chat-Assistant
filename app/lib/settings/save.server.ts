@@ -7,6 +7,7 @@ import { uploadImage } from "../files.server";
 import { shopSettingsSchema, zodMessage, type ShopSettingsData } from "./schemas";
 import { validate17TrackKey } from "../tracking/seventeen-track.server";
 import { DATE_FORMATS, TIME_FORMATS } from "../format/datetime";
+import { canonicalTimezone, isValidTimezone } from "../format/timezones";
 
 // Settings save workflow (spec 16): one intent per tab/card. Every intent
 // zod-parses the incoming slice, merges it onto the current settings blob,
@@ -29,6 +30,9 @@ const maxText = (n: number, what: string) =>
 
 const generalPayload = z.object({
   name: maxText(100, "Store name"),
+  // Store time zone moved here from the availability slice: it drives every
+  // displayed date as well as the working-hours schedule.
+  timezone: z.string().min(1, "Choose a time zone").max(64),
   dateFormat: z.enum(DATE_FORMATS),
   timeFormat: z.enum(TIME_FORMATS),
   theme: z.enum(["auto", "dawn", "refresh", "craft", "custom"]),
@@ -154,7 +158,6 @@ const strictAvailabilitySchema = z
 
 const availabilityPayload = z.object({
   availability: strictAvailabilitySchema,
-  timezone: z.string().min(1, "Choose a time zone").max(64),
 });
 
 const surveyPayload = z.object({
@@ -179,15 +182,6 @@ export async function loadShopSettings(shopId: string): Promise<ShopSettingsData
   requireShopId(shopId);
   const row = await db.shopSettings.findUnique({ where: { shopId } });
   return shopSettingsSchema.parse(row?.settings ?? {});
-}
-
-function isValidTimezone(tz: string): boolean {
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: tz });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export async function applySettingsIntent(args: {
@@ -227,6 +221,13 @@ export async function applySettingsIntent(args: {
       switch (intent) {
         case "save-general": {
           const p = generalPayload.parse(raw);
+          if (!isValidTimezone(p.timezone)) {
+            return { ok: false, intent, error: `Unknown time zone: ${p.timezone}` };
+          }
+          await db.shop.update({
+            where: { id: shopId },
+            data: { timezone: canonicalTimezone(p.timezone) },
+          });
           next = {
             ...current,
             theme: p.theme,
@@ -248,11 +249,7 @@ export async function applySettingsIntent(args: {
         }
         case "save-availability": {
           const p = availabilityPayload.parse(raw);
-          if (!isValidTimezone(p.timezone)) {
-            return { ok: false, intent, error: `Unknown time zone: ${p.timezone}` };
-          }
           next = { ...current, availability: p.availability };
-          await db.shop.update({ where: { id: shopId }, data: { timezone: p.timezone } });
           break;
         }
         case "save-survey": {

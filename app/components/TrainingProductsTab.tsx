@@ -202,7 +202,6 @@ export function TrainingProductsTab(props: {
               {
                 key: "learn",
                 title: "AI Learn",
-                width: 110, // keeps the heading on one line
                 render: (row) => (
                   <s-switch
                     label={`Learn ${row.title}`}

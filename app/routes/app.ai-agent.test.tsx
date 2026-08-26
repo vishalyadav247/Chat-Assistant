@@ -10,6 +10,7 @@ import { PageHeader } from "../components/ui/PageHeader";
 import { requireShopAccess } from "../lib/access.server";
 import { getShopConfig } from "../lib/config/shop-config.server";
 import { routeError } from "../lib/ui/route-error";
+import { APP_NAME } from "./app";
 
 // Test AI (spec 08, design ai-agent.html #viewTest): merchant chat console
 // that streams the REAL pipeline via /api/test-chat (isTest: true → no usage
@@ -120,9 +121,10 @@ export default function TestAiPage() {
   const navigate = useNavigate();
 
   return (
-    <s-page heading="Test AI" inlineSize="large">
+    <s-page heading={APP_NAME} inlineSize="large">
       <s-stack gap="base">
         <PageHeader
+          title="Test AI"
           backTo="/app/ai-agent"
           backLabel="AI Agent"
           description="Chat with your AI exactly as a shopper would. Replies use your live training data and instructions; test chats never appear in the inbox."

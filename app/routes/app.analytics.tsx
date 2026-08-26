@@ -42,6 +42,7 @@ import {
   AnalyticsTopQuestions,
   AnalyticsUnansweredCard,
 } from "../components/AnalyticsTopQuestions";
+import { APP_NAME } from "./app";
 
 // Analytics page (spec 14, design analytics.html): reused dashboard Overview
 // KPI card (spec 13 shared component), conversations-over-time line chart
@@ -173,7 +174,7 @@ export default function AnalyticsPage() {
   };
 
   return (
-    <s-page heading="Analytics">
+    <s-page heading={APP_NAME}>
       <s-button
         slot="primary-action"
         variant="primary"
@@ -191,6 +192,7 @@ export default function AnalyticsPage() {
       </s-button>
 
       <s-stack gap="base">
+        <s-heading>Analytics</s-heading>
         <DashboardOverview
           metrics={data.metrics}
           range={data.range}

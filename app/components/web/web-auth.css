@@ -2,6 +2,7 @@
 
 .ccwa-page {
   min-height: 100vh;
+  min-height: 100dvh; /* iOS Safari URL-bar aware */
   display: grid;
   place-items: center;
   background: radial-gradient(1200px 600px at 10% -10%, #efeafe 0%, #f6f6f7 55%);

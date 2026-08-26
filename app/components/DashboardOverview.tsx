@@ -86,7 +86,6 @@ export function DashboardOverview(props: {
             tone="info"
             delta={deltaProps(m.atcDelta)}
             spark={m.series.atc}
-            sub="Assisted-revenue proxy until the orders scope lands"
           />
           <StatTile
             label="Resolution rate"

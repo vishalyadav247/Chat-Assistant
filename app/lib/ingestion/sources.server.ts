@@ -5,6 +5,7 @@ import db from "../../db.server";
 import { getQuota, requirePlan } from "../billing/plans.server";
 import { requireShopId } from "../tenancy.server";
 import { htmlToText } from "./fetchers.server";
+import { extractPdfText } from "./pdf.server";
 import { ingestSource, type IngestResult } from "./knowledge-ingest.server";
 import { KNOWLEDGE_INGEST_JOB } from "./knowledge-jobs.server";
 import { logError } from "../log.server";
@@ -191,7 +192,7 @@ export async function createSource(
       if (parsed.bytes.byteLength > FILE_BYTE_CAP) {
         throw new Error("file too large (max 2MB)");
       }
-      const { text, parseError } = extractFileText(parsed.name, parsed.mime, parsed.bytes);
+      const { text, parseError } = await extractFileText(parsed.name, parsed.mime, parsed.bytes);
       // A file type we can never parse must not become a stored "error" row:
       // it consumed the file_uploads quota, and re-adding it just piled up
       // duplicates (QA D12e). Reject it outright instead.
@@ -526,11 +527,11 @@ export function splitCsv(text: string): string[][] {
 
 // ── File text extraction ────────────────────────────────────────────────────
 
-function extractFileText(
+async function extractFileText(
   name: string,
   mime: string,
   bytes: Buffer,
-): { text?: string; parseError?: string } {
+): Promise<{ text?: string; parseError?: string }> {
   const kind = fileKind(name, mime);
   switch (kind) {
     case "txt":
@@ -545,20 +546,26 @@ function extractFileText(
         return { parseError: "invalid JSON file" };
       }
     }
-    case "pdf":
+    case "pdf": {
+      // Text layer only — see pdf.server.ts. A scanned PDF comes back as a
+      // parseError rather than an empty source that silently teaches nothing.
+      const { text, parseError } = await extractPdfText(bytes);
+      return parseError ? { parseError } : { text };
+    }
     case "docx":
-      // Spec 04 delta: quality text extraction for PDF/DOCX needs a parser
-      // dependency, which this task may not add. Source is created with
-      // status "error" so the UI can surface it; ingest never runs.
-      return { parseError: `${kind.toUpperCase()} parser pending — .txt and .json are supported today` };
+      // Still deferred (spec 04 delta): DOCX needs its own unzip+XML parser.
+      // Rejected at upload so it can't consume the file_uploads quota.
+      return { parseError: "DOCX isn't supported yet — upload a .pdf, .txt or .json" };
     default:
-      return { parseError: "unsupported file type (.pdf .docx .txt .json only)" };
+      return { parseError: "unsupported file type (.pdf .txt .json only)" };
   }
 }
 
 /** File kinds this build can actually turn into text. Anything else is
- *  rejected at upload time rather than stored as a broken source. */
-const PARSEABLE_KINDS = new Set(["txt", "json"]);
+ *  rejected at upload time rather than stored as a broken source.
+ *  A PDF is parseable in principle, so a failure here (scanned, encrypted,
+ *  corrupt) is a real error worth storing and showing, not a rejection. */
+const PARSEABLE_KINDS = new Set(["txt", "json", "pdf"]);
 
 /** Upload rejected because the format is not supported (not a bug/failure). */
 export class UnsupportedFileError extends Error {

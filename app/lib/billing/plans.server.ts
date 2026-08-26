@@ -184,6 +184,12 @@ const planPatchSchema = z.object({
   // WHOLE config and silently drop every other override, so unknown names are
   // accepted here and filtered against GATED_FEATURES in applyConfig().
   features: z.array(z.string()).optional(),
+  // The gated-feature list as it existed when this override was SAVED. Without
+  // it, a feature added to the product later is indistinguishable from one the
+  // operator deliberately switched off — and would be silently gated off for
+  // this plan forever (which is exactly how push_notifications ended up off for
+  // Plus). Absent on legacy rows; those fall back to the plan default.
+  knownFeatures: z.array(z.string()).optional(),
 });
 
 export const planConfigSchema = z.object({
@@ -221,7 +227,13 @@ function applyConfig(config: PlanConfig): void {
         if (typeof value === "number") merged.quotas[dim] = value;
       }
       if (patch.features) {
-        merged.features = GATED_FEATURES.filter((f) => patch.features!.includes(f));
+        const chosen = new Set(patch.features);
+        const seen = new Set(patch.knownFeatures ?? []);
+        merged.features = GATED_FEATURES.filter((f) => {
+          if (chosen.has(f)) return true; // operator switched it on
+          if (seen.has(f)) return false; // operator switched it off
+          return DEFAULT_PLANS[id].features.includes(f); // added later → default
+        });
       }
     }
     // Mutate in place so direct `PLANS[...]` readers see the update.

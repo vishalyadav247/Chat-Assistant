@@ -146,3 +146,13 @@
     gap: 2px;
   }
 }
+
+/* The Inbox is a full-screen workspace on phones: it measures itself down to
+   the bottom of the viewport, so the shell's page gutter would be counted
+   twice and render as a dead strip under the composer (the composer carries
+   its own safe-area margin). :has() is unsupported nowhere we ship to. */
+@media (max-width: 768px) {
+  .ccws-content:has(.cin-grid) {
+    padding-bottom: 0;
+  }
+}

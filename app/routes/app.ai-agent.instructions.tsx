@@ -30,6 +30,7 @@ import { RecommendationDetailCustom } from "../components/RecommendationDetailCu
 import { PageHeader } from "../components/ui/PageHeader";
 import { requireShopAccess } from "../lib/access.server";
 import { routeError } from "../lib/ui/route-error";
+import { APP_NAME } from "./app";
 
 // Instructions (spec 08, design ai-agent.html #viewInstructions): three tabs
 // via ?tab= — General Instructions / Product recommendations / Human handover.
@@ -336,9 +337,10 @@ export default function InstructionsPage() {
   }
 
   return (
-    <s-page heading="Instructions">
+    <s-page heading={APP_NAME}>
       <s-stack gap="base">
         <PageHeader
+          title="Instructions"
           backTo="/app/ai-agent"
           backLabel="AI Agent"
           tabs={TABS}

@@ -40,10 +40,14 @@ async function main() {
     templateType: "welcome",
     status: "active",
     settings: {
-      trigger: { pageTypes: ["home"], delaySeconds: 0 },
-      message: "hi",
-      ctaLabel: "Say hello",
-      productIds: [cheapProduct.shopifyProductId],
+      trigger: { pageScope: "home", sendAfter: "time", delaySeconds: 0 },
+      message: {
+        kind: "product_recommendation",
+        bodyHtml: "<p>hi</p>",
+        recommendation: "custom",
+        productIds: [cheapProduct.shopifyProductId],
+        primaryButtonText: "Say hello",
+      },
     },
   });
   if (!saved.ok) throw new Error(`saveCampaign failed: ${saved.error}`);

@@ -46,6 +46,7 @@ import { requireShopAccess } from "../lib/access.server";
 import { routeError } from "../lib/ui/route-error";
 import { useDateTime } from "../lib/format/context";
 import { logError } from "../lib/log.server";
+import { APP_NAME } from "./app";
 
 // Plan & Usage (spec 15 / feature 15b, design plan-usage.html): usage meter,
 // current-plan card, tier cards with Monthly|Yearly toggle, discount code,
@@ -349,8 +350,9 @@ export default function PlanUsagePage() {
       : null;
 
   return (
-    <s-page heading="Plan & Usage">
+    <s-page heading={APP_NAME}>
       <s-stack gap="base">
+        <s-heading>Plan &amp; Usage</s-heading>
         {billingError ? (
           <s-banner tone="critical" heading="Subscription not completed">
             The subscription could not be verified — no charge was made. Please

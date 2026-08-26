@@ -63,6 +63,7 @@ import { TrainingDiscountsTab } from "../components/TrainingDiscountsTab";
 import { TrainingKnowledgeTab } from "../components/TrainingKnowledgeTab";
 import { requireShopAccess } from "../lib/access.server";
 import { routeError } from "../lib/ui/route-error";
+import { APP_NAME } from "./app";
 
 // Training data (spec 07, design ai-agent.html #viewTraining): five tabs via
 // ?tab= — Products / Collections / Discounts / FAQs / Custom knowledge.
@@ -1038,9 +1039,10 @@ export default function TrainingDataPage() {
   };
 
   return (
-    <s-page heading="Training data">
+    <s-page heading={APP_NAME}>
       <s-stack gap="base">
         <PageHeader
+          title="Training data"
           backTo="/app/ai-agent"
           backLabel="AI Agent"
           tabs={TABS}

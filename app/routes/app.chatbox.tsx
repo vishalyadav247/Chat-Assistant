@@ -22,6 +22,7 @@ import { ChatboxAppearance } from "../components/ChatboxAppearance";
 import { ChatboxPreview, type ChatboxTab } from "../components/ChatboxPreview";
 import { requireShopAccess } from "../lib/access.server";
 import { routeError } from "../lib/ui/route-error";
+import { APP_NAME } from "./app";
 
 // Chatbox settings + live preview (spec 06). Left: General / Chat page /
 // Appearance tabs. Right: sticky preview rendered by the storefront widget's
@@ -173,10 +174,11 @@ export default function ChatboxPage() {
       : undefined;
 
   return (
-    <s-page heading="Chatbox">
+    <s-page heading={APP_NAME}>
       <SaveBar dirty={dirty} saving={saving} onSave={save} onDiscard={discard} />
 
       <s-stack gap="base">
+        <s-heading>Chatbox</s-heading>
         {saveError ? (
           <s-banner tone="critical" heading="Couldn't save chatbox settings">
             {saveError}

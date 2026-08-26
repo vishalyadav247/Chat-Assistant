@@ -186,6 +186,7 @@ export function TrainingDiscountsTab(props: {
                     {row.summary ? <s-text color="subdued">{row.summary}</s-text> : null}
                   </s-stack>
                 ),
+                width:200
               },
               {
                 key: "status",
@@ -199,7 +200,7 @@ export function TrainingDiscountsTab(props: {
                   <s-text tone="neutral">
                     {row.method === "automatic" ? "Automatic" : "Code"}
                   </s-text>
-                ),
+                )
               },
               {
                 key: "type",
@@ -207,17 +208,19 @@ export function TrainingDiscountsTab(props: {
                 render: (row) => {
                   const meta = TYPE_META[row.discountType] ?? TYPE_META.amount_off_order;
                   return (
-                    <s-stack direction="inline" alignItems="center" gap="small-300">
+                    <s-stack gap="small-300">
                       <s-icon type={meta.icon} size="small" />
                       <s-text color="subdued">{meta.label}</s-text>
                     </s-stack>
                   );
                 },
+                width:120
               },
               {
                 key: "startsAt",
                 title: "Start date",
                 render: (row) => <s-text tone="neutral">{row.startsAt ? dt.date(row.startsAt) : "—"}</s-text>,
+                width:85
               },
               {
                 key: "endsAt",
@@ -225,6 +228,7 @@ export function TrainingDiscountsTab(props: {
                 render: (row) => (
                   <s-text tone="neutral">{row.endsAt ? dt.date(row.endsAt) : "-"}</s-text>
                 ),
+                width:85
               },
               {
                 key: "used",
@@ -235,7 +239,6 @@ export function TrainingDiscountsTab(props: {
               {
                 key: "ai",
                 title: "AI Learn",
-                width: 110, // keeps the heading on one line
                 render: (row) => (
                   <s-switch
                     label={`AI learning for ${row.title}`}

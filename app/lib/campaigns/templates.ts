@@ -1,9 +1,17 @@
-import type { CampaignSettingsData } from "../settings/schemas";
+import {
+  campaignSettingsSchema,
+  type CampaignMessageData,
+  type CampaignSettingsData,
+} from "../settings/schemas";
 
-// Proactive-chat template catalog (spec 12, design proactive-chat.html).
-// Names / categories / descriptions / CTA labels are VERBATIM from the design.
-// Isomorphic: imported by the admin route (picker + editor prefill) and by
-// campaigns.server.ts (premium gating, widget filtering).
+// Proactive-chat template catalog (spec 12).
+// Each entry declares BOTH the merchant-facing catalog card (category, name,
+// description, preview) and the SHAPE OF THE EDITOR for that template: which
+// trigger control to render, which Message tabs are offered, and the prefilled
+// defaults. Design reference: .claude/resources/proactive_chat/*.png.
+//
+// Isomorphic — imported by the admin route (picker, editor, preview) and by
+// campaigns.server.ts (premium gating, widget projection). No server imports.
 
 export type CampaignTemplateType =
   | "welcome"
@@ -17,6 +25,19 @@ export type CampaignTemplateType =
   | "search_page"
   | "smart_product_page";
 
+/** Which "Page to show" choices the Trigger card offers.
+ *  - `fixed`     — no picker; the trigger card just states when it fires.
+ *  - `pages`     — All pages / Specific pages / All product / Specific product.
+ *  - `product`   — All product pages / Specific product pages.
+ *  - `collection`— All collection pages / Specific collection pages. */
+export type TriggerScopeMode = "fixed" | "pages" | "product" | "collection";
+
+/** Which "Send message after" control the Trigger card renders.
+ *  - `dwell_or_scroll` — the two-radio group (seconds | scroll %).
+ *  - `dwell`           — seconds only, no radios.
+ *  - `exit_intent`     — no dwell control; fires on exit intent. */
+export type TriggerTimingMode = "dwell_or_scroll" | "dwell" | "exit_intent";
+
 export interface CampaignTemplate {
   type: CampaignTemplateType;
   category: string;
@@ -28,40 +49,55 @@ export interface CampaignTemplate {
   isNew: boolean;
   /** Type icon shown in the campaign table + picker. */
   emoji: string;
-  /** Preview gradient colors from the design. */
+  /** Preview gradient colors for the picker card. */
   colors: [string, string];
-  /** Preview bubble line + pill from the design. */
+  /** Preview bubble line shown on the picker card. */
   previewLine: string;
-  /** Editor prefill — merged over defaultCampaignSettings(). */
+  /** Pill under the preview line on the picker card. */
+  previewCta: string;
+
+  // ── editor shape ──
+  /** One-line statement above the trigger controls ("When visitor opens…"). */
+  triggerSummary: string;
+  scopeMode: TriggerScopeMode;
+  timingMode: TriggerTimingMode;
+  /** Cart value floor/ceiling fields (cart templates). */
+  showCartValue: boolean;
+  /** Message tabs offered, in order. A single entry renders no tab strip. */
+  messageKinds: CampaignMessageData["kind"][];
+  /** Text tab shows the Quick question / Custom message radios. */
+  showContentMode: boolean;
+
+  /** Editor prefill. */
   defaults: CampaignSettingsData & { name: string };
 }
 
-const trigger = (t: Partial<CampaignSettingsData["trigger"]>): CampaignSettingsData["trigger"] => ({
-  pageTypes: ["any"],
-  urlContains: "",
-  delaySeconds: 3,
-  exitIntent: false,
-  cartMinItems: 0,
-  cartMinValue: 0,
-  ...t,
-});
+// ── defaults helpers ────────────────────────────────────────────────────────
+
+type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? Partial<T[K]> : T[K] };
 
 const settings = (
-  s: Partial<Omit<CampaignSettingsData, "trigger">> & {
-    trigger?: Partial<CampaignSettingsData["trigger"]>;
-    name: string;
-  },
-): CampaignSettingsData & { name: string } => ({
-  name: s.name,
-  trigger: trigger(s.trigger ?? {}),
-  message: s.message ?? "",
-  ctaLabel: s.ctaLabel ?? "",
-  ctaAction: s.ctaAction ?? "open_chat",
-  ctaUrl: s.ctaUrl ?? "",
-  discountCode: s.discountCode ?? "",
-  productIds: s.productIds ?? [],
-  collectionIds: s.collectionIds ?? [],
-});
+  name: string,
+  patch: DeepPartial<CampaignSettingsData>,
+): CampaignSettingsData & { name: string } => {
+  const base = campaignSettingsSchema.parse({});
+  return {
+    name,
+    trigger: { ...base.trigger, ...(patch.trigger ?? {}) },
+    conditions: { ...base.conditions, ...(patch.conditions ?? {}) },
+    message: { ...base.message, ...(patch.message ?? {}) },
+    appearance: { ...base.appearance, ...(patch.appearance ?? {}) },
+  };
+};
+
+/** Message-tab sets. Product Quiz is Pro+ everywhere it appears. */
+const FULL_KINDS: CampaignMessageData["kind"][] = [
+  "text",
+  "product_recommendation",
+  "discount",
+  "product_quiz",
+];
+const NO_QUIZ_KINDS: CampaignMessageData["kind"][] = ["text", "product_recommendation", "discount"];
 
 export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
   {
@@ -74,12 +110,20 @@ export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
     emoji: "👋",
     colors: ["#6d3bf5", "#3b82f6"],
     previewLine: "Hi there 👋 How can we help?",
-    defaults: settings({
-      name: "Welcome visitors",
-      trigger: { pageTypes: ["home"], delaySeconds: 3 },
-      message: "Hi {{customer_name}} 👋 How can we help you today?",
-      ctaLabel: "Say hello",
-      ctaAction: "open_chat",
+    previewCta: "Say hello",
+    triggerSummary: "When visitor open the homepage",
+    scopeMode: "fixed",
+    timingMode: "dwell_or_scroll",
+    showCartValue: false,
+    messageKinds: FULL_KINDS,
+    showContentMode: true,
+    defaults: settings("Welcome visitor", {
+      trigger: { pageScope: "home", sendAfter: "time", delaySeconds: 5 },
+      message: {
+        kind: "text",
+        contentMode: "custom",
+        bodyHtml: "<p>Hi {{customer_name}} 👋</p><p>How can we help you?</p>",
+      },
     }),
   },
   {
@@ -92,12 +136,22 @@ export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
     emoji: "✉️",
     colors: ["#f59e0b", "#ec4899"],
     previewLine: "Get 10% off — join us",
-    defaults: settings({
-      name: "Subscribe newsletter",
-      trigger: { pageTypes: ["any"], delaySeconds: 8 },
-      message: "Get 10% off your first order — join our newsletter!",
-      ctaLabel: "Subscribe",
-      ctaAction: "open_chat",
+    previewCta: "Yes, sure!",
+    triggerSummary: "When visitor spends time on the store",
+    scopeMode: "pages",
+    timingMode: "dwell_or_scroll",
+    showCartValue: false,
+    messageKinds: ["discount"],
+    showContentMode: false,
+    defaults: settings("Subscribe Newsletter", {
+      trigger: { pageScope: "all_pages", sendAfter: "time", delaySeconds: 30 },
+      message: {
+        kind: "discount",
+        bodyHtml: "<p>Don't miss out 👋</p><p>Discover the special offer we're tailored for you!</p>",
+        triggerButtonText: "Yes, sure!",
+        usageInstruction: "This coupon is valid for summer clothing, with all items eligible for a 20% discount.",
+        collectLead: true,
+      },
     }),
   },
   {
@@ -110,12 +164,22 @@ export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
     emoji: "✨",
     colors: ["#06b6d4", "#3b82f6"],
     previewLine: "You might like this ✨",
-    defaults: settings({
-      name: "Product recommendation",
-      trigger: { pageTypes: ["any"], delaySeconds: 5 },
-      message: "You might like these ✨",
-      ctaLabel: "View similar",
-      ctaAction: "open_chat",
+    previewCta: "Ask about it",
+    triggerSummary: "When visitor browses a product page",
+    scopeMode: "product",
+    timingMode: "dwell_or_scroll",
+    showCartValue: false,
+    messageKinds: FULL_KINDS,
+    showContentMode: false,
+    defaults: settings("Product Recommendation", {
+      trigger: { pageScope: "all_product_pages", sendAfter: "time", delaySeconds: 8 },
+      message: {
+        kind: "product_recommendation",
+        bodyHtml: "<p>You might like this product!</p>",
+        recommendation: "best_sellers",
+        primaryButtonText: "Ask about it",
+        secondaryButtonText: "View product",
+      },
     }),
   },
   {
@@ -127,13 +191,28 @@ export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
     isNew: false,
     emoji: "🎁",
     colors: ["#8b5cf6", "#6366f1"],
-    previewLine: "Here’s a little nudge 🎁",
-    defaults: settings({
-      name: "Cart booster",
-      trigger: { pageTypes: ["cart"], delaySeconds: 2, cartMinItems: 1 },
-      message: "Here’s a little nudge 🎁 Use this code for a discount at checkout.",
-      ctaLabel: "Apply code",
-      ctaAction: "apply_code",
+    previewLine: "Here's a little nudge 🎁",
+    previewCta: "Apply my discount",
+    triggerSummary: "When visitor opens the cart with items in it",
+    scopeMode: "fixed",
+    timingMode: "dwell_or_scroll",
+    showCartValue: true,
+    messageKinds: ["discount"],
+    showContentMode: false,
+    defaults: settings("Cart Booster", {
+      trigger: {
+        pageScope: "cart",
+        sendAfter: "time",
+        delaySeconds: 4,
+        cartMinItems: 1,
+      },
+      message: {
+        kind: "discount",
+        bodyHtml: "<p>Here's a little nudge 🎁</p><p>Use this code and finish your order today.</p>",
+        triggerButtonText: "Apply my discount",
+        usageInstruction: "Applied automatically at checkout on your current cart.",
+        collectLead: false,
+      },
     }),
   },
   {
@@ -146,12 +225,22 @@ export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
     emoji: "🛒",
     colors: ["#10b981", "#06b6d4"],
     previewLine: "Complete your look 👗",
-    defaults: settings({
-      name: "View cart",
-      trigger: { pageTypes: ["cart"], delaySeconds: 2, cartMinItems: 1 },
-      message: "Complete your look 👗 Want a hand finding something that goes with it?",
-      ctaLabel: "Add more",
-      ctaAction: "open_chat",
+    previewCta: "Ask about it",
+    triggerSummary: "When visitor opens the cart page",
+    scopeMode: "fixed",
+    timingMode: "dwell_or_scroll",
+    showCartValue: true,
+    messageKinds: NO_QUIZ_KINDS,
+    showContentMode: false,
+    defaults: settings("View Cart", {
+      trigger: { pageScope: "cart", sendAfter: "time", delaySeconds: 5, cartMinItems: 1 },
+      message: {
+        kind: "product_recommendation",
+        bodyHtml: "<p>Complete your look 👗</p><p>These go well with what's in your cart.</p>",
+        recommendation: "complementary",
+        primaryButtonText: "Ask about it",
+        secondaryButtonText: "View product",
+      },
     }),
   },
   {
@@ -164,13 +253,21 @@ export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
     emoji: "⏰",
     colors: ["#f43f5e", "#f59e0b"],
     previewLine: "You left something!",
-    defaults: settings({
-      name: "Abandoned cart reminder",
-      trigger: { pageTypes: ["cart"], delaySeconds: 0, exitIntent: true, cartMinItems: 1 },
-      message: "You left something behind! Complete your order before it sells out.",
-      ctaLabel: "Complete order",
-      ctaAction: "link",
-      ctaUrl: "/checkout",
+    previewCta: "Ask about it",
+    triggerSummary: "When visitor is about to leave with items still in their cart",
+    scopeMode: "fixed",
+    timingMode: "exit_intent",
+    showCartValue: true,
+    messageKinds: ["text", "discount"],
+    showContentMode: false,
+    defaults: settings("Abandoned Cart Reminder", {
+      trigger: { pageScope: "all_pages", exitIntent: true, delaySeconds: 0, cartMinItems: 1 },
+      message: {
+        kind: "text",
+        contentMode: "custom",
+        bodyHtml: "<p>You left something behind! ⏰</p><p>Need a hand before it sells out?</p>",
+        primaryButtonText: "Ask about it",
+      },
     }),
   },
   {
@@ -183,12 +280,22 @@ export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
     emoji: "🗂️",
     colors: ["#ec4899", "#8b5cf6"],
     previewLine: "Browsing? Let me help 🔎",
-    defaults: settings({
-      name: "Collection boost",
-      trigger: { pageTypes: ["collection"], delaySeconds: 3 },
-      message: "Browsing? Let me help 🔎 I can pick out the best of this collection.",
-      ctaLabel: "Show picks",
-      ctaAction: "open_chat",
+    previewCta: "Ask about it",
+    triggerSummary: "When visitor browses a collection page",
+    scopeMode: "collection",
+    timingMode: "dwell_or_scroll",
+    showCartValue: false,
+    messageKinds: NO_QUIZ_KINDS,
+    showContentMode: false,
+    defaults: settings("Collection Boost", {
+      trigger: { pageScope: "all_collection_pages", sendAfter: "time", delaySeconds: 6 },
+      message: {
+        kind: "product_recommendation",
+        bodyHtml: "<p>Browsing? Let me help 🔎</p><p>Here are the picks shoppers love most.</p>",
+        recommendation: "best_sellers",
+        primaryButtonText: "Ask about it",
+        secondaryButtonText: "View product",
+      },
     }),
   },
   {
@@ -201,12 +308,22 @@ export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
     emoji: "🤝",
     colors: ["#0ea5e9", "#6366f1"],
     previewLine: "Changed your mind? 🙂",
-    defaults: settings({
-      name: "Remove items from cart",
-      trigger: { pageTypes: ["cart"], delaySeconds: 2 },
-      message: "Changed your mind? 🙂 Happy to answer any questions about it.",
-      ctaLabel: "Ask about it",
-      ctaAction: "open_chat",
+    previewCta: "Ask about it",
+    triggerSummary: "When visitor removes an item from their cart",
+    scopeMode: "fixed",
+    timingMode: "dwell_or_scroll",
+    showCartValue: true,
+    messageKinds: NO_QUIZ_KINDS,
+    showContentMode: false,
+    defaults: settings("Remove items from cart", {
+      trigger: { pageScope: "all_pages", sendAfter: "time", delaySeconds: 3, cartMinValue: 0 },
+      message: {
+        kind: "text",
+        contentMode: "custom",
+        bodyHtml:
+          "<p>Changed your mind? 💭 I'm here if you need help finding something better!</p>",
+        primaryButtonText: "Ask about it",
+      },
     }),
   },
   {
@@ -219,12 +336,20 @@ export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
     emoji: "🔍",
     colors: ["#14b8a6", "#3b82f6"],
     previewLine: "Find the perfect product 😊",
-    defaults: settings({
-      name: "Search page",
-      trigger: { pageTypes: ["search"], delaySeconds: 2 },
-      message: "Find the perfect product 😊 Tell me what you’re after and I’ll search for you.",
-      ctaLabel: "Search now",
-      ctaAction: "open_chat",
+    previewCta: "Search now",
+    triggerSummary: "When visitor open the search page",
+    scopeMode: "fixed",
+    timingMode: "dwell_or_scroll",
+    showCartValue: false,
+    messageKinds: FULL_KINDS,
+    showContentMode: true,
+    defaults: settings("Search page", {
+      trigger: { pageScope: "search", sendAfter: "time", delaySeconds: 5 },
+      message: {
+        kind: "text",
+        contentMode: "custom",
+        bodyHtml: "<p>Can I help you find the perfect product? 😊</p>",
+      },
     }),
   },
   {
@@ -237,12 +362,21 @@ export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
     emoji: "📦",
     colors: ["#7c3aed", "#db2777"],
     previewLine: "Not sure which size?",
-    defaults: settings({
-      name: "Smart Product Page",
-      trigger: { pageTypes: ["product"], delaySeconds: 3 },
-      message: "Not sure which one to pick? I can add it straight to your cart.",
-      ctaLabel: "Add to cart",
-      ctaAction: "open_chat",
+    previewCta: "Ask about it",
+    triggerSummary: "When visitor browses a product page",
+    scopeMode: "product",
+    timingMode: "dwell",
+    showCartValue: false,
+    messageKinds: ["floater"],
+    showContentMode: false,
+    defaults: settings("Smart Product Page", {
+      trigger: { pageScope: "all_product_pages", sendAfter: "time", delaySeconds: 6 },
+      message: {
+        kind: "floater",
+        floaterMessage: "Not sure which {{ option }}?",
+        subtitle: "I can help you find the right fit",
+        ctaText: "Ask about it",
+      },
     }),
   },
 ];
@@ -257,17 +391,62 @@ export function isPremiumTemplate(type: string): boolean {
   return byType.get(type)?.premium ?? false;
 }
 
-/** Templates whose trigger editor exposes cart state fields (items/value). */
-export function isCartTemplate(type: string): boolean {
-  return type === "cart_booster" || type === "view_cart" || type === "abandoned_cart" || type === "remove_items";
+/** Message-kind labels for the tab strip + the right-hand summary card. */
+export const MESSAGE_KIND_LABELS: Record<CampaignMessageData["kind"], string> = {
+  text: "Text",
+  product_recommendation: "Product Recommendation",
+  discount: "Discount",
+  product_quiz: "Product Quiz",
+  floater: "Smart Product Page",
+};
+
+/** Product Quiz is Pro+ regardless of the template it appears on. */
+export function isPremiumMessageKind(kind: CampaignMessageData["kind"]): boolean {
+  return kind === "product_quiz";
 }
 
-/** Templates whose editor shows the product picker. */
-export function usesProductPicker(type: string): boolean {
-  return type === "product_recommendation" || type === "smart_product_page";
+/** "Recommend similar products" is Pro+ (browsing-history driven). */
+export function isPremiumRecommendation(source: string): boolean {
+  return source === "similar";
 }
 
-/** Templates whose editor shows the collection picker. */
-export function usesCollectionPicker(type: string): boolean {
-  return type === "collection_boost";
+export const RECOMMENDATION_OPTIONS: {
+  value: CampaignSettingsData["message"]["recommendation"];
+  label: string;
+  help: string;
+}[] = [
+  {
+    value: "best_sellers",
+    label: "Recommend best sellers",
+    help: "Suggest top-selling items based on order volume",
+  },
+  {
+    value: "new_arrivals",
+    label: "Recommend new arrivals",
+    help: "Highlight the latest products recently added to your store",
+  },
+  {
+    value: "similar",
+    label: "Recommend similar products",
+    help: "Suggest items based on browsing history",
+  },
+  {
+    value: "complementary",
+    label: "Recommend complementary products",
+    help: "Show complementary items from the same collection",
+  },
+  {
+    value: "custom",
+    label: "Custom recommendation",
+    help: "Manually choose specific products to recommend",
+  },
+];
+
+/** Templates whose editor shows the product picker for the page scope. */
+export function scopeUsesProductPicker(scope: string): boolean {
+  return scope === "specific_product_pages";
+}
+
+export function scopeUsesCollectionPicker(scope: string): boolean {
+  return scope === "specific_collection_pages";
 }

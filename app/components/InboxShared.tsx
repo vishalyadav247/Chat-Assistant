@@ -19,6 +19,8 @@ export interface InboxMessage {
   id: string;
   role: string;
   author: string;
+  /** Team member who sent an agent reply (null = AI / admin / legacy). */
+  authorMemberId?: string | null;
   content: string;
   createdAt: string;
   seenAt: string | null;
@@ -126,9 +128,20 @@ export function avatarGradient(id: string): string {
 }
 
 /** Author caption for thread bubbles. */
-export function authorLabel(message: InboxMessage, contactName: string | null): string {
+export function authorLabel(
+  message: InboxMessage,
+  contactName: string | null,
+  /** id → display name for the shop's team (from the loader's assignees). */
+  teamNames?: Map<string, string>,
+  /** Shown for AI replies — the store branding name the shopper sees. */
+  botName?: string,
+): string {
   if (message.role === "in") return displayName(contactName);
-  if (message.author === "agent") return "You";
-  if (message.author === "ai") return "AI";
+  if (message.author === "agent") {
+    // Name the human who replied, so a team can tell each other apart.
+    const name = message.authorMemberId ? teamNames?.get(message.authorMemberId) : undefined;
+    return name ?? "You";
+  }
+  if (message.author === "ai") return botName?.trim() || "AI";
   return "ChatConvert";
 }

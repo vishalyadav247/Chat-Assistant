@@ -41,6 +41,7 @@ import {
 import { ContactDetailPanel } from "../components/ContactDetailPanel";
 import { requireShopAccess } from "../lib/access.server";
 import { routeError } from "../lib/ui/route-error";
+import { APP_NAME } from "./app";
 
 // Contacts CRM (spec 11, design contacts.html): stat tiles, tabbed + searchable
 // contact table with conversation counts, contact detail side panel, CSV export
@@ -515,8 +516,9 @@ export default function ContactsPage() {
     ["convert-customer", "convert-lead"].includes(String(rowFetcher.formData?.get("intent")));
 
   return (
-    <s-page heading="Contacts">
+    <s-page heading={APP_NAME}>
       <s-stack gap="base">
+        <s-heading>Contacts</s-heading>
         <s-section heading="Overview">
           <StatGrid>
             <StatTile

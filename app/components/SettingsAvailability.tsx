@@ -17,21 +17,6 @@ const DAY_ROWS: Array<{ day: number; label: string }> = [
   { day: 0, label: "Sunday" },
 ];
 
-const FALLBACK_TIMEZONES = [
-  "UTC",
-  "America/New_York",
-  "America/Chicago",
-  "America/Denver",
-  "America/Los_Angeles",
-  "America/Sao_Paulo",
-  "Europe/London",
-  "Europe/Paris",
-  "Europe/Berlin",
-  "Asia/Kolkata",
-  "Asia/Singapore",
-  "Asia/Tokyo",
-  "Australia/Sydney",
-];
 
 const inputStyle: CSSProperties = {
   padding: "6px 10px",
@@ -93,18 +78,11 @@ export function SettingsAvailability(props: {
   timezone: string;
   preview: { status: string; message: string };
   onChange: (value: AvailabilityData) => void;
-  onTimezoneChange: (timezone: string) => void;
+  /** Jump to Settings → General, where the store time zone now lives. */
+  onOpenGeneral: () => void;
   onCancel: () => void;
 }) {
   const { value, onChange } = props;
-
-  const timezones = useMemo(() => {
-    const list =
-      typeof Intl.supportedValuesOf === "function"
-        ? Intl.supportedValuesOf("timeZone")
-        : FALLBACK_TIMEZONES;
-    return list.includes(props.timezone) ? list : [props.timezone, ...list];
-  }, [props.timezone]);
 
   const dayEntry = (day: number): DayEntry =>
     value.days.find((d) => d.day === day) ?? { day, enabled: false, from: "09:00", to: "17:00" };
@@ -519,18 +497,13 @@ export function SettingsAvailability(props: {
             onChange({ ...value, messages: { ...value.messages, holiday: e.currentTarget.value } })
           }
         />
-        <s-select
-          label="Time zone"
-          details="Working hours, breaks and holidays are interpreted in this time zone."
-          value={props.timezone}
-          onChange={(e) => props.onTimezoneChange(e.currentTarget.value)}
-        >
-          {timezones.map((tz) => (
-            <s-option key={tz} value={tz}>
-              {tz.replace(/_/g, " ")}
-            </s-option>
-          ))}
-        </s-select>
+        {/* The picker moved to General → Date & time settings (user request):
+            it governs display formats app-wide, not just this schedule. */}
+        <s-text tone="neutral">
+          Working hours, breaks and holidays are interpreted in your store time zone (
+          {props.timezone.replace(/_/g, " ")}) —{" "}
+          <s-link onClick={props.onOpenGeneral}>change it in General → Date &amp; time settings</s-link>.
+        </s-text>
       </s-section>
     </s-stack>
   );

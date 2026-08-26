@@ -15,7 +15,12 @@ export interface Column<Row> {
   title: string;
   render: (row: Row) => React.ReactNode;
   align?: "start" | "end";
-  /** Column width (e.g. "40%" or 120). Omitted columns share the rest. */
+  /** Column width as a CSS length (number = px, e.g. 120 or "12rem").
+   *  Polaris exposes no column-width API and its `s-table-header` /
+   *  `s-table-cell` hosts are `display: contents`, so a width set on the host
+   *  is a no-op. DataTable instead sizes the light-DOM content it slots into
+   *  the shadow th/td, which the auto table layout honours. Percentages
+   *  resolve against the cell rather than the table, so pass a length. */
   width?: string | number;
 }
 
@@ -124,19 +129,25 @@ export function DataTable<Row extends { id: string }>(props: {
   };
   const clearSelection = () => setSelected(new Set());
 
-  // Column widths: s-table-header takes no style/class prop, but the headers
-  // are light-DOM elements, so a scoped stylesheet can size them (same
-  // technique as row-hover CSS elsewhere). nth-child shifts by one when the
-  // selection checkbox column is present.
+  // Column widths. `s-table-header` / `s-table-cell` are `display: contents`
+  // hosts (the real th/td live in shadow DOM), so the width this used to set
+  // on the host never applied — a `display: contents` box has no size of its
+  // own. What DOES apply is the light-DOM content slotted into the shadow
+  // cell: it keeps this document's styling scope, and the auto table layout
+  // sizes each column from its cells' content. So the header span carries
+  // width + min-width (the column's floor) and the cell wrapper the same
+  // value as max-width (its ceiling — long values wrap instead of widening).
   const scopeClass = "dt" + useId().replace(/[^a-zA-Z0-9-]/g, "");
+  const colWidth = (col: Column<Row>) =>
+    col.width === undefined ? null : typeof col.width === "number" ? `${col.width}px` : col.width;
   // Fixed widths apply on desktop only (spec 19): on phones the columns take
   // their natural size and the table pans inside its .dt-scroll wrapper.
   const widthRules = props.columns
     .map((col, i) => {
-      if (col.width === undefined) return "";
-      const width = typeof col.width === "number" ? `${col.width}px` : col.width;
-      const nth = i + (props.bulkActions ? 2 : 1);
-      return `.${scopeClass} s-table-header:nth-child(${nth}) { width: ${width}; }`;
+      const width = colWidth(col);
+      if (!width) return "";
+      return `.${scopeClass} .dt-h${i} { width: ${width}; min-width: ${width}; }
+.${scopeClass} .dt-c${i} { display: block; width: ${width}; max-width: ${width}; }`;
     })
     .filter(Boolean)
     .join("\n");
@@ -302,11 +313,15 @@ export function DataTable<Row extends { id: string }>(props: {
                 />
               </s-table-header>
             ) : null}
-            {props.columns.map((col) => (
+            {props.columns.map((col, i) => (
               <s-table-header key={col.key} format={col.align === "end" ? "numeric" : "base"}>
                 {/* The shadow th's padding/height are fixed (28px), so padded
-                    light-DOM content is what makes the header row taller. */}
-                <span style={{ display: "inline-block", padding: "6px 0", whiteSpace: "nowrap" }}>
+                    light-DOM content is what makes the header row taller. This
+                    span is also what col.width sizes (see widthRules above). */}
+                <span
+                  className={`dt-h${i}`}
+                  style={{ display: "inline-block", padding: "6px 0", whiteSpace: "nowrap" }}
+                >
                   {col.title}
                 </span>
               </s-table-header>
@@ -352,17 +367,27 @@ export function DataTable<Row extends { id: string }>(props: {
                     />
                   </s-table-cell>
                 ) : null}
-                {props.columns.map((col, i) => (
-                  <s-table-cell key={col.key}>
-                    {i === 0 && onRowClick ? (
+                {props.columns.map((col, i) => {
+                  const content =
+                    i === 0 && onRowClick ? (
                       <s-clickable id={`dtrow-${row.id}`} onClick={() => onRowClick(row)}>
                         {col.render(row)}
                       </s-clickable>
                     ) : (
                       col.render(row)
-                    )}
-                  </s-table-cell>
-                ))}
+                    );
+                  return (
+                    <s-table-cell key={col.key}>
+                      {/* Only widthed columns get the wrapper — an extra block
+                          around every cell would reflow existing layouts. */}
+                      {col.width === undefined ? (
+                        content
+                      ) : (
+                        <div className={`dt-c${i}`}>{content}</div>
+                      )}
+                    </s-table-cell>
+                  );
+                })}
                 {props.rowActions ? (
                   <s-table-cell>
                     <div

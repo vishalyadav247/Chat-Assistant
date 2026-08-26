@@ -2,12 +2,18 @@ import { useNavigate } from "react-router";
 import { Row } from "./Row";
 import { TabPills } from "./TabPills";
 
-// Canonical page sub-header: one row of [back] [title] [tabs] ... [toolbar],
-// with an optional description underneath. Replaces the six ad-hoc header
-// variants that grew across the routes. The s-page `heading` attribute stays
-// the platform page title; use `title` here only for sub-views/editors.
+// Canonical page header: the page title on its own line, then one row of
+// [back] [tabs] ... [toolbar], with an optional description underneath.
+// Replaces the six ad-hoc header variants that grew across the routes.
+//
+// `title` gets its own line rather than sharing the row with the back button
+// and tab pills: crammed between them it read as just another control instead
+// of the page name. Since s-page `heading` now carries the APP name (so the
+// admin's uninstall dialog says "ChatConvert", not the current page), this IS
+// the page title — same position as the plain <s-heading> the tabless pages use.
 
 export function PageHeader<T extends string>(props: {
+  /** Page title. Rendered on its own line above the back/tabs/toolbar row. */
   title?: string;
   description?: string;
   backTo?: string;
@@ -21,10 +27,11 @@ export function PageHeader<T extends string>(props: {
 }) {
   const navigate = useNavigate();
   const hasBack = Boolean(props.backTo || props.onBack);
-  const hasTopRow = hasBack || props.title || props.tabs || props.toolbar;
+  const hasTopRow = hasBack || props.tabs || props.toolbar;
 
   return (
     <s-stack gap="small">
+      {props.title ? <s-heading>{props.title}</s-heading> : null}
       {hasTopRow ? (
         <Row justify="between">
           <Row gap="sm">
@@ -38,7 +45,6 @@ export function PageHeader<T extends string>(props: {
                 {props.backLabel}
               </s-button>
             ) : null}
-            {props.title ? <s-heading>{props.title}</s-heading> : null}
             {props.tabs && props.activeTab !== undefined && props.onTabChange ? (
               <TabPills tabs={props.tabs} active={props.activeTab} onChange={props.onTabChange} />
             ) : null}

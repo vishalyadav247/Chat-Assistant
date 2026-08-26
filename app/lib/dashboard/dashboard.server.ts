@@ -233,7 +233,7 @@ export async function setupChecklist(
     },
     {
       id: "curated",
-      label: "Publish your first five curated answers",
+      label: "Publish first five curated answers",
       state: curatedPublished >= 5 ? "done" : "todo",
       href: "/app/curated-answers",
       linkLabel: "Curated Answers",

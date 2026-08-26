@@ -18,6 +18,8 @@ import {
 import { InboxDetails } from "../components/InboxDetails";
 import { BRAND } from "../components/ui/tokens";
 import { assigneeOptions, isValidAssignee, parseNotifyPrefs } from "../lib/team/team.server";
+import { loadShopSettings } from "../lib/settings/save.server";
+import { loadWidgetSettings } from "../lib/widget/settings-save.server";
 import { playChime, useInboxLive } from "../lib/ui/inbox-live";
 import { useIsMobile } from "../lib/ui/use-mobile";
 import { OpenInWebButton } from "../components/web/OpenInWebButton";
@@ -28,6 +30,7 @@ import { FILTERS, displayName, unreadOpenCount } from "../components/InboxShared
 import type { FilterKey, InboxRow } from "../components/InboxShared";
 import { requireShopAccess } from "../lib/access.server";
 import { routeError } from "../lib/ui/route-error";
+import { APP_NAME } from "./app";
 
 // Inbox workspace (spec 10, design inbox.html): 4 columns —
 // Filters | List | Thread | Details — with human reply into the shopper's
@@ -54,13 +57,24 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     active = fallbackId ? await getConversationDetail(shopId, fallbackId) : null;
   }
 
-  const [shop, assignees] = await Promise.all([
+  const [shop, assignees, widget, shopSettings] = await Promise.all([
     db.shop.findUnique({
       where: { id: shopId },
       select: { plan: true, currency: true, name: true },
     }),
     assigneeOptions(shopId),
+    loadWidgetSettings(shopId),
+    loadShopSettings(shopId),
   ]);
+  // Same rule as the storefront config and the chatbox preview: "Store
+  // branding" uses the Settings → General logo/name, anything else keeps the
+  // default chat mark. The inbox mirrors it so an agent sees the same identity
+  // on AI replies that the shopper does.
+  const storeName = shopSettings.storeInfo.name.trim() || shop?.name || "Store";
+  const botAvatar = {
+    url: widget.avatarMode === "store_branding" ? shopSettings.storeInfo.logoUrl : null,
+    name: storeName,
+  };
 
   return {
     conversations,
@@ -69,6 +83,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     currency: shop?.currency ?? "USD",
     // Assignable people: the owner + the team roster (spec 18 TeamMember table).
     assignees,
+    // Identity shown on AI bubbles, mirroring the storefront widget.
+    botAvatar,
     // Web surface: chime on new activity when the member wants it.
     live: {
       surface: access.surface,
@@ -78,7 +94,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { shopId } = await requireShopAccess(request, { permission: "inbox" });
+  const access = await requireShopAccess(request, { permission: "inbox" });
+  const { shopId } = access;
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
   const conversationId = String(formData.get("conversationId") ?? "");
@@ -90,7 +107,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         .trim()
         .slice(0, 2000);
       if (!content) return { ok: false, intent };
-      return { ok: await sendAgentReply(shopId, conversationId, content), intent };
+      return {
+        ok: await sendAgentReply(shopId, conversationId, content, access.member?.id ?? null),
+        intent,
+      };
     }
     case "resolve":
       return { ok: await setResolved(shopId, conversationId, true), intent };
@@ -172,6 +192,9 @@ export default function InboxPage() {
   // Fill the viewport: size the workspace from its rendered top edge down to
   // the bottom of the iframe (the CSS 130px offset is only a pre-paint guess).
   const gridRef = useRef<HTMLDivElement>(null);
+  // Read inside the fit (which is mounted once) without re-running the effect.
+  const mobileRef = useRef(isMobile);
+  mobileRef.current = isMobile;
   useEffect(() => {
     const el = gridRef.current;
     if (!el) return;
@@ -180,10 +203,18 @@ export default function InboxPage() {
     // exactly what fits. floor() guards fractional-zoom rounding.
     const apply = () => {
       const top = el.getBoundingClientRect().top + window.scrollY;
-      // visualViewport tracks the on-screen keyboard on phones, so the
-      // composer stays visible while typing (innerHeight ignores it).
-      const viewportH = window.visualViewport?.height ?? window.innerHeight;
-      const h = Math.floor(viewportH - top - 16);
+      // Where the VISIBLE area ends, in the same coordinates as `top`.
+      // A phone keyboard shrinks the visual viewport and — on browsers that
+      // don't honour interactive-widget=resizes-content (iOS) — also scrolls
+      // it down inside an unchanged layout viewport. Adding offsetTop is what
+      // keeps the composer pinned to the visible bottom instead of the
+      // workspace collapsing into a band in the middle of the page.
+      const vv = window.visualViewport;
+      const visibleBottom = vv ? vv.height + vv.offsetTop : window.innerHeight;
+      // Phones give the workspace the whole screen (its own safe-area margin
+      // sits inside the composer); pointer devices keep the 16px breather.
+      const slack = mobileRef.current ? 0 : 16;
+      const h = Math.floor(visibleBottom - top - slack);
       el.style.height = `${Math.max(0, h)}px`;
       // Second pass: whatever still overflows (s-page bottom padding, borders)
       // comes off the grid so the page never grows a scrollbar.
@@ -314,7 +345,7 @@ export default function InboxPage() {
   return (
     // Mobile drops the page heading — the shell top bar + filter chips give
     // the context, and the workspace gets the reclaimed height (spec 20).
-    <s-page heading={isMobile ? undefined : "Inbox"} inlineSize="large">
+    <s-page heading={isMobile ? undefined : APP_NAME} inlineSize="large">
       <OpenInWebButton slot="secondary-actions" />
       <style dangerouslySetInnerHTML={{ __html: WORKSPACE_CSS }} />
       {/* Mobile (spec 19): one pane at a time, keyed off ?c= — no ?c= shows the
@@ -340,6 +371,8 @@ export default function InboxPage() {
         <InboxThread
           active={active}
           busy={busy}
+          botAvatar={data.botAvatar}
+          team={data.assignees}
           onBack={() =>
             setSearchParams(
               (prev) => {
@@ -532,7 +565,7 @@ const WORKSPACE_CSS = `
 .cin-menu button{text-align:left;padding:8px 10px;border-radius:7px;font-size:12.5px;font-weight:600;}
 .cin-menu button:hover{background:#fbfbfc;}
 .cin-menu button.del{color:#e11d48;}
-.cin-msgs{flex:1;overflow-y:auto;padding:18px 18px 22px;display:flex;flex-direction:column;gap:8px;}
+.cin-msgs{flex:1;min-height:0;overflow-y:auto;padding:18px 18px 22px;display:flex;flex-direction:column;gap:8px;}
 .cin-msgs > span{display:contents;}
 .cin-mtime{align-self:center;font-size:11px;color:#9a9aa2;margin:6px 0;}
 .cin-mline{display:flex;align-items:flex-end;gap:9px;max-width:min(76%,640px);}
@@ -540,6 +573,9 @@ const WORKSPACE_CSS = `
 .cin-mline.out{align-self:flex-end;flex-direction:row-reverse;}
 .cin-mpa{width:28px;height:28px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;background:linear-gradient(135deg,#f472b6,#a78bfa);}
 .cin-mpa.bot{background:${BRAND.gradient};}
+/* Store logo variant of the AI avatar — same circle, image fills it. */
+.cin-mpa.img{overflow:hidden;background:#fff;box-shadow:inset 0 0 0 1px #e9e9ec;}
+.cin-mpa.img img{width:100%;height:100%;object-fit:cover;display:block;}
 .cin-mwrap{display:flex;flex-direction:column;min-width:0;}
 .cin-mmeta{font-size:11px;color:#9a9aa2;margin-bottom:4px;}
 .cin-mline.out .cin-mmeta{text-align:right;}
@@ -549,13 +585,20 @@ const WORKSPACE_CSS = `
 .cin-seen{align-self:flex-end;font-size:10.5px;color:#9a9aa2;margin-top:2px;}
 .cin-sys{align-self:center;font-size:11.5px;color:#9a9aa2;background:#fff;box-shadow:0 1px 2px rgba(20,20,25,.06);border-radius:20px;padding:5px 12px;margin:8px auto;display:table;}
 .cin-composer{flex:none;background:#fff;border:1px solid #dcdce1;border-radius:7px;margin:6px 6px 10px;padding:10px 12px;box-shadow:0 2px 10px rgba(20,20,25,.05);}
-.cin-comp-input{width:100%;min-height:38px;max-height:90px;font-size:13px;color:#2b2b30;outline:none;border:none;resize:vertical;font-family:inherit;line-height:1.5;}
+.cin-comp-input{width:100%;min-height:38px;font-size:13px;color:#2b2b30;outline:none;border:none;resize:none;overflow-y:hidden;font-family:inherit;line-height:1.5;display:block;}
 .cin-comp-input::placeholder{color:#9a9aa2;}
+/* The composer inherits the .cin-grid slim scrollbar above, but that only
+   reveals the thumb on :hover — this box is scrolled by TYPING, when the
+   pointer is usually elsewhere. Reveal it on focus too (widget composer
+   does the same). */
+.cin-comp-input:focus{scrollbar-color:#c9c9d2 transparent;}
+.cin-comp-input:focus::-webkit-scrollbar-thumb{background:#c9c9d2;}
+.cin-comp-input::-webkit-scrollbar-thumb:hover{background:#adadb8;}
 .cin-comp-bar{display:flex;align-items:center;gap:2px;margin-top:8px;padding-top:8px;box-shadow:inset 0 1px 0 #e9e9ec;}
 .cin-emoji{width:30px;height:30px;border-radius:8px;font-size:15px;display:flex;align-items:center;justify-content:center;}
 .cin-emoji:hover{background:#fbfbfc;}
-.cin-send{margin-left:auto;background:${BRAND.gradient};color:#fff;width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 10px rgba(109,59,245,.35);font-size:14px;}
-.cin-send:disabled{opacity:.4;box-shadow:none;}
+button.cin-send{margin-left:auto;background:${BRAND.gradient};color:#fff;width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 10px rgba(109,59,245,.35);font-size:14px;}
+button.cin-send:disabled{opacity:.4;box-shadow:none;}
 
 .cin-details{background:#f7f7f9;}
 .cin-dscroll{flex:1;min-height:0;overflow-y:auto;padding:9px;display:flex;flex-direction:column;gap:12px;}
@@ -608,6 +651,14 @@ const WORKSPACE_CSS = `
 .cin-dov-close{position:absolute;top:8px;right:9px;z-index:5;width:32px;height:32px;border-radius:8px;color:#6b6b73;display:flex;align-items:center;justify-content:center;background:#fff;}
 .cin-dov-close:hover{background:#e9e9ec;}
 
+/* Touch devices (phones AND tablets): the thread-header controls are the
+   agent's main actions, so they get real 40px targets instead of the 30-34px
+   mouse sizes. Pointer-gated, so desktop is untouched. */
+@media (pointer: coarse){
+  .cin-back,.cin-infobtn,.cin-star{width:40px;height:40px;}
+  .cin-kebab{width:40px;height:34px;}
+  .cin-filbtn{min-width:40px;min-height:40px;}
+}
 @media (max-width:1240px){.cin-grid{grid-template-columns:150px 260px 1fr;}.cin-details{display:none;}.cin-infobtn{display:flex;}}
 @media (max-width:1040px){.cin-grid{grid-template-columns:260px 1fr;}.cin-filcol{display:none;}}
 @media (max-width:768px){
@@ -639,12 +690,16 @@ const WORKSPACE_CSS = `
   .cin-msgs{padding:14px 12px 18px;}
   .cin-mline{max-width:85%;}
 
-  /* Composer: rounded card, circular gradient send, home-bar safe area.
-     16px inputs stop iOS focus-zoom. */
-  .cin-composer{border-radius:16px;margin:8px 8px calc(8px + env(safe-area-inset-bottom, 0px));padding:10px 12px;}
+  /* Composer: SAME shape as the desktop chat bar — reply field on top, a
+     divider, then the emoji strip with Send at the right — just scaled to the
+     phone (one starting row, 32px emoji, 34px send). 16px input stops the iOS
+     focus-zoom; the growth cap keeps a long reply from eating the thread. */
+  .cin-composer{border-radius:14px;margin:8px 8px calc(8px + env(safe-area-inset-bottom, 0px));padding:9px 11px;}
   .cin-comp-input,.cin-lsearch{font-size:16px;}
-  .cin-send{width:40px;height:40px;border-radius:50%;}
-  .cin-emoji{width:34px;height:34px;}
+  .cin-comp-input{min-height:30px;max-height:96px;}
+  .cin-comp-bar{margin-top:7px;padding-top:7px;gap:1px;}
+  .cin-emoji{display:flex;width:32px;height:32px;font-size:16px;}
+  button.cin-send{width:34px;height:34px;border-radius:10px;font-size:13px;}
 
   .cin-dov-panel{width:min(400px,100vw);}
 }

@@ -731,15 +731,19 @@ export function TrainingKnowledgeTab(props: {
           >
             <input
               type="file"
-              accept=".txt,.json"
+              accept=".pdf,.txt,.json,application/pdf"
               aria-label="Choose a file"
               onChange={(e) => onPickFile(e.currentTarget.files?.[0] ?? null)}
             />
             {filePick ? <s-paragraph>Selected: {filePick.name}</s-paragraph> : null}
           </div>
           <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, lineHeight: 1.9 }}>
-            <li>Supported formats today: .txt, .json</li>
-            <li>.pdf and .docx aren&apos;t supported yet — the parser is still pending</li>
+            <li>Supported formats: .pdf, .txt, .json</li>
+            <li>
+              PDFs are read from their text layer — scanned or image-only PDFs (and tables inside
+              images) can&apos;t be learned
+            </li>
+            <li>.docx isn&apos;t supported yet — save it as a PDF first</li>
             <li>Maximum file size: 2MB</li>
           </ul>
           {fileError ? <s-text tone="critical">{fileError}</s-text> : null}

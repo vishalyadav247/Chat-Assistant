@@ -300,32 +300,213 @@ export type HandoverConfigData = z.infer<typeof handoverConfigSchema>;
 export const defaultHandoverConfig = (): HandoverConfigData => handoverConfigSchema.parse({});
 
 // ── Campaign settings (spec 12) ─────────────────────────────────────────────
+// Shape mirrors the proactive-chat editor 1:1 (design reference:
+// .claude/resources/proactive_chat/*.png): Trigger / Conditions / Message /
+// Appearance. Every field `.catch()`es so campaigns saved under the old flat
+// shape (pageTypes/message/ctaLabel) still parse — legacy blobs are lifted by
+// migrateCampaignSettings() below before parsing.
 
-export const campaignSettingsSchema = z.object({
-  trigger: z
-    .object({
-      pageTypes: z.array(z.enum(["home", "product", "collection", "search", "cart", "any"])).catch(["any"]),
-      urlContains: z.string().max(300).catch(""),
-      delaySeconds: z.number().int().min(0).max(300).catch(3),
-      exitIntent: z.boolean().catch(false),
-      cartMinItems: z.number().int().min(0).catch(0),
-      cartMinValue: z.number().min(0).catch(0),
-    })
-    .catch({ pageTypes: ["any"], urlContains: "", delaySeconds: 3, exitIntent: false, cartMinItems: 0, cartMinValue: 0 }),
-  message: z.string().max(500).catch(""),
-  ctaLabel: z.string().max(60).catch(""),
-  ctaAction: z.enum(["open_chat", "apply_code", "link"]).catch("open_chat"),
-  // Only relative paths or http(s) — a javascript:/data: CTA would execute in
-  // storefront visitors' browsers (review M3).
-  ctaUrl: z
-    .string()
-    .max(500)
-    .refine((v) => v === "" || v.startsWith("/") || /^https?:\/\//i.test(v))
-    .catch(""),
-  discountCode: z.string().max(60).catch(""),
-  productIds: z.array(z.string()).catch([]),
-  collectionIds: z.array(z.string()).catch([]),
+/** Where a campaign is allowed to fire. One enum covers every template's
+ *  "Page to show" control; templates that don't offer a choice pin one value. */
+export const CAMPAIGN_PAGE_SCOPES = [
+  "all_pages",
+  "specific_pages",
+  "all_product_pages",
+  "specific_product_pages",
+  "all_collection_pages",
+  "specific_collection_pages",
+  "home",
+  "search",
+  "cart",
+] as const;
+
+export const campaignTriggerSchema = z.object({
+  pageScope: z.enum(CAMPAIGN_PAGE_SCOPES).catch("all_pages"),
+  /** "Specific pages" → URL substring match. */
+  urlContains: z.string().max(300).catch(""),
+  /** "Specific product/collection pages" → Shopify GIDs picked in the editor. */
+  pageProductIds: z.array(z.string().max(120)).catch([]),
+  pageCollectionIds: z.array(z.string().max(120)).catch([]),
+  /** "Send message after": dwell time vs scroll depth. */
+  sendAfter: z.enum(["time", "scroll"]).catch("time"),
+  delaySeconds: z.number().int().min(0).max(600).catch(5),
+  scrollPercent: z.number().int().min(1).max(100).catch(50),
+  /** Cart-value window (cart templates). 0 = no floor; null = no ceiling. */
+  cartMinValue: z.number().min(0).catch(0),
+  cartMaxValue: z.number().min(0).nullable().catch(null),
+  cartMinItems: z.number().int().min(0).catch(0),
+  /** Abandoned-cart: fire when the pointer leaves toward the browser chrome. */
+  exitIntent: z.boolean().catch(false),
 });
 
+export const campaignConditionsSchema = z.object({
+  audience: z.enum(["all", "visitors", "customers"]).catch("all"),
+  /** "During business hour" resolves against the widget availability status. */
+  displayTime: z.enum(["all", "business_hours"]).catch("all"),
+  device: z.enum(["all", "desktop", "mobile"]).catch("all"),
+  displayDuration: z.enum(["always", "custom"]).catch("always"),
+  /** YYYY-MM-DD, inclusive, shop time zone. Only read when duration=custom. */
+  startDate: z.string().max(10).catch(""),
+  endDate: z.string().max(10).catch(""),
+  countryMode: z.enum(["all", "selected"]).catch("all"),
+  /** ISO-3166 alpha-2, uppercase. */
+  countries: z.array(z.string().max(2)).catch([]),
+});
+
+/** Lead-capture block (Subscribe newsletter → Collect lead). */
+export const campaignLeadSchema = z.object({
+  introduction: z
+    .string()
+    .max(300)
+    .catch("Subscribe to get hot deals, exclusive updates and rewards."),
+  /** Email is always collected — the editor renders that checkbox fixed on. */
+  askName: z.boolean().catch(false),
+  askPhone: z.boolean().catch(false),
+  doubleOptIn: z.boolean().catch(false),
+  successMessage: z
+    .string()
+    .max(400)
+    .catch(
+      "Thank you for subscribing! Check your inbox and stay tuned for the latest news and exclusive offers.",
+    ),
+});
+
+export const CAMPAIGN_MESSAGE_KINDS = [
+  "text",
+  "product_recommendation",
+  "discount",
+  "product_quiz",
+  "floater",
+] as const;
+
+export const CAMPAIGN_RECOMMENDATION_SOURCES = [
+  "best_sellers",
+  "new_arrivals",
+  "similar",
+  "complementary",
+  "custom",
+] as const;
+
+export const campaignMessageSchema = z.object({
+  kind: z.enum(CAMPAIGN_MESSAGE_KINDS).catch("text"),
+
+  // ── text ──
+  /** "Quick question" reuses the chatbox's conversation starters as chips;
+   *  "Custom message" renders bodyHtml. */
+  contentMode: z.enum(["quick_question", "custom"]).catch("custom"),
+  /** Rich text — sanitized server-side on save, like FAQ answers. */
+  bodyHtml: z.string().max(4000).catch(""),
+
+  // ── product recommendation ──
+  recommendation: z.enum(CAMPAIGN_RECOMMENDATION_SOURCES).catch("best_sellers"),
+  productIds: z.array(z.string().max(120)).catch([]),
+  collectionIds: z.array(z.string().max(120)).catch([]),
+  /** Card buttons. Secondary is omitted from the bubble when blank. */
+  primaryButtonText: z.string().max(30).catch("Ask about it"),
+  secondaryButtonText: z.string().max(30).catch("View product"),
+
+  // ── discount / newsletter ──
+  triggerButtonText: z.string().max(60).catch("Yes, sure!"),
+  discountCode: z.string().max(60).catch(""),
+  usageInstruction: z.string().max(300).catch(""),
+  collectLead: z.boolean().catch(false),
+  lead: campaignLeadSchema.catch(campaignLeadSchema.parse({})),
+
+  // ── smart product page floater ──
+  floaterMessage: z.string().max(100).catch("Not sure which {{ option }}?"),
+  subtitle: z.string().max(120).catch("I can help you find the right fit"),
+  ctaText: z.string().max(30).catch("Ask about it"),
+});
+
+/** Bubble colors. Defaults = the design's white bubble / near-black ink.
+ *  NOT the shared `hexColor` — that one already carries `.catch("#6d3bf5")`,
+ *  and a second `.catch()` on top would never fire (the inner one absorbs
+ *  every failure), silently painting every bubble brand-purple. */
+const campaignHex = (fallback: string) =>
+  z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/)
+    .catch(fallback);
+
+export const campaignAppearanceSchema = z.object({
+  background: campaignHex("#ffffff"),
+  textColor: campaignHex("#1a1a1f"),
+  buttonBackground: campaignHex("#1a1a1f"),
+  buttonLabelColor: campaignHex("#ffffff"),
+});
+
+export const campaignSettingsSchema = z.object({
+  trigger: campaignTriggerSchema.catch(campaignTriggerSchema.parse({})),
+  conditions: campaignConditionsSchema.catch(campaignConditionsSchema.parse({})),
+  message: campaignMessageSchema.catch(campaignMessageSchema.parse({})),
+  appearance: campaignAppearanceSchema.catch(campaignAppearanceSchema.parse({})),
+});
+
+export type CampaignTriggerData = z.infer<typeof campaignTriggerSchema>;
+export type CampaignConditionsData = z.infer<typeof campaignConditionsSchema>;
+export type CampaignMessageData = z.infer<typeof campaignMessageSchema>;
+export type CampaignAppearanceData = z.infer<typeof campaignAppearanceSchema>;
 export type CampaignSettingsData = z.infer<typeof campaignSettingsSchema>;
 export const defaultCampaignSettings = (): CampaignSettingsData => campaignSettingsSchema.parse({});
+
+/** Legacy blobs (flat `pageTypes`/`message`/`ctaLabel`/`discountCode`) predate
+ *  the editor rebuild. Without this they would parse to an all-defaults
+ *  campaign and the merchant's copy would silently vanish — lift the fields
+ *  that still have a home and let the schema fill the rest. Idempotent: a blob
+ *  whose `message` is already an object passes straight through. */
+export function migrateCampaignSettings(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object") return raw;
+  const blob = raw as Record<string, unknown>;
+  if (typeof blob.message === "object" && blob.message !== null) return raw;
+
+  const legacyTrigger = (blob.trigger ?? {}) as Record<string, unknown>;
+  const pageTypes = Array.isArray(legacyTrigger.pageTypes) ? (legacyTrigger.pageTypes as string[]) : [];
+  const pageScope = pageTypes.includes("product")
+    ? "all_product_pages"
+    : pageTypes.includes("collection")
+      ? "all_collection_pages"
+      : pageTypes.includes("home")
+        ? "home"
+        : pageTypes.includes("search")
+          ? "search"
+          : pageTypes.includes("cart")
+            ? "cart"
+            : "all_pages";
+
+  const text = typeof blob.message === "string" ? blob.message : "";
+  const productIds = Array.isArray(blob.productIds) ? (blob.productIds as string[]) : [];
+  const ctaLabel = typeof blob.ctaLabel === "string" && blob.ctaLabel ? blob.ctaLabel : "";
+  // Legacy messages were plain text — escape before wrapping so a stray "<"
+  // isn't reinterpreted as markup by the rich-text editor.
+  const escaped = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  return {
+    trigger: {
+      pageScope,
+      urlContains: legacyTrigger.urlContains,
+      sendAfter: "time",
+      delaySeconds: legacyTrigger.delaySeconds,
+      cartMinItems: legacyTrigger.cartMinItems,
+      cartMinValue: legacyTrigger.cartMinValue,
+      exitIntent: legacyTrigger.exitIntent,
+    },
+    conditions: {},
+    message: {
+      kind: blob.discountCode ? "discount" : productIds.length > 0 ? "product_recommendation" : "text",
+      contentMode: "custom",
+      bodyHtml: escaped ? `<p>${escaped}</p>` : "",
+      recommendation: productIds.length > 0 ? "custom" : "best_sellers",
+      productIds,
+      collectionIds: Array.isArray(blob.collectionIds) ? blob.collectionIds : [],
+      primaryButtonText: ctaLabel || "Ask about it",
+      triggerButtonText: ctaLabel || "Yes, sure!",
+      discountCode: blob.discountCode,
+    },
+    appearance: {},
+  };
+}
+
+/** Read helper: migrate-then-parse. Every read path goes through this. */
+export function parseCampaignSettings(raw: unknown): CampaignSettingsData {
+  return campaignSettingsSchema.parse(migrateCampaignSettings(raw ?? {}));
+}

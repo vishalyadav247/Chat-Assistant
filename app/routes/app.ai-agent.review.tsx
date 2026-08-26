@@ -10,6 +10,7 @@ import { PageHeader } from "../components/ui/PageHeader";
 import { requireShopAccess } from "../lib/access.server";
 import { routeError } from "../lib/ui/route-error";
 import { useDateTime } from "../lib/format/context";
+import { APP_NAME } from "./app";
 
 // AI unresolved questions review queue (spec 07): shopper questions that hit
 // the pipeline fallback (logged by spec 03). Actions prefill the target form —
@@ -67,9 +68,10 @@ export default function ReviewQueuePage() {
   const busy = fetcher.state !== "idle";
 
   return (
-    <s-page heading="AI unresolved questions">
+    <s-page heading={APP_NAME}>
       <s-stack gap="base">
         <PageHeader
+          title="AI unresolved questions"
           backTo="/app/ai-agent"
           backLabel="AI Agent"
           description="Questions your AI couldn't answer confidently. Turn them into training data."

@@ -32,6 +32,7 @@ import { getQuota } from "../lib/billing/plans.server";
 import { requireShopAccess } from "../lib/access.server";
 import { routeError } from "../lib/ui/route-error";
 import { logError } from "../lib/log.server";
+import { APP_NAME } from "./app";
 
 // Dashboard (spec 13, design dashboard.html): greeting hero, overview KPIs
 // with range/compare, 6-step setup checklist with progress ring, live
@@ -241,7 +242,7 @@ export default function DashboardPage() {
   ) : null;
 
   return (
-    <s-page heading="Home">
+    <s-page heading={APP_NAME}>
       <s-stack gap="base">
         <DashboardHero
           greeting={data.greeting}
