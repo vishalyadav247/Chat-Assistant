@@ -1,4 +1,4 @@
-/* Generates .claude/qa/test-matrix.xlsx — the module/feature test matrix.
+/* Generates scripts/qa/test-matrix.xlsx — the module/feature test matrix.
  * Run: npx tsx scripts/qa/make-test-matrix.ts
  *
  * Data lives in this file so the sheet is regenerable and diffable: edit a row,
@@ -388,7 +388,7 @@ function summarySheet(): Sheet {
   return { name: "Summary", columns: [30, 14, 16, 18], rows };
 }
 
-const OUT = join(process.cwd(), ".claude", "qa", "test-matrix.xlsx");
+const OUT = join(process.cwd(), "scripts", "qa", "test-matrix.xlsx");
 mkdirSync(dirname(OUT), { recursive: true });
 writeXlsx(OUT, [matrixSheet(), defectsSheet(), summarySheet()]);
 

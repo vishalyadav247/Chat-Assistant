@@ -1,7 +1,7 @@
 # ChatConvert — Pre-Submission Test Cases
 
 > Written 2026-08-21 for the manual-QA pass that gates production deploy + App Store submission.
-> Execution results live in `.claude/qa/test-matrix.xlsx` (regenerate with
+> Execution results live in `scripts/qa/test-matrix.xlsx` (regenerate with
 > `npx tsx scripts/qa/make-test-matrix.ts`). Defects are logged in the PROGRESS.md decisions log.
 >
 > **Scenario legend** — every case is run in as many of these as apply:
@@ -444,7 +444,7 @@ route files exist, never that their loaders run or their pages paint.
 
 ## V. Browser pass — what only a human eye catches
 
-Executed from `.claude/qa/BROWSER-TEST-PLAN.md` (60 numbered checks, B1–B5): visual rendering
+Executed from `scripts/qa/BROWSER-TEST-PLAN.md` (60 numbered checks, B1–B5): visual rendering
 inside the Shopify iframe, console and network cleanliness, click-through of every form, live
 cross-surface updates over SSE, storefront add-to-cart, mobile at 390px, keyboard-only operation,
 and Lighthouse. **These cannot be asserted by a script** and are recorded as `PENDING-MANUAL` in

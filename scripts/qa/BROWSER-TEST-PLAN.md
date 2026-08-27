@@ -1,6 +1,6 @@
 # ChatConvert — Browser (visual + interaction) test plan
 
-Companion to `.claude/qa/TEST-CASES.md`. Everything in TEST-CASES.md is executed by the
+Companion to `scripts/qa/TEST-CASES.md`. Everything in TEST-CASES.md is executed by the
 `scripts/qa/*.test.ts` suites at the HTTP / server / DB level. **This document covers only what a
 script cannot see**: what a human actually looks at and clicks.
 
@@ -125,7 +125,7 @@ Entry: the dev store's storefront with the app embed enabled.
 
 ## Recording
 
-Record every result back into `.claude/qa/test-matrix.xlsx` — the `Design tested` column is exactly
+Record every result back into `scripts/qa/test-matrix.xlsx` — the `Design tested` column is exactly
 what this document produces. Any FAIL becomes a numbered defect in the same sheet's `Defects` tab.
 
 ---
