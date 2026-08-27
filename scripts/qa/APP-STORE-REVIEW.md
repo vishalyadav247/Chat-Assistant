@@ -21,17 +21,23 @@
 
 ## SUBMISSION BLOCKERS (fix before you press Submit)
 
-| # | Blocker | File |
-|---|---|---|
-| B1 | **Protected Customer Data level 2 not requested.** `read_customers` / `write_customers` / `read_orders` read customer name/email/phone and order email/phone/shipping address. A public app must request PCD access **and the specific fields** in the Partner Dashboard, implement level 1 + level 2 requirements, and take part in data-protection reviews. Submitting without this is an automatic hold. | `shopify.app.toml` (justifications now inline), `app/routes/proxy.order-track.tsx`, `app/lib/contacts/contacts.server.ts` |
-| B2 | **`.myshopify.com` shop-domain login form still shipped** at `/auth/login` — violates req **2.3.1** ("must not request the manual entry of a myshopify.com URL"). It was deliberately removed from `_index` but the template route was never deleted, and `authPathPrefix = "/auth"` makes the library bounce to it. Delete `app/routes/auth.login/` and the now-unused `login` export. | `app/routes/auth.login/route.tsx:34-42`, `app/routes/auth.login/error.server.tsx:10,12`, `app/shopify.server.ts:44` |
-| B3 | **All app URLs are a `trycloudflare` dev tunnel** and `automatically_update_urls_on_dev = true`. `application_url`, `[auth].redirect_urls` and `[app_proxy].url` must point at the production host with valid TLS (req **3.1.1**) before `npm run deploy`. Note the app-proxy URL is pinned per store at install time. | `shopify.app.toml` (warning comment added) |
-| B4 | **`billingTestMode` can hand a merchant a paid plan with no Shopify charge in production.** The mock provider makes no Shopify call and persists a fake subscription gid. Operator-only + banner-warned, but it should hard-fail when `NODE_ENV === "production"` — this is the only code path in the repo that bypasses the Billing API (req **1.2.1**). | `app/lib/billing/shopify-billing.server.ts:73-80,363-368` |
-| B5 | **Privacy policy document does not exist yet.** Must name OpenAI as processor, state the merchant-configurable transcript retention windows *and* the 7-day post-uninstall retention window, and give a GDPR contact. | listing + hosted policy URL |
+> **Status re-verified against the tree on 2026-08-27.** B2 and B4 are **CLOSED in code**
+> — `app/routes/auth.login/` no longer exists and `shopify.login` is no longer exported;
+> `isBillingTestMode()` returns `false` whenever `NODE_ENV === "production"`. The three
+> that remain (**B1, B3, B5**) are all outside the codebase: a Partner Dashboard request,
+> a config edit at deploy time, and a hosted document. Nothing in the app blocks submission.
+
+| # | Blocker | Status | File |
+|---|---|---|---|
+| B1 | **Protected Customer Data level 2 not requested.** `read_customers` / `write_customers` / `read_orders` read customer name/email/phone and order email/phone/shipping address. A public app must request PCD access **and the specific fields** in the Partner Dashboard, implement level 1 + level 2 requirements, and take part in data-protection reviews. Submitting without this is an automatic hold. | **OPEN — Partner Dashboard** | `shopify.app.toml` (justifications now inline), `app/routes/proxy.order-track.tsx`, `app/lib/contacts/contacts.server.ts` |
+| B2 | **`.myshopify.com` shop-domain login form still shipped** at `/auth/login` — violates req **2.3.1** ("must not request the manual entry of a myshopify.com URL"). It was deliberately removed from `_index` but the template route was never deleted, and `authPathPrefix = "/auth"` makes the library bounce to it. Delete `app/routes/auth.login/` and the now-unused `login` export. | **CLOSED 2026-08-21** — route directory deleted, `login` export removed. | `app/routes/auth.login/route.tsx:34-42`, `app/routes/auth.login/error.server.tsx:10,12`, `app/shopify.server.ts:44` |
+| B3 | **All app URLs are a `trycloudflare` dev tunnel** and `automatically_update_urls_on_dev = true`. `application_url`, `[auth].redirect_urls` and `[app_proxy].url` must point at the production host with valid TLS (req **3.1.1**) before `npm run deploy`. Note the app-proxy URL is pinned per store at install time. | **OPEN — deploy-time config** | `shopify.app.toml` (warning comment added) |
+| B4 | **`billingTestMode` can hand a merchant a paid plan with no Shopify charge in production.** The mock provider makes no Shopify call and persists a fake subscription gid. Operator-only + banner-warned, but it should hard-fail when `NODE_ENV === "production"` — this is the only code path in the repo that bypasses the Billing API (req **1.2.1**). | **CLOSED** — `isBillingTestMode()` returns false when `NODE_ENV === "production"`. | `app/lib/billing/shopify-billing.server.ts:73-80,363-368` |
+| B5 | **Privacy policy document does not exist yet.** Must name OpenAI as processor, state the merchant-configurable transcript retention windows *and* the 7-day post-uninstall retention window, and give a GDPR contact. | **OPEN — hosted document** | listing + hosted policy URL |
 
 ---
 
-## 1. Auth & install — PASS (code) / GAP (B2) / PENDING-MANUAL (fresh-store run)
+## 1. Auth & install — PASS (code; B2 closed) / PENDING-MANUAL (fresh-store run)
 
 - Embedded app via `shopifyApp()` with `PrismaSessionStorage`, `AppDistribution.AppStore`,
   session-token auth throughout, `future.expiringOfflineAccessTokens` — `app/shopify.server.ts`.
@@ -48,11 +54,11 @@
 - **2.3.4 OAuth on reinstall, no install-once flag** — PASS, verified live: `onShopAuthenticated`
   is idempotent, clears `uninstalledAt`, re-seeds defaults, and a **fully purged** shop reinstalls
   cleanly (`install-lifecycle.test.ts` §8, §9).
-- **2.3.1** — **GAP (B2)**, see above.
+- **2.3.1** — **PASS (B2 closed 2026-08-21).** `app/routes/auth.login/` was deleted and `shopify.login` is no longer exported, so no surface asks for a `.myshopify.com` domain.
 - **Manual step**: install on a *fresh* dev store, confirm OAuth completes first try with no
   interstitial UI, then re-open from the Apps list.
 
-## 2. Billing — PASS (code path) / GAP (B4) / PENDING-MANUAL (real test charges)
+## 2. Billing — PASS (code path; B4 closed) / PENDING-MANUAL (real test charges)
 
 - **1.2.1 Billing API only** — PASS. The only subscription-creation path is
   `appSubscriptionCreate` (`app/lib/billing/shopify-billing.server.ts:137-157,236-303`); overage is
@@ -251,8 +257,8 @@ inbox_cart_view | auto_detect_language | exports | csv_import | file_upload`.
 
 | # | Item | Verdict |
 |---|---|---|
-| 1 | Auth & install | PASS / **GAP B2** (`/auth/login` shop-domain form) / PENDING-MANUAL |
-| 2 | Billing | PASS / **GAP B4** (`billingTestMode` in prod) / PENDING-MANUAL (test charges) |
+| 1 | Auth & install | **PASS** (B2 closed) / PENDING-MANUAL |
+| 2 | Billing | **PASS** (B4 closed) / PENDING-MANUAL (test charges) |
 | 3 | Mandatory compliance webhooks | **PASS** (HMAC 401, <20 ms, real workflows — live-verified) |
 | 4 | Scopes | **GAP B1** (PCD level 2 not requested) / PENDING-MANUAL (listing text) |
 | 5 | Performance | PASS (15.30 KB gzip) / PENDING-MANUAL (Lighthouse) |

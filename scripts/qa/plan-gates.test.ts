@@ -309,6 +309,11 @@ async function main(): Promise<void> {
     await db.persona.deleteMany({ where: { shopId } });
     await db.guardrails.deleteMany({ where: { shopId } });
     await db.analyticsEvent.deleteMany({ where: { shopId } });
+    // The gate fixtures embed content, so this shop owns usage rows. llm_usage_daily
+    // has no foreign key, so anything left here is counted by the platform fleet
+    // cost tile forever with no shop left to attribute it to.
+    await db.llmUsageDaily.deleteMany({ where: { shopId } });
+    await db.planUsage.deleteMany({ where: { shopId } });
     await db.shop.deleteMany({ where: { id: shopId } });
 
     if (priorConfig) {
