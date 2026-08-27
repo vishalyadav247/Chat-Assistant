@@ -121,12 +121,19 @@ proven, then delete the backup.
 ```bash
 cd /var/www/chatconvert.progryss.com
 mv html html-helloworld-backup
-git clone https://github.com/progryss/chatconvert.git html
+git clone git@github.com:progryss/chatconvert.git html
 cd html
 git log --oneline -1
 ```
 
-The repo is public, so no credentials are needed — same as `seoconvert`.
+The repo is **private** and the droplet has no GitHub credentials, so this needs a
+deploy key first — generate one with `ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519`,
+add the public half at `github.com/progryss/chatconvert` → Settings → Deploy keys
+(read-only), then `ssh-keyscan github.com >> ~/.ssh/known_hosts`. Full sequence in
+`DEPLOY-COMMANDS.md` steps 10a–10e.
+
+Note `seoconvert` uses an HTTPS remote; a deploy key is preferred here because nothing has
+to store a token that can expire or leak.
 
 ---
 

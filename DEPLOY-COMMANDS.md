@@ -105,13 +105,56 @@ mv html html-helloworld-backup
 
 *Keep this backup until the deploy is proven. Deleted in command 48.*
 
-### 10. Clone the repo
+### 10a. Create a deploy key on the droplet
+
+The repo is **private**, and the droplet has no GitHub credentials. A deploy key is
+read-only and scoped to this one repo — it cannot reach your other repos, and it does not
+expire the way a token does.
 
 ```bash
-git clone https://github.com/progryss/chatconvert.git html
+ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -C "droplet-chatconvert"
 ```
 
-**Expect:** `Resolving deltas: 100% ... done.` No credential prompt — the repo is public.
+**Expect:** `Your identification has been saved`.
+This is the droplet's *outbound* key to GitHub. It is separate from `authorized_keys`, so
+your own SSH access is unaffected.
+
+### 10b. Print the public key
+
+```bash
+cat ~/.ssh/id_ed25519.pub
+```
+
+Copy the whole line.
+
+### 10c. Register it on GitHub
+
+In a browser: `github.com/progryss/chatconvert` → **Settings** → **Deploy keys** →
+**Add deploy key**. Title it `droplet`, paste the key.
+
+**Leave "Allow write access" unchecked** — the droplet only ever pulls.
+
+### 10d. Trust github.com and test
+
+```bash
+ssh-keyscan github.com >> ~/.ssh/known_hosts
+ssh -o BatchMode=yes -T git@github.com
+```
+
+**Expect:** `Hi progryss/chatconvert! You've successfully authenticated, but GitHub does
+not provide shell access.`
+That message **is** success — GitHub never gives a shell.
+
+**If you see `Permission denied (publickey)`, stop.** The key is not registered yet; redo
+10c.
+
+### 10e. Clone
+
+```bash
+git clone git@github.com:progryss/chatconvert.git html
+```
+
+**Expect:** `Resolving deltas: 100% ... done.`
 
 ### 11. Enter the app directory
 
