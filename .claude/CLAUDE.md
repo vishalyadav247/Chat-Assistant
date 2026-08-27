@@ -13,7 +13,6 @@ This repo builds **ChatConvert** — a multi-tenant AI product-recommendation + 
 - **`.claude/skills/spec-workflow/`** — the loop: pick from PROGRESS.md → read spec → implement → verify acceptance criteria → update PROGRESS.md. Other project skills: `shopify-app-dev`, `shopify-compliance`, `polaris-admin-ui`, `theme-extension-widget`, `db-tenancy`, `ai-pipeline`.
 - **`.claude/agents/`** — `feature-builder`, `shopify-reviewer`, `tenancy-auditor`, `qa-verifier`, `docs-researcher`.
 - **`.claude/qa/`** — regression suite: `TEST-CASES.md` (numbered cases per module) + `BROWSER-TEST-PLAN.md`. `test-matrix.xlsx` is generated (`npx tsx scripts/qa/make-test-matrix.ts`), not committed.
-- **`.claude/imp-details/plan-allocation.xlsx`** — the pricing/quota matrix `app/lib/billing/plans.server.ts` is reconciled against. Change a plan here first.
 > The original design source (mockup PNGs, HTML prototypes, python demo) is **not retained** — all of it shipped, so the running app is the reference. It lives in git history before commit 36b7161.
 
 Iron rules: every DB query shop-scoped (`shopId`); never `prisma db push`; webhook handlers enqueue-only; LLM keys server-only; prompts/thresholds only from their canonical locations; plan gates enforced server-side.

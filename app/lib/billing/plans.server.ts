@@ -3,11 +3,10 @@
 // the /platform dashboard. Overrides live in app_secrets["platform:plans"] and
 // are merged into the exported PLANS object IN PLACE, so the 20+ sync consumers
 // (incl. direct PLANS[...] reads) pick them up with zero signature changes.
-// ENFORCEMENT default = "enforced" (2026-08-21): the final tiers below match
-// .claude/imp-details/plan-allocation.xlsx, so every quota and feature gate is
-// live. The operator can still flip back to "open" from /platform/plans
-// (spec 19) — no code edit — which makes every gate pass and every quota
-// unlimited without touching the displayed matrix.
+// ENFORCEMENT default = "enforced" (2026-08-21): the tiers below are FINAL, so
+// every quota and feature gate is live. The operator can still flip back to
+// "open" from /platform/plans (spec 19) — no code edit — which makes every
+// gate pass and every quota unlimited without touching the displayed matrix.
 
 import { z } from "zod";
 import db from "../../db.server";
@@ -41,8 +40,10 @@ export {
 /** Compiled-in default. The operator can override it from /platform/plans. */
 export const DEFAULT_ENFORCEMENT: "open" | "enforced" = "enforced";
 
-// FINAL tiers — reconciled 2026-08-21 against .claude/imp-details/plan-allocation.xlsx.
-// Any change here must be mirrored in that sheet and in the App Store listing pricing.
+// FINAL tiers (reconciled 2026-08-21). THIS FILE IS THE SOURCE OF TRUTH for pricing.
+// There is deliberately no companion spreadsheet: two copies drifted once (D-16 —
+// manual_qas, policy_pages, crawl_pages, team_seats all wrong). A change here must be
+// mirrored in the App Store listing pricing, and nowhere else.
 export const DEFAULT_PLANS: Record<PlanId, PlanDefinition> = {
   free: {
     id: "free",

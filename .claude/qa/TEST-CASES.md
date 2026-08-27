@@ -70,7 +70,7 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 
 | ID | Case | Steps | Expected | Scenarios |
 |---|---|---|---|---|
-| B-01 | Matrix matches the spreadsheet | Compare `DEFAULT_PLANS` to `plan-allocation.xlsx` | Every price, trial, overage, quota and feature matches exactly | H |
+| B-01 | Matrix matches published pricing | Compare `DEFAULT_PLANS` to the App Store listing pricing | Every price, trial, overage, quota and feature matches exactly | H |
 | B-02 | Operator edits a quota | `/platform/plans` → change `curated_answers` for Pro → save | `getQuota("pro","curated_answers")` returns the new value immediately in-process, and within `REFRESH_TTL_MS` (30s) in any other process | H |
 | B-03 | Propagation is app-wide | After B-02, check **every** installed shop on that tier | All shops on that plan see the new value — plans are global, only `Shop.plan` is per-shop | H, T |
 | B-04 | Operator toggles a feature | Uncheck `exports` for Plus → save | `hasFeature("plus","exports")` false; the export action returns a plan-gate error | H, P |

@@ -32,7 +32,6 @@ database.sqlite
 # Claude Code tooling.
 # TRACKED — how and why this app was built, and what still needs verifying:
 # CLAUDE.md, PROGRESS.md, specs/, skills/, agents/, qa/*.md,
-# imp-details/ (the plan matrix the billing code reconciles against),
 # review-checklist-run.md.
 .claude/settings.local.json
 # Design mockups and the python demo — all shipped, superseded by the app.
