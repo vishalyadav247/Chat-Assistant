@@ -103,7 +103,7 @@ cd /var/www/chatconvert.progryss.com
 mv html html-helloworld-backup
 ```
 
-*Keep this backup until the deploy is proven. Deleted in command 48.*
+*Keep this backup until the deploy is proven. Deleted in command 46.*
 
 ### 10a. Create a deploy key on the droplet
 
@@ -206,29 +206,62 @@ EMAIL_FROM="ChatConvert <no-reply@progryss.com>"
 Save with `Ctrl+O`, `Enter`, then `Ctrl+X`.
 
 > **Keep the quotes on `EMAIL_FROM`.** Without them the `<` becomes a shell redirect in
-> command 19 and breaks it.
+> command 21 and breaks it.
 >
 > No Resend account yet? Set `EMAIL_PROVIDER=log` and leave `RESEND_API_KEY` blank.
 
-### 15. Lock the permissions
+### 15. Strip Windows line endings — do not skip
+
+```bash
+sed -i 's/\r//g' .env
+```
+
+> Pasting into `nano` from a Windows clipboard writes CRLF, which glues an invisible `\r`
+> onto **every value**. `LLM_PROVIDER` becomes `"openai\r"` and fails loudly; but
+> `DATABASE_URL` and `SHOPIFY_API_SECRET` are corrupted just as badly and pass validation
+> *silently*. Run this even when you are sure the file is clean.
+
+### 16. Verify zero carriage returns
+
+```bash
+grep -c $'\r' .env
+```
+
+**Expect: `0`. Do not continue until it is.**
+
+### 17. Lock permissions and confirm the format
 
 ```bash
 chmod 600 .env
-```
-
-### 16. Verify
-
-```bash
+file .env
 ls -l .env
 ```
 
-**Expect:** `-rw------- 1 root root`.
+**Expect:** `ASCII text` with no mention of CRLF, then `-rw------- 1 root root`.
+
+### 18. Prove the values parse — without exporting them
+
+```bash
+node --env-file=.env -e "for (const k of ['LLM_PROVIDER','EMAIL_PROVIDER','PORT','DATABASE_URL']) console.log(k.padEnd(14), JSON.stringify(process.env[k]));"
+```
+
+**Expect** the closing quote immediately after each value:
+
+```
+LLM_PROVIDER   "openai"
+EMAIL_PROVIDER "resend"
+PORT           "3003"
+DATABASE_URL   "postgresql://chatconvert:...@localhost:5432/chatconvert?schema=public"
+```
+
+> Deliberately **not** `set -a; . ./.env`. Sourcing exports these into your shell, and
+> `pm2 start` snapshots your shell — so one bad value gets frozen into pm2's process
+> definition where `--env-file` can never override it.
 
 ---
-
 # Part D — Build
 
-### 17. Install dependencies
+### 19. Install dependencies
 
 ```bash
 npm ci
@@ -236,7 +269,7 @@ npm ci
 
 **Expect:** `added ~900 packages`. Takes a few minutes.
 
-### 18. Build
+### 20. Build
 
 ```bash
 npm run build
@@ -253,49 +286,32 @@ npm run build
 
 # Part E — Migrations
 
-### 19. Load the env into your shell
+### 21. Run the migrations in a subshell
 
 ```bash
-set -a; . ./.env; set +a
+( set -a; . ./.env; set +a; npx prisma generate && npx prisma migrate deploy )
 ```
 
-### 20. Confirm it loaded
+**Expect:** `Generated Prisma Client`, then `27 migrations found` …
+`All migrations have been successfully applied.`
+
+> **The parentheses are load-bearing.** They run this in a subshell, so the exported
+> variables die with it and can never be captured by `pm2 start` in command 23. Without
+> them, one malformed value in `.env` is frozen into pm2's process definition, survives
+> every `pm2 restart`, and the app crash-loops while `.env` looks perfectly correct.
+
+### 22. Verify the schema
 
 ```bash
-echo $PORT
-```
-
-**Expect:** `3003`. If blank, command 14 or 19 went wrong — do not continue.
-
-### 21. Generate the Prisma client
-
-```bash
-npx prisma generate
-```
-
-**Expect:** `Generated Prisma Client`.
-
-### 22. Apply the migrations
-
-```bash
-npx prisma migrate deploy
-```
-
-**Expect:** `27 migrations found` … `All migrations have been successfully applied.`
-
-### 23. Verify
-
-```bash
-npx prisma migrate status
+( set -a; . ./.env; set +a; npx prisma migrate status )
 ```
 
 **Expect:** `Database schema is up to date!`
 
 ---
-
 # Part F — Run it
 
-### 24. Start under pm2
+### 23. Start under pm2
 
 ```bash
 pm2 start ecosystem.config.cjs
@@ -308,7 +324,7 @@ pm2 start ecosystem.config.cjs
 > This app has no `dotenv` dependency — without that the process starts and immediately
 > dies with `Invalid environment: DATABASE_URL is required` while `.env` sits right there.
 
-### 25. Persist across reboots
+### 24. Persist across reboots
 
 ```bash
 pm2 save
@@ -317,7 +333,7 @@ pm2 save
 **Expect:** `Successfully saved in /root/.pm2/dump.pm2`.
 **Do not skip this** — without it the app never comes back after a reboot.
 
-### 26. Confirm all four apps are up
+### 25. Confirm all four apps are up
 
 ```bash
 pm2 list
@@ -326,7 +342,7 @@ pm2 list
 **Expect:** `zipeta`, `zipeta-cron`, `linkfront`, `seoconvert-web`, `seoconvert-worker`,
 `chatconvert` — all `online`.
 
-### 27. Check it answers locally
+### 26. Check it answers locally
 
 ```bash
 curl -I http://127.0.0.1:3003/
@@ -334,7 +350,7 @@ curl -I http://127.0.0.1:3003/
 
 **Expect:** `HTTP/1.1 200 OK`.
 
-### 28. Read the startup log
+### 27. Read the startup log
 
 ```bash
 pm2 logs chatconvert --lines 30 --nostream
@@ -346,20 +362,20 @@ pm2 logs chatconvert --lines 30 --nostream
 
 # Part G — nginx
 
-### 29. Back up the current config
+### 28. Back up the current config
 
 ```bash
 cp /etc/nginx/sites-available/chatconvert.progryss.com \
    /etc/nginx/sites-available/chatconvert.progryss.com.bak
 ```
 
-### 30. Edit it
+### 29. Edit it
 
 ```bash
 nano /etc/nginx/sites-available/chatconvert.progryss.com
 ```
 
-### 31. Replace the `location / { ... }` block
+### 30. Replace the `location / { ... }` block
 
 In the **first** `server` block (the one with the certbot `ssl_certificate` lines), delete
 the existing `location / { ... }` and put this in its place:
@@ -387,7 +403,7 @@ the existing `location / { ... }` and put this in its place:
 Leave the certbot `listen` / `ssl_*` lines and the second `server` block untouched.
 Save with `Ctrl+O`, `Enter`, `Ctrl+X`.
 
-### 32. Test the config
+### 31. Test the config
 
 ```bash
 nginx -t
@@ -396,7 +412,7 @@ nginx -t
 **Expect:** `syntax is ok` **and** `test is successful`.
 **If not, stop and fix it.** Reloading a broken config takes the other three sites down.
 
-### 33. Reload
+### 32. Reload
 
 ```bash
 systemctl reload nginx
@@ -404,7 +420,7 @@ systemctl reload nginx
 
 **Expect:** no output.
 
-### 34. Check the public URL
+### 33. Check the public URL
 
 ```bash
 curl -I https://chatconvert.progryss.com/
@@ -416,24 +432,17 @@ curl -I https://chatconvert.progryss.com/
 
 # Part H — First login
 
-### 35. Reload the env (new shell since command 19?)
+### 34. Create the operator account
+
+Replace `ADMIN_EMAIL`, your name and `ADMIN_PASSWORD`. Subshell again, same reason.
 
 ```bash
 cd /var/www/chatconvert.progryss.com/html
-set -a; . ./.env; set +a
-```
-
-### 36. Create the operator account
-
-Replace `ADMIN_EMAIL`, your name, and `ADMIN_PASSWORD`.
-
-```bash
-npx tsx scripts/platform-admin.ts create ADMIN_EMAIL "Your Name" "ADMIN_PASSWORD"
+( set -a; . ./.env; set +a; npx tsx scripts/platform-admin.ts create ADMIN_EMAIL "Your Name" "ADMIN_PASSWORD" )
 ```
 
 **Expect:** `created platform admin ADMIN_EMAIL (...)`.
-
-### 37. Verify
+### 35. Verify
 
 ```bash
 npx tsx scripts/platform-admin.ts list
@@ -441,7 +450,7 @@ npx tsx scripts/platform-admin.ts list
 
 **Expect:** one row with your email.
 
-### 38. Confirm the job queue started
+### 36. Confirm the job queue started
 
 ```bash
 sudo -u postgres psql -d chatconvert -c '\dn'
@@ -459,7 +468,7 @@ sudo -u postgres psql -d chatconvert -c '\dn'
 
 **These three commands run on your Windows laptop, not the droplet.**
 
-### 39. Edit `shopify.app.toml`
+### 37. Edit `shopify.app.toml`
 
 ```toml
 application_url = "https://chatconvert.progryss.com"
@@ -480,7 +489,7 @@ prefix = "apps"
 > real uninstall + reinstall on every store. With no merchants installed, this is the one
 > moment it is free to get right.
 
-### 40. Validate
+### 38. Validate
 
 ```bash
 shopify app config validate --json
@@ -488,7 +497,7 @@ shopify app config validate --json
 
 **Expect:** valid, no errors.
 
-### 41. Deploy the app version
+### 39. Deploy the app version
 
 ```bash
 npm run deploy
@@ -499,7 +508,7 @@ npm run deploy
 > If it fails, the empty `[events]` block in `shopify.app.toml` is the first suspect —
 > remove it and retry.
 
-### 42. Ask Shopify what it actually registered
+### 40. Ask Shopify what it actually registered
 
 ```bash
 shopify app info
@@ -507,7 +516,7 @@ shopify app info
 
 **Expect:** the production URL, not a `trycloudflare` host.
 
-### 43. Commit
+### 41. Commit
 
 ```bash
 git add shopify.app.toml
@@ -520,20 +529,20 @@ git push personal main
 
 # Part J — Verify and clean up
 
-### 44. Install on a development store
+### 42. Install on a development store
 
 From the Partner Dashboard. **Expect:** OAuth completes, the embedded admin loads with no
 frame errors.
 
-### 45. Enable the widget and test streaming
+### 43. Enable the widget and test streaming
 
 Dev store → theme editor → enable the ChatConvert app embed → open the storefront → send a
 message.
 
 **Expect:** the reply arrives **token by token**. If it appears all at once, nginx is still
-buffering — recheck command 31.
+buffering — recheck command 30.
 
-### 46. Test webhooks
+### 44. Test webhooks
 
 Change a product title in the dev store, and watch:
 
@@ -543,7 +552,7 @@ pm2 logs chatconvert --lines 50 | grep -i webhook
 
 **Expect:** a `products/update` webhook within seconds.
 
-### 47. Reboot test
+### 45. Reboot test
 
 ```bash
 reboot
@@ -557,7 +566,7 @@ pm2 list
 
 **Expect:** `chatconvert` back `online` on its own.
 
-### 48. Remove the hello-world backup
+### 46. Remove the hello-world backup
 
 Only after 44–47 all pass.
 
@@ -565,7 +574,7 @@ Only after 44–47 all pass.
 rm -rf /var/www/chatconvert.progryss.com/html-helloworld-backup
 ```
 
-### 49. Rotate the root password
+### 47. Rotate the root password
 
 It was shared in plaintext during setup.
 
@@ -582,8 +591,8 @@ cd /var/www/chatconvert.progryss.com/html
 git pull origin main
 npm ci
 npm run build
-set -a; . ./.env; set +a
-npx prisma migrate deploy
+sed -i 's/\r//g' .env
+( set -a; . ./.env; set +a; npx prisma migrate deploy )
 pm2 restart chatconvert
 pm2 logs chatconvert --lines 40 --nostream
 ```
@@ -597,11 +606,13 @@ it by hand from your laptop, deliberately.
 
 | Symptom | Fix |
 |---|---|
-| `Invalid environment: DATABASE_URL is required` | `.env` missing, or pm2 was started without the ecosystem file. `pm2 delete chatconvert`, then redo command 24 |
+| `Invalid environment: LLM_PROVIDER: expected "openai"` | `.env` has CRLF line endings. `sed -i 's/\r//g' .env`, then **`pm2 delete chatconvert`** and start again — a plain `pm2 restart` replays the corrupted values pm2 cached at first start |
+| Crash-loops even after `.env` is fixed | pm2 cached the bad env. `pm2 delete chatconvert && pm2 save`, open a **fresh SSH session**, then `pm2 start ecosystem.config.cjs` |
+| `Invalid environment: DATABASE_URL is required` | `.env` missing, or pm2 was started without the ecosystem file. `pm2 delete chatconvert`, then redo command 23 |
 | pm2 shows `errored` / restart count climbing | `pm2 logs chatconvert --err --lines 50` |
 | Build killed silently | `NODE_OPTIONS=--max-old-space-size=1024 npm run build` |
-| Chat replies not streaming | command 31, then 32–33 |
+| Chat replies not streaming | command 30, then 31–32 |
 | Storefront: "error in the third-party application" | Uninstall + reinstall the app on that store |
 | Blank embedded admin frame | `SHOPIFY_APP_URL` in `.env` ≠ what `shopify app info` reports |
-| App gone after reboot | `pm2 save` was skipped — run command 24, then 25 |
+| App gone after reboot | `pm2 save` was skipped — run command 23, then 24 |
 | `nginx -t` fails | `cp /etc/nginx/sites-available/chatconvert.progryss.com.bak /etc/nginx/sites-available/chatconvert.progryss.com` to restore |

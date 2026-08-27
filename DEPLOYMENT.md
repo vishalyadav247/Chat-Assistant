@@ -218,13 +218,18 @@ tool only.
 
 ```bash
 cd /var/www/chatconvert.progryss.com/html
-set -a; . ./.env; set +a
-npx prisma generate
-npx prisma migrate deploy
-npx prisma migrate status
+sed -i 's/\r//g' .env      # CRLF from a Windows paste corrupts every value
+grep -c $'\r' .env         # must print 0 before going further
+( set -a; . ./.env; set +a; npx prisma generate && npx prisma migrate deploy )
+( set -a; . ./.env; set +a; npx prisma migrate status )
 ```
 
 27 migrations. `migrate deploy` only applies — it never resets or drops.
+
+**The parentheses are load-bearing.** Sourcing `.env` exports its values into your shell,
+and `pm2 start` snapshots that shell — so a malformed value becomes permanent in pm2's
+process definition, where `--env-file` cannot override it and `pm2 restart` replays it
+forever. The subshell throws the exports away.
 
 ---
 
@@ -322,9 +327,8 @@ without redeploying.
 
 ```bash
 cd /var/www/chatconvert.progryss.com/html
-set -a; . ./.env; set +a
-npx tsx scripts/platform-admin.ts create you@progryss.com "Your Name" "STRONG_PASSWORD"
-npx tsx scripts/platform-admin.ts list
+( set -a; . ./.env; set +a; npx tsx scripts/platform-admin.ts create you@progryss.com "Your Name" "STRONG_PASSWORD" )
+( set -a; . ./.env; set +a; npx tsx scripts/platform-admin.ts list )
 ```
 
 Prefer this over the `PLATFORM_ADMIN_EMAIL` / `PLATFORM_ADMIN_PASSWORD` env pair — those
@@ -419,8 +423,8 @@ cd /var/www/chatconvert.progryss.com/html
 git pull origin main
 npm ci
 npm run build
-set -a; . ./.env; set +a
-npx prisma migrate deploy
+sed -i 's/\r//g' .env
+( set -a; . ./.env; set +a; npx prisma migrate deploy )
 pm2 restart chatconvert
 pm2 logs chatconvert --lines 40 --nostream
 ```
@@ -435,6 +439,7 @@ from your laptop.
 
 | Symptom | Cause | Fix |
 |---|---|---|
+| `Invalid environment: LLM_PROVIDER: expected "openai"` | `.env` written with CRLF — every value carries a trailing `\r` | `sed -i 's/\r//g' .env`, then `pm2 delete chatconvert` and start again; `pm2 restart` is **not** enough |
 | `Invalid environment: DATABASE_URL is required` | `.env` missing, or pm2 started without the ecosystem file | `pm2 delete chatconvert`, then `pm2 start ecosystem.config.cjs` |
 | App restart-loops right after `pm2 start` | Same as above, or a typo in `DATABASE_URL` | `pm2 logs chatconvert --err --lines 50` |
 | Migration fails on `CREATE EXTENSION vector` | Extension not created as superuser | Redo step 2c |
