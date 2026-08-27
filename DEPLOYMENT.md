@@ -232,17 +232,18 @@ npx prisma migrate status
 
 ```bash
 cd /var/www/chatconvert.progryss.com/html
-pm2 start node_modules/@react-router/serve/bin.js \
-  --name chatconvert \
-  --node-args="--env-file=/var/www/chatconvert.progryss.com/html/.env" \
-  -- ./build/server/index.js
+pm2 start ecosystem.config.cjs
 pm2 save
 pm2 list
 ```
 
-This mirrors how `zipeta` is registered (same script path, same `./build/server/index.js`
-argument, same fork mode). The `--node-args` part is the addition that loads `.env`,
-including `PORT=3003`.
+`ecosystem.config.cjs` is committed in the repo. It derives every path from `__dirname`,
+so it works from any checkout location, and it carries **no secrets** — the app's
+configuration is loaded from `.env` by node's `--env-file`, which the file wires up.
+
+It mirrors how `zipeta` is registered (same script path, same `./build/server/index.js`
+argument, same fork mode) and additionally pins `instances: 1`, disables `watch`, and
+sets `max_memory_restart: 500M` as a leak guard on this memory-constrained box.
 
 `pm2 save` writes the process list so `pm2-root.service` restores it on reboot. **Skipping
 it means the app does not come back after a reboot.**
@@ -434,7 +435,7 @@ from your laptop.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `Invalid environment: DATABASE_URL is required` | `.env` not loaded — the `--node-args` flag is missing from the pm2 entry | `pm2 delete chatconvert`, redo step 7 exactly |
+| `Invalid environment: DATABASE_URL is required` | `.env` missing, or pm2 started without the ecosystem file | `pm2 delete chatconvert`, then `pm2 start ecosystem.config.cjs` |
 | App restart-loops right after `pm2 start` | Same as above, or a typo in `DATABASE_URL` | `pm2 logs chatconvert --err --lines 50` |
 | Migration fails on `CREATE EXTENSION vector` | Extension not created as superuser | Redo step 2c |
 | Build killed with no error message | OOM — the Vite spike | `NODE_OPTIONS=--max-old-space-size=1024 npm run build` |

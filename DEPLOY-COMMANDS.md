@@ -298,16 +298,15 @@ npx prisma migrate status
 ### 24. Start under pm2
 
 ```bash
-pm2 start node_modules/@react-router/serve/bin.js \
-  --name chatconvert \
-  --node-args="--env-file=/var/www/chatconvert.progryss.com/html/.env" \
-  -- ./build/server/index.js
+pm2 start ecosystem.config.cjs
 ```
 
-**Expect:** a pm2 table with `chatconvert` · `online`.
+**Expect:** a pm2 table with `chatconvert` · `online` · `fork` mode.
 
-> The `--node-args` part is what loads `.env`. This app has no `dotenv` dependency — without
-> that flag it starts and immediately dies with `Invalid environment: DATABASE_URL is required`.
+> `ecosystem.config.cjs` ships in the repo, so there is nothing to type or mistype. It
+> pins fork mode with a single instance, and loads `.env` through node's `--env-file`.
+> This app has no `dotenv` dependency — without that the process starts and immediately
+> dies with `Invalid environment: DATABASE_URL is required` while `.env` sits right there.
 
 ### 25. Persist across reboots
 
@@ -598,7 +597,7 @@ it by hand from your laptop, deliberately.
 
 | Symptom | Fix |
 |---|---|
-| `Invalid environment: DATABASE_URL is required` | `pm2 delete chatconvert`, redo command 24 exactly — the `--node-args` flag is missing |
+| `Invalid environment: DATABASE_URL is required` | `.env` missing, or pm2 was started without the ecosystem file. `pm2 delete chatconvert`, then redo command 24 |
 | pm2 shows `errored` / restart count climbing | `pm2 logs chatconvert --err --lines 50` |
 | Build killed silently | `NODE_OPTIONS=--max-old-space-size=1024 npm run build` |
 | Chat replies not streaming | command 31, then 32–33 |
