@@ -30,5 +30,5 @@ description: Prisma + Postgres + pgvector conventions and multi-tenant safety. U
 
 - Prisma client singleton (`app/db.server.ts` global pattern) — same pattern for pg-boss.
 - Windows: `PRISMA_CLIENT_ENGINE_TYPE=binary` if the dll error appears; DB via `npm run db:up` (port 5433, named volume).
-- Seeds: `prisma/seed.ts` from `.claude/resources/demo/data-sources/*.json`; smoke: `npm run smoke`.
+- Seeds: `prisma/seed.ts` from `prisma/seed-data/*.json`; smoke: `npm run smoke`.
 - Batch embedding at ingestion (≤100 texts/call, backoff on 429); cache shop config (persona/guardrails) per request lifecycle.

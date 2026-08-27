@@ -109,7 +109,7 @@ Dependencies: `openai`, `pg-boss`, `zod` (+ dev `tsx`).
 
 ### 8. Seed + smoke
 
-- `prisma/seed.ts` (via `"prisma": { "seed": "tsx prisma/seed.ts" }`): dev shop `dev-shop.local` seeded from `.claude/resources/demo/data-sources/*.json` (products, knowledge, curated_answers, persona, guardrails). Real embeddings if `OPENAI_API_KEY` set; else deterministic hash-seeded pseudo-embeddings (offline-capable).
+- `prisma/seed.ts` (via `"prisma": { "seed": "tsx prisma/seed.ts" }`): dev shop `dev-shop.local` seeded from `prisma/seed-data/*.json` (products, knowledge, curated_answers, persona, guardrails). Real embeddings if `OPENAI_API_KEY` set; else deterministic hash-seeded pseudo-embeddings (offline-capable).
 - `scripts/smoke-vector.ts` (`npm run smoke`): embed "warm gloves under $30" → hybrid search asserts ≥1 result; curated-match round-trip ("what are your best sellers"). Non-zero exit on failure.
 
 ## Business rules

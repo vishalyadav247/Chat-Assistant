@@ -1,4 +1,4 @@
-/* Seed a dev shop from the demo data in .claude/resources/demo/data-sources/.
+/* Seed a dev shop from the demo data in prisma/seed-data/.
  * Real embeddings when OPENAI_API_KEY is set; deterministic pseudo-embeddings
  * otherwise (offline-capable — pseudo vectors are NOT semantically meaningful,
  * so vector-quality assertions need a real key; structure works either way).
@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { PrismaClient, Prisma } from "@prisma/client";
 
 const db = new PrismaClient();
-const DATA_DIR = join(process.cwd(), ".claude", "resources", "demo", "data-sources");
+const DATA_DIR = join(process.cwd(), "prisma", "seed-data");
 const DEV_SHOP_DOMAIN = "dev-shop.myshopify.com";
 
 function load<T>(file: string): T {

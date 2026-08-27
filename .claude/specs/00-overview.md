@@ -1,7 +1,7 @@
 # 00 — Project Overview & Architecture
 
 > Spec index and shared context for all feature specs. Read this before any feature spec.
-> Sources: `.claude/resources/demo/PRODUCTION-BUILD-SPEC.md` (authoritative), `Chat-Flow-Explained.md`, `LLM-Training-Guide.md`, `LLM-Concepts-Explained.md`, `LLM-Guide.html`, `html_design/` + `NOTES.md`, demo `chatconvert_ui.py` + `data-sources/*.json`.
+> Sources: `.claude/resources/demo/PRODUCTION-BUILD-SPEC.md` (authoritative), `Chat-Flow-Explained.md`, `LLM-Training-Guide.md`, `LLM-Concepts-Explained.md`, `LLM-Guide.html`, `html_design/` + `NOTES.md`, demo `chatconvert_ui.py`. Seed data now lives at `prisma/seed-data/*.json`. **Everything under `.claude/resources/` is local-only (not in git)** — all of it shipped; these specs are the record.
 
 ## What we are building
 

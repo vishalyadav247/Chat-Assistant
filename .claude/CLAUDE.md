@@ -12,7 +12,9 @@ This repo builds **ChatConvert** — a multi-tenant AI product-recommendation + 
 - **`.claude/specs/`** — one spec per feature; start with `00-overview.md` (architecture, tenancy rules, guidelines, spec index).
 - **`.claude/skills/spec-workflow/`** — the loop: pick from PROGRESS.md → read spec → implement → verify acceptance criteria → update PROGRESS.md. Other project skills: `shopify-app-dev`, `shopify-compliance`, `polaris-admin-ui`, `theme-extension-widget`, `db-tenancy`, `ai-pipeline`.
 - **`.claude/agents/`** — `feature-builder`, `shopify-reviewer`, `tenancy-auditor`, `qa-verifier`, `docs-researcher`.
-- **`.claude/resources/`** — original requirements: `demo/PRODUCTION-BUILD-SPEC.md` (authoritative product spec), `html_design/` (UI prototypes + NOTES.md), demo pipeline + prompts.
+- **`.claude/qa/`** — regression suite: `TEST-CASES.md` (numbered cases per module) + `BROWSER-TEST-PLAN.md`. `test-matrix.xlsx` is generated (`npx tsx scripts/qa/make-test-matrix.ts`), not committed.
+- **`.claude/imp-details/plan-allocation.xlsx`** — the pricing/quota matrix `app/lib/billing/plans.server.ts` is reconciled against. Change a plan here first.
+- **`.claude/resources/`** — original design source (mockup PNGs, HTML prototypes, python demo). **Local-only, not in git**: all of it has shipped, so the running app is now the reference. The specs above record what was built and why.
 
 Iron rules: every DB query shop-scoped (`shopId`); never `prisma db push`; webhook handlers enqueue-only; LLM keys server-only; prompts/thresholds only from their canonical locations; plan gates enforced server-side.
 
@@ -24,7 +26,7 @@ Iron rules: every DB query shop-scoped (`shopId`); never `prisma db push`; webho
 - `npm run typecheck` — generates React Router route types (`react-router typegen`) then runs `tsc --noEmit`
 - `npm run db:up` / `npm run db:down` — start/stop the dev Postgres (Docker, pgvector, port 5433). **Required before `dev`/`setup`.**
 - `npm run setup` — `prisma generate && prisma migrate deploy`
-- `npx prisma db seed` — seed the dev shop from `.claude/resources/demo/data-sources/` (works without OPENAI_API_KEY via pseudo-embeddings)
+- `npx prisma db seed` — seed the dev shop from `prisma/seed-data/` (works without OPENAI_API_KEY via pseudo-embeddings)
 - `npm run smoke` — foundation smoke test (pgvector, hybrid/keyword search, curated match, RAG)
 - `npm run deploy` — deploy app config and extensions to Shopify
 - `npm run graphql-codegen` — regenerate GraphQL types into `app/types/` (config in `.graphqlrc.ts`)

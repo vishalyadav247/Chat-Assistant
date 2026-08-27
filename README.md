@@ -241,7 +241,7 @@ for (let c; !(c = await r.read()).done; ) console.log(d.decode(c.value, { stream
 | `npm run db:up` / `db:down` | Start/stop dev Postgres (Docker, pgvector, port 5433) |
 | `npm run setup` | `prisma generate && prisma migrate deploy` |
 | `npm run migrate:new -- --name x` | The **only** safe way to create a migration |
-| `npx prisma db seed` | Seed the dev shop from `.claude/resources/demo/data-sources/` |
+| `npx prisma db seed` | Seed the dev shop from `prisma/seed-data/` |
 | `npx prisma studio` | DB browser on port 5555 |
 | `npm run deploy` | Deploy app config + extensions (creates & releases an app version) |
 | `npm run generate` | Scaffold a new extension |
