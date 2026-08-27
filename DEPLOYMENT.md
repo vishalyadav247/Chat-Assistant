@@ -414,9 +414,60 @@ rm -rf /var/www/chatconvert.progryss.com/html-helloworld-backup
 
 ---
 
-## Redeploying after a code change
+## Branch and release workflow
 
-Everything above is one-time. From here on:
+`main` is what production runs. Never commit to it directly — the droplet pulls it.
+
+```
+dev  ──commit──►  push origin dev  ──►  PR  ──►  merge to main  ──►  pull on server
+```
+
+### 1. Work on `dev`
+
+```bash
+git checkout dev
+git pull origin dev
+# ... make changes ...
+npm run typecheck && npm run lint
+git add -A
+git commit -m "what changed and why"
+git push origin dev
+```
+
+### 2. Open the PR
+
+`gh` is not installed, so use the browser:
+
+**https://github.com/progryss/chatconvert/compare/main...dev**
+
+Review the diff there before merging — that view is the last chance to catch a
+secret, a stray file, or a migration that should not ship yet.
+
+### 3. Merge to `main`
+
+Merge in the GitHub UI. Then bring your local copy in line:
+
+```bash
+git checkout main
+git pull origin main
+git checkout dev
+git merge main          # keeps dev level with main, avoids drift
+git push origin dev
+```
+
+Mirror to the personal remote when you want it:
+
+```bash
+git push personal main
+```
+
+### 4. Deploy to the server
+
+Scope: everything below stays inside `/var/www/chatconvert.progryss.com/`.
+The only things this app owns outside that directory are its nginx site file
+(`/etc/nginx/sites-available/chatconvert.progryss.com`), its pm2 entry
+(`chatconvert`) and its database (`chatconvert`). Never touch the other apps on
+this box.
 
 ```bash
 cd /var/www/chatconvert.progryss.com/html
@@ -429,9 +480,41 @@ pm2 restart chatconvert
 pm2 logs chatconvert --lines 40 --nostream
 ```
 
-**`npm run deploy` never belongs in that loop.** It publishes a Shopify app version to
-merchants and can repoint the pinned app-proxy URL. It is a release decision, run by hand
-from your laptop.
+Then confirm it actually came back:
+
+```bash
+curl -I https://chatconvert.progryss.com/
+pm2 list | grep chatconvert
+```
+
+Watch the restart counter. If it climbs, the deploy failed — check
+`pm2 logs chatconvert --err --lines 50` before doing anything else.
+
+### What never goes in that loop
+
+- **`npm run deploy`** — publishes a Shopify app version to merchants and can
+  repoint the app-proxy URL that stores pin at install time. A release decision,
+  run by hand from your laptop.
+- **`npx prisma db seed`** — development fixtures only.
+- **`pm2 delete` + `pm2 start`** — only when the process definition itself must
+  change (a new `ecosystem.config.cjs`, or a poisoned cached environment).
+  A plain `pm2 restart` re-runs the app with its existing definition.
+
+### If a deploy has to be rolled back
+
+The database is the part that does not roll back. Code is easy:
+
+```bash
+cd /var/www/chatconvert.progryss.com/html
+git log --oneline -5          # find the last good commit
+git checkout <sha>
+npm ci && npm run build
+pm2 restart chatconvert
+```
+
+Migrations are forward-only — `migrate deploy` never reverts. If a release adds
+a destructive migration, that is the one to think hard about *before* merging the
+PR, not after.
 
 ---
 
