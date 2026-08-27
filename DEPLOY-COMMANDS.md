@@ -590,12 +590,23 @@ passwd
 cd /var/www/chatconvert.progryss.com/html
 git pull origin main
 npm ci
-npm run build
 sed -i 's/\r//g' .env
-( set -a; . ./.env; set +a; npx prisma migrate deploy )
+( set -a; . ./.env; set +a; npm run setup )   # prisma generate && migrate deploy
+npm run build
 pm2 restart chatconvert
 pm2 logs chatconvert --lines 40 --nostream
 ```
+
+> **Why `npm run setup` and not just `migrate deploy`.** `npm ci` deletes
+> `node_modules`, which takes the generated Prisma client with it, and this repo's
+> `.npmrc` environment does not reliably re-run Prisma's postinstall. Skipping the
+> generate step produced a live outage on 2026-08-27: the build succeeded, pm2
+> reported `online`, nothing listened on 3003, and the only clue was
+> `@prisma/client did not initialize yet` in the error log. `npm run setup` is the
+> repo's own script for exactly this pair — generate, then migrate.
+>
+> Order matters too: generate **before** build, so the build compiles against the
+> client that will exist at runtime.
 
 **`npm run deploy` is never part of this.** It publishes an app version to merchants — run
 it by hand from your laptop, deliberately.
@@ -614,5 +625,6 @@ it by hand from your laptop, deliberately.
 | Chat replies not streaming | command 30, then 31–32 |
 | Storefront: "error in the third-party application" | Uninstall + reinstall the app on that store |
 | Blank embedded admin frame | `SHOPIFY_APP_URL` in `.env` ≠ what `shopify app info` reports |
+| pm2 says `online` but nothing listens on 3003 | `npm ci` deleted the generated Prisma client. Error log shows `@prisma/client did not initialize yet`. Run `( set -a; . ./.env; set +a; npm run setup )` then `pm2 restart chatconvert` |
 | App gone after reboot | `pm2 save` was skipped — run command 23, then 24 |
 | `nginx -t` fails | `cp /etc/nginx/sites-available/chatconvert.progryss.com.bak /etc/nginx/sites-available/chatconvert.progryss.com` to restore |
