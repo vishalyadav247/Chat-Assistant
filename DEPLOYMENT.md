@@ -473,12 +473,23 @@ this box.
 cd /var/www/chatconvert.progryss.com/html
 git pull origin main
 npm ci
-npm run build
 sed -i 's/\r//g' .env
-( set -a; . ./.env; set +a; npx prisma migrate deploy )
+( set -a; . ./.env; set +a; npm run setup )   # prisma generate && migrate deploy
+npm run build
 pm2 restart chatconvert
 pm2 logs chatconvert --lines 40 --nostream
 ```
+
+> **Why `npm run setup` and not just `migrate deploy`.** `npm ci` deletes
+> `node_modules`, which takes the generated Prisma client with it, and this repo's
+> `.npmrc` environment does not reliably re-run Prisma's postinstall. Skipping the
+> generate step produced a live outage on 2026-08-27: the build succeeded, pm2
+> reported `online`, nothing listened on 3003, and the only clue was
+> `@prisma/client did not initialize yet` in the error log. `npm run setup` is the
+> repo's own script for exactly this pair — generate, then migrate.
+>
+> Order matters too: generate **before** build, so the build compiles against the
+> client that will exist at runtime.
 
 Then confirm it actually came back:
 
