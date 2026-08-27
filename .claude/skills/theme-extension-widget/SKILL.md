@@ -5,7 +5,7 @@ description: Storefront chat widget development — theme app extension, app pro
 
 # Storefront widget development
 
-Spec: `.claude/specs/05-storefront-widget.md`. UI truth: the live-preview widget in `.claude/resources/html_design/chatbox.html` (screens, states, flows). **`.claude/resources/` is local-only (not in git)** — on a fresh clone the shipped app is the reference.
+Spec: `.claude/specs/05-storefront-widget.md`. UI truth: the live-preview widget in `.claude/resources/html_design/chatbox.html` (screens, states, flows). **The design source is not retained** — it shipped; the running app is the reference. (In git history before commit 36b7161 if ever needed.)
 
 ## Extension rules
 

@@ -21,5 +21,5 @@ Every feature in this project has a spec in `.claude/specs/` (indexed in `00-ove
 - One feature in-progress at a time unless the user says otherwise.
 - Spec changes are edits to the spec file + a dated line in PROGRESS.md decisions log — never silent drift.
 - New scope discovered mid-feature → backlog row in PROGRESS.md, not scope creep.
-- Design references live in `.claude/resources/html_design/` — when a spec cites a page, open it for pixel/interaction detail rather than guessing. **`.claude/resources/` is local-only (not in git)** — on a fresh clone the shipped app is the reference.
+- Design references are **not retained** (git history before commit 36b7161) — when a spec cites a page, read the shipped route for pixel/interaction detail rather than guessing.
 - Requirements questions the resources can't answer → shopify.dev docs (via `docs-researcher` subagent / shopify-dev-mcp), then ask the user.

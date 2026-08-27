@@ -24,7 +24,7 @@ Every `/app` page and feature works cleanly at phone width (~390px) on both surf
 
 ## Mobile design language (v3, 2026-08-20 — Chatty reference)
 
-Reference screenshots: `.claude/resources/mobile_layout/` (layout only — some pictured features are not in this app).
+Reference screenshots (layout only) are not retained; the shipped mobile UI is the reference.
 
 - 8pt rhythm, >=44px touch targets, 16px inputs; white radius-12/14 cards on the #f6f6f7 canvas.
 - **Top bar**: dark; hamburger + brand mark + name/shop column; unread Inbox pill + member avatar (gradient chip -> /app/account) right.

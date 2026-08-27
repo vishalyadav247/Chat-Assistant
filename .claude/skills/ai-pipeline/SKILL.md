@@ -5,7 +5,7 @@ description: Conventions for the AI agent pipeline — prompts, grounding, thres
 
 # AI pipeline conventions
 
-Spec: `.claude/specs/03-ai-pipeline.md`. Reference implementation: `.claude/resources/demo/chatconvert_ui.py` (validated); prompts: `.claude/resources/demo/prompts.json` (ported verbatim to `app/lib/pipeline/prompts.ts`, which is the live tuning surface). **`.claude/resources/` is local-only (not in git)** — on a fresh clone the shipped app is the reference.
+Spec: `.claude/specs/03-ai-pipeline.md`. Reference implementation: `.claude/resources/demo/chatconvert_ui.py` (validated); prompts: `.claude/resources/demo/prompts.json` (ported verbatim to `app/lib/pipeline/prompts.ts`, which is the live tuning surface). **The design source is not retained** — it shipped; the running app is the reference. (In git history before commit 36b7161 if ever needed.)
 
 ## Iron rules
 

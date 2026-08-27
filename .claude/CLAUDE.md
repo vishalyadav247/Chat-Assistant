@@ -14,7 +14,7 @@ This repo builds **ChatConvert** — a multi-tenant AI product-recommendation + 
 - **`.claude/agents/`** — `feature-builder`, `shopify-reviewer`, `tenancy-auditor`, `qa-verifier`, `docs-researcher`.
 - **`.claude/qa/`** — regression suite: `TEST-CASES.md` (numbered cases per module) + `BROWSER-TEST-PLAN.md`. `test-matrix.xlsx` is generated (`npx tsx scripts/qa/make-test-matrix.ts`), not committed.
 - **`.claude/imp-details/plan-allocation.xlsx`** — the pricing/quota matrix `app/lib/billing/plans.server.ts` is reconciled against. Change a plan here first.
-- **`.claude/resources/`** — original design source (mockup PNGs, HTML prototypes, python demo). **Local-only, not in git**: all of it has shipped, so the running app is now the reference. The specs above record what was built and why.
+> The original design source (mockup PNGs, HTML prototypes, python demo) is **not retained** — all of it shipped, so the running app is the reference. It lives in git history before commit 36b7161.
 
 Iron rules: every DB query shop-scoped (`shopId`); never `prisma db push`; webhook handlers enqueue-only; LLM keys server-only; prompts/thresholds only from their canonical locations; plan gates enforced server-side.
 
