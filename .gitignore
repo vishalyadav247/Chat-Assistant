@@ -31,11 +31,6 @@ database.sqlite
 
 # Claude Code tooling.
 # TRACKED — how and why this app was built, and what still needs verifying:
-# CLAUDE.md, PROGRESS.md, specs/, skills/, agents/, review-checklist-run.md.
+# CLAUDE.md, PROGRESS.md, specs/, skills/, agents/.
 # (QA lives in scripts/qa/ — suites and their case docs together.)
 .claude/settings.local.json
-# Design mockups and the python demo — all shipped, superseded by the app.
-# Seed data moved to prisma/seed-data/ (the dev server needs it).
-.claude/resources/
-# Generated: npx tsx scripts/qa/make-test-matrix.ts
-scripts/qa/test-matrix.xlsx
