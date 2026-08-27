@@ -49,11 +49,6 @@ const GOLDEN: GoldenCase[] = [
 ];
 
 async function main() {
-  if (!process.env.OPENAI_API_KEY) {
-    console.log("NOTE: no OPENAI_API_KEY — structural eval will fail on router calls. Aborting.");
-    process.exit(2);
-  }
-
   const shop = await dbCheck.shop.findUnique({ where: { domain: DEV_SHOP_DOMAIN } });
   if (!shop) throw new Error("seed first (npx prisma db seed)");
 
@@ -211,12 +206,52 @@ async function main() {
   // verified structurally by its outcome being "curated".
 
   console.log(failures === 0 ? "\nGOLDEN SET PASS ✔" : `\nGOLDEN SET FAIL ✖ (${failures})`);
-  process.exit(failures === 0 ? 0 : 1);
+  return failures;
 }
 
-main()
+/**
+ * The golden set measures the pipeline against the SEED catalogue. But
+ * scripts/qa/seed-curated.ts publishes its own fixtures onto the very same dev
+ * shop, and some of them legitimately intercept golden inputs — "do you ship
+ * internationally" scores 0.72 against "do you ship to Canada?", the borderline
+ * confirm call accepts it, and the turn is served from curated instead of
+ * reaching the RAG question path. That is the product working correctly, but it
+ * silently changes what this eval measures, which makes a red result impossible
+ * to read. So the fixtures are unpublished for the duration and restored after —
+ * never deleted, and restored even when the run throws.
+ */
+async function withSeedCatalogueOnly<T>(work: () => Promise<T>): Promise<T> {
+  const parked = await dbCheck.curatedAnswer.findMany({
+    where: { talkingPoints: { contains: "[qa-fixture]" }, status: "published" },
+    select: { id: true },
+  });
+  const ids = parked.map((row) => row.id);
+  if (ids.length > 0) {
+    await dbCheck.curatedAnswer.updateMany({ where: { id: { in: ids } }, data: { status: "draft" } });
+    console.log(`(parked ${ids.length} [qa-fixture] curated answers so the seed catalogue is what gets measured)\n`);
+  }
+  try {
+    return await work();
+  } finally {
+    if (ids.length > 0) {
+      await dbCheck.curatedAnswer.updateMany({ where: { id: { in: ids } }, data: { status: "published" } });
+    }
+  }
+}
+
+// Checked before anything is parked, so an early abort can never leave the
+// fixtures unpublished.
+if (!process.env.OPENAI_API_KEY) {
+  console.log("NOTE: no OPENAI_API_KEY — structural eval will fail on router calls. Aborting.");
+  process.exit(2);
+}
+
+withSeedCatalogueOnly(main)
+  .then((failures) => {
+    process.exitCode = failures === 0 ? 0 : 1;
+  })
   .catch((error) => {
     console.error("eval crashed:", error);
-    process.exit(1);
+    process.exitCode = 1;
   })
   .finally(() => dbCheck.$disconnect());

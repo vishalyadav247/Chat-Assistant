@@ -5,6 +5,7 @@
  * overrides save/clear. Leaves the DB exactly as it found it.
  */
 import db from "../app/db.server";
+import { GATED_FEATURES } from "../app/lib/billing/plan-shared";
 import {
   DEFAULT_ENFORCEMENT,
   DEFAULT_PLANS,
@@ -34,9 +35,14 @@ async function main() {
 
   try {
     // 1. Plan override cycle
+    // `knownFeatures` is what the operator could actually see when they saved, and
+    // the real /platform/plans form always submits the full GATED_FEATURES list.
+    // Without it, an unchecked feature is treated as "added after this save" and
+    // correctly falls back to the plan default instead of being gated off — so
+    // omitting it here would assert pre-knownFeatures semantics that no longer exist.
     await savePlanConfig({
       enforcement: "enforced",
-      plans: { basic: { quotas: { conversations: 123 }, features: ["exports"] } },
+      plans: { basic: { quotas: { conversations: 123 }, features: ["exports"], knownFeatures: [...GATED_FEATURES] } },
     });
     assert(planEnforcementMode() === "enforced", "enforcement flips to enforced");
     assert(PLANS.basic.quotas.conversations === 123, "PLANS.basic quota overridden in place");

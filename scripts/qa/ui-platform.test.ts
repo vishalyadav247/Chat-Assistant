@@ -1125,12 +1125,17 @@ async function logsSection({ db, COOKIE }: any): Promise<void> {
 
   // 7d. Shop filter + attribution.
   {
-    const withShop = base.rows.find((r: any) => r.shopId) ?? (await load("?hours=336")).rows.find((r: any) => r.shopId);
+    // A log row outlives the shop it names, and the loader deliberately drops a
+    // filter pointing at a purged store — that path is asserted separately below.
+    // So pick a row that still resolves to a live store: the newest attributed row
+    // is often a deleted QA fixture, which would test the wrong branch entirely.
+    const resolvable = (r: any) => Boolean(r.shopId) && r.shopLabel !== null && r.shopLabel !== "(removed store)";
+    const withShop = base.rows.find(resolvable) ?? (await load("?hours=336")).rows.find(resolvable);
     if (withShop) {
       const d = await load(`?shop=${withShop.shopId}&hours=336`);
       if (process.env.QA_DEBUG) console.log("DEBUG shop filter", withShop.shopId, JSON.stringify(d.filters), d.rows.length);
       ok("shop filter returns only that store's rows", d.rows.length > 0 && d.rows.every((r: any) => r.shopId === withShop.shopId), `${d.rows.length} rows`);
-      ok("shop-scoped rows carry a resolved store label", d.rows.every((r: any) => typeof r.shopLabel === "string" && r.shopLabel.length > 0));
+      ok("shop-scoped rows carry a resolved store label", d.rows.every((r: any) => typeof r.shopLabel === "string" && r.shopLabel.length > 0 && r.shopLabel !== "(removed store)"));
     } else {
       ok("shop filter (skipped — no shop-attributed rows in the window)", true, "no data");
     }
@@ -1198,7 +1203,12 @@ async function usageSection({ db, COOKIE }: any): Promise<void> {
     const busiest = [...d.shops].sort((a: any, b: any) => b.totals.calls - a.totals.calls)[0];
     const page = await get(`${P}/${busiest.shopId}`, COOKIE);
     ok("shop drill-down loads and is scoped to that shop", page.status === 200 && page.body.includes(busiest.domain), `${page.status} ${busiest.domain}`);
-    ok("drill-down never names another store", d.shops.filter((x: any) => x.shopId !== busiest.shopId).every((x: any) => !page.body.includes(x.domain)));
+    // One shop domain can contain another as a substring — "dev-shop.myshopify.com"
+    // ends with "shop.myshopify.com" — so a naive includes() reports a cross-tenant
+    // leak that is really just the page naming its own store. Blank out the domain
+    // this page is legitimately about before looking for anyone else.
+    const withoutOwn = page.body.split(busiest.domain).join("");
+    ok("drill-down never names another store", d.shops.filter((x: any) => x.shopId !== busiest.shopId).every((x: any) => !withoutOwn.includes(x.domain)));
     ok("drill-down call count matches the overview row for the same shop", page.body.includes(`${busiest.totals.calls.toLocaleString("en-US")} API calls`), `expected ${busiest.totals.calls} calls`);
     ok("drill-down token figure matches the overview row", page.body.includes(formatTokens(busiest.totals.tokens)), formatTokens(busiest.totals.tokens));
     ok("drill-down cost figure matches the overview row", page.body.includes(formatUsd(busiest.totals.costUsd)), formatUsd(busiest.totals.costUsd));
@@ -1314,7 +1324,16 @@ async function settingsSection({ db, COOKIE, snapshot }: any): Promise<void> {
     ok("fresh GET shows the new from-address", d.emailFrom === "QA Platform <qa@example.invalid>", d.emailFrom);
     ok("a blank secret field kept the stored Resend key", d.resendApiKeyMasked === before.resendApiKeyMasked, `${d.resendApiKeyMasked}`);
     ok("persisted in app_secrets", (await storedJson()).emailFrom === "QA Platform <qa@example.invalid>");
-    ok("the stored Resend key is still sealed at rest", (await storedJson()).resendApiKey.startsWith("enc:v1:"));
+    // A blank field must stay blank rather than acquire a bogus ciphertext, so
+    // which invariant applies depends on whether a key is configured at all.
+    const storedResend: string = (await storedJson()).resendApiKey ?? "";
+    ok(
+      storedResend.length > 0
+        ? "the stored Resend key is still sealed at rest"
+        : "no Resend key is configured here, and the blank field stayed blank",
+      storedResend.length > 0 ? storedResend.startsWith("enc:v1:") : storedResend === "",
+      `len=`,
+    );
   }
 
   // 9d. Invalid input is refused and persists nothing.
