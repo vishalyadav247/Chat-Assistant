@@ -1,6 +1,8 @@
 // Shared types + helpers for the Inbox workspace (spec 10, design inbox.html).
 // Types mirror the serialized shapes returned by app/lib/inbox/inbox.server.ts.
 
+import type { ChatProductCard } from "./ChatProductCards";
+
 export interface InboxRow {
   id: string;
   name: string | null;
@@ -22,6 +24,8 @@ export interface InboxMessage {
   /** Team member who sent an agent reply (null = AI / admin / legacy). */
   authorMemberId?: string | null;
   content: string;
+  /** Products the AI recommended on this turn (Message.productCards). */
+  productCards?: ChatProductCard[] | null;
   createdAt: string;
   seenAt: string | null;
 }

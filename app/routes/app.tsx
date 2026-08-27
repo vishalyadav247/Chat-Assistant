@@ -113,6 +113,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     dateTimePrefs,
     shopName: shop?.name || access.shopDomain.replace(".myshopify.com", ""),
     shopDomain: access.shopDomain,
+    // Not for App Bridge (the web surface has none) — it is the only way to
+    // deep-link "Open Shopify admin" at THIS app instead of the app list.
+    // eslint-disable-next-line no-undef
+    apiKey: process.env.SHOPIFY_API_KEY || "",
     member: { name: member.name, role: member.role, email: member.email },
     nav: NAV.filter((item) => can(access.role, "web", item.permission)).map(
       (item) => ({
@@ -144,6 +148,7 @@ export default function App() {
               <WebShell
                 shopName={data.shopName}
                 shopDomain={data.shopDomain}
+                apiKey={data.apiKey}
                 member={data.member}
                 nav={data.nav}
                 vapidPublicKey={data.vapidPublicKey}

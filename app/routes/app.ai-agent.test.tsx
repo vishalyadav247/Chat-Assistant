@@ -34,7 +34,7 @@ export interface TestActionResult {
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { shopId } = await requireShopAccess(request, { permission: "ai_agent" });
+  const { shopId, shopDomain } = await requireShopAccess(request, { permission: "ai_agent" });
 
   const [config, persona, faqs, shop] = await Promise.all([
     getShopConfig(shopId),
@@ -72,6 +72,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     welcome,
     faqChips: faqs.map((f) => ({ id: f.id, question: f.question })),
     currency: shop?.currency ?? "USD",
+    // Recommended-product cards link at the real storefront page.
+    shopDomain,
     flow,
   };
 };
@@ -140,7 +142,12 @@ export default function TestAiPage() {
         />
         <ImproveAiBanner />
         <PipelineFlowGuide config={data.flow} />
-        <TestAiConsole welcome={data.welcome} faqChips={data.faqChips} currency={data.currency} />
+        <TestAiConsole
+          welcome={data.welcome}
+          faqChips={data.faqChips}
+          currency={data.currency}
+          shopDomain={data.shopDomain}
+        />
       </s-stack>
     </s-page>
   );

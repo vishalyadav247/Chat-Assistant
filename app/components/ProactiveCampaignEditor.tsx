@@ -114,6 +114,8 @@ export function ProactiveCampaignEditor(props: {
   starters: { label: string }[];
   /** Pro+ gates: premium templates, Product Quiz, "similar products". */
   premiumAllowed: boolean;
+  /** Tier that unlocks those gates (live matrix), or null when allowed. */
+  premiumPlan: string | null;
   rendererJs: string;
   widgetCss: string;
   onCancel: () => void;
@@ -520,6 +522,7 @@ export function ProactiveCampaignEditor(props: {
         extraMeta={extraMeta}
         onExtraMeta={(m) => setExtraMeta((prev) => ({ ...prev, ...m }))}
         premiumAllowed={props.premiumAllowed}
+        premiumPlan={props.premiumPlan}
       />
 
       <ProactiveAppearanceCard draft={draft} setDraft={setDraft} />

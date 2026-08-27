@@ -16,6 +16,9 @@ import { widgetSettingsSchema, zodMessage, type WidgetSettingsData } from "../se
 //   upload-logo / upload-icon — multipart image → Shopify Files CDN URL
 //                   (uploadImage enforces ≤2MB + PNG/JPG/WebP server-side);
 //                   the client puts the returned URL into the draft.
+//   upload-member-avatar — same upload, but written straight to the
+//                   TeamMember row: the photo belongs to the person, not to
+//                   this settings draft.
 
 export interface ChatboxActionResult {
   ok: boolean;
@@ -97,7 +100,7 @@ export async function applyChatboxIntent(args: {
   const intent = String(formData.get("intent") ?? "");
 
   try {
-    if (intent === "upload-logo" || intent === "upload-icon") {
+    if (intent === "upload-logo" || intent === "upload-icon" || intent === "upload-member-avatar") {
       const file = formData.get("file");
       if (!(file instanceof File) || file.size === 0) {
         return { ok: false, intent, error: "Choose an image file to upload." };
@@ -113,6 +116,24 @@ export async function applyChatboxIntent(args: {
         type: file.type,
         bytes,
       });
+
+      // A member photo belongs to the MEMBER, not to the settings draft: it
+      // stays correct if the merchant later picks a different member, and it is
+      // what the inbox and storefront read. So this intent persists straight
+      // away rather than handing a URL back for the draft to carry.
+      if (intent === "upload-member-avatar") {
+        const memberId = String(formData.get("memberId") ?? "");
+        // shopId in the WHERE — an id posted from the client is never trusted
+        // to belong to this shop.
+        const updated = await db.teamMember.updateMany({
+          where: { id: memberId, shopId },
+          data: { avatarUrl: url },
+        });
+        if (updated.count === 0) {
+          return { ok: false, intent, error: "That team member is no longer available." };
+        }
+        invalidateShopConfig(shopId);
+      }
       return { ok: true, intent, url };
     }
 
@@ -126,6 +147,28 @@ export async function applyChatboxIntent(args: {
       if (parsed.appearance.removeBranding) {
         const shop = await db.shop.findUnique({ where: { id: shopId } });
         requirePlan(shop?.plan ?? "free", "remove_branding");
+      }
+
+      // "Team member profile" must name a real, active member of THIS shop.
+      // Saving an unresolvable id would look accepted and then silently render
+      // store branding on the storefront, which is the confusing half of a
+      // fallback — the fallback should only cover a member removed AFTER the
+      // choice, never one that was never valid.
+      if (parsed.avatarMode === "team_member") {
+        if (!parsed.avatarMemberId) {
+          return { ok: false, intent, error: "Choose which team member fronts the chat." };
+        }
+        const member = await db.teamMember.findFirst({
+          where: { id: parsed.avatarMemberId, shopId, status: "active" },
+          select: { id: true },
+        });
+        if (!member) {
+          return {
+            ok: false,
+            intent,
+            error: "That team member is no longer active — choose another.",
+          };
+        }
       }
 
       await persist(shopId, parsed);

@@ -13,6 +13,7 @@ import {
   useSyncWatcher,
   useTrainingFetcher,
 } from "./TrainingShared";
+import { PlanBanner, PlanMeter } from "./ui/PlanGate";
 import { BRAND } from "./ui/tokens";
 
 // Products tab (spec 07, design #viewTraining → Products): learn card with
@@ -35,12 +36,20 @@ export function TrainingProductsTab(props: {
   masterEnabled: boolean;
   /** Plan feature `catalog_auto_sync` (Pro+) — toggle is locked when false. */
   autoSyncAvailable: boolean;
+  /** Tier that unlocks auto sync, or null when this plan has it. */
+  autoSyncPlan: string | null;
   /** ShopSettings.catalogAutoSync.products — daily full re-sync (webhooks unaffected). */
   autoSyncEnabled: boolean;
   /** Manage metafields modal rows + plan cap (spec 07, 2026-08-19). */
   metafields: MetafieldDefinitionRow[];
   metafieldQuota: number;
   metafieldSyncAt: string | null;
+  /** products_synced quota (spec 15) — enforced during sync, shown here. */
+  syncedUsed: number;
+  syncedQuota: number;
+  syncedNextPlan: string | null;
+  /** Plan that raises the metafields_enabled cap, or null at the top tier. */
+  metafieldNextPlan: string | null;
 }) {
   const isMobile = useIsMobile();
   const { submit, pendingIntent } = useTrainingFetcher();
@@ -79,6 +88,8 @@ export function TrainingProductsTab(props: {
   const money = (value: number) =>
     new Intl.NumberFormat(undefined, { style: "currency", currency: props.currency }).format(value);
 
+  const enabledMetafields = props.metafields.filter((m) => m.enabled).length;
+
   return (
     <s-stack gap="base">
       <LearnCard
@@ -94,10 +105,31 @@ export function TrainingProductsTab(props: {
 
       <s-section heading="Manage data">
         <s-stack gap="base">
+          {/* The products_synced cap is enforced during the sync itself
+              (catalog-sync.server.ts) — until now silently. A merchant whose
+              catalogue outgrew their plan saw a short product list and no
+              reason for it. */}
+          <PlanMeter
+            used={props.syncedUsed}
+            quota={props.syncedQuota}
+            label="products synced"
+            nextPlan={props.syncedNextPlan}
+          />
+          {props.syncedUsed >= props.syncedQuota ? (
+            <PlanBanner
+              plan={props.syncedNextPlan}
+              tone="warning"
+              heading="Your catalogue has reached this plan's sync limit"
+            >
+              Products beyond the limit aren&apos;t synced, so the AI can&apos;t recommend
+              them.
+            </PlanBanner>
+          ) : null}
           <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="start">
             <AutoSyncControl
               type="products"
               available={props.autoSyncAvailable}
+              availablePlan={props.autoSyncPlan}
               enabled={props.autoSyncEnabled}
               busy={pendingIntent === "catalog-autosync"}
               lastSyncedAt={props.lastSyncedAt}
@@ -107,6 +139,12 @@ export function TrainingProductsTab(props: {
               }
             />
             <s-stack direction="inline" gap="small-200" alignItems="center">
+              {/* Surfaced OUTSIDE the modal too: the cap used to be visible
+                  only after opening it, so "why can't I enable this one?" had
+                  to be discovered rather than read. */}
+              <s-text color="subdued">
+                {enabledMetafields} of {props.metafieldQuota} metafields
+              </s-text>
               <s-button onClick={() => setMetafieldsOpen(true)}>Manage metafields</s-button>
               <s-button
                 variant="primary"
@@ -349,6 +387,7 @@ export function TrainingProductsTab(props: {
         onClose={() => setMetafieldsOpen(false)}
         rows={props.metafields}
         quota={props.metafieldQuota}
+        nextPlan={props.metafieldNextPlan}
         lastSyncedAt={props.metafieldSyncAt}
       />
     </s-stack>

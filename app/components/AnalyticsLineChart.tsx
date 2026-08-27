@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { AnalyticsRange, SeriesPoint } from "../lib/analytics/shared";
 import { ANALYTICS_RANGE_LABELS, ANALYTICS_RANGES } from "../lib/analytics/shared";
+import { PlanBanner } from "./ui/PlanGate";
 import { BRAND } from "./ui/tokens";
 import { useDateTime } from "../lib/format/context";
 import { formatDate, type DateTimePrefs } from "../lib/format/datetime";
@@ -54,6 +55,10 @@ function labelFor(iso: string, prefs: DateTimePrefs): string {
 export function AnalyticsLineChart(props: {
   series: SeriesPoint[];
   range: AnalyticsRange;
+  /** Ranges this plan may read (analytics_range_days); the rest lock. */
+  allowedRanges: AnalyticsRange[];
+  /** Plan that widens the history window, or null at the top tier. */
+  rangeNextPlan: string | null;
   onRangeChange: (range: AnalyticsRange) => void;
 }) {
   const dt = useDateTime();
@@ -111,13 +116,26 @@ export function AnalyticsLineChart(props: {
             value={range}
             onInput={(e) => props.onRangeChange(e.currentTarget.value as AnalyticsRange)}
           >
-            {ANALYTICS_RANGES.map((r) => (
-              <s-option key={r} value={r}>
-                {ANALYTICS_RANGE_LABELS[r]}
-              </s-option>
-            ))}
+            {ANALYTICS_RANGES.map((r) => {
+              // Ranges past the plan's history window are DISABLED, not
+              // hidden: clampRange silently narrows them server-side, so
+              // picking one used to return a shorter window that looked like a
+              // quiet quarter. Now the option says what it costs.
+              const locked = !props.allowedRanges.includes(r);
+              return (
+                <s-option key={r} value={r} disabled={locked}>
+                  {ANALYTICS_RANGE_LABELS[r]}
+                  {locked && props.rangeNextPlan ? ` — ${props.rangeNextPlan}` : ""}
+                </s-option>
+              );
+            })}
           </s-select>
         </s-stack>
+        {props.allowedRanges.length < ANALYTICS_RANGES.length ? (
+          <PlanBanner plan={props.rangeNextPlan} heading="See further back in your history">
+            Your plan covers the ranges above. Longer history is available on higher plans.
+          </PlanBanner>
+        ) : null}
 
         {total === 0 ? (
           <s-box padding="large">

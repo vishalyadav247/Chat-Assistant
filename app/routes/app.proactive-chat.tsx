@@ -4,7 +4,12 @@ import { useFetcher, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
-import { hasFeature } from "../lib/billing/plans.server";
+import {
+  displayQuota,
+  hasFeature,
+  nextPlanNameForQuota,
+  requiredPlanName,
+} from "../lib/billing/plans.server";
 import {
   deleteCampaign,
   duplicateCampaign,
@@ -22,6 +27,7 @@ import { ProactiveCampaignEditor, type CampaignDraft } from "../components/Proac
 import { campaignCtr, ProactiveCampaignTable } from "../components/ProactiveCampaignTable";
 import { ProactiveTemplatePicker } from "../components/ProactiveTemplatePicker";
 import { SaveBar } from "../components/SaveBar";
+import { PlanBanner, PlanMeter } from "../components/ui/PlanGate";
 import { StatGrid, StatTile } from "../components/ui/StatTile";
 import { requireShopAccess } from "../lib/access.server";
 import { routeError } from "../lib/ui/route-error";
@@ -94,6 +100,20 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     campaigns,
     currency: shop?.currency ?? "USD",
     premiumAllowed: hasFeature(plan, "premium_campaign_templates"),
+    // Tier name for every premium-template chip/banner in this tree. Read from
+    // the live matrix rather than hard-coded, because the operator can move the
+    // feature between plans from /platform.
+    premiumPlan: hasFeature(plan, "premium_campaign_templates")
+      ? null
+      : requiredPlanName("premium_campaign_templates"),
+    // active_campaigns quota (spec 15). Enforced in saveCampaign when a
+    // campaign is saved ACTIVE — the merchant now sees the ceiling coming
+    // instead of meeting it as a save error.
+    activeQuota: {
+      used: campaigns.filter((c) => c.status === "active").length,
+      quota: displayQuota(plan, "active_campaigns"),
+      nextPlan: nextPlanNameForQuota(plan, "active_campaigns"),
+    },
     productMeta,
     collectionMeta,
     starters,
@@ -324,6 +344,14 @@ export default function ProactiveChatPage() {
             </s-section>
 
             <s-section heading="Campaigns">
+              <s-box paddingBlockEnd="base">
+                <PlanMeter
+                  used={data.activeQuota.used}
+                  quota={data.activeQuota.quota}
+                  label="campaigns active"
+                  nextPlan={data.activeQuota.nextPlan}
+                />
+              </s-box>
               {pendingDelete ? (
                 <s-banner tone="critical" heading={`Delete “${pendingDelete.name}”?`}>
                   <s-paragraph>This can&apos;t be undone.</s-paragraph>
@@ -365,18 +393,16 @@ export default function ProactiveChatPage() {
         ) : view === "picker" ? (
           <ProactiveTemplatePicker
             premiumAllowed={data.premiumAllowed}
+            premiumPlan={data.premiumPlan}
             onBack={() => setView("dashboard")}
             onCreate={startFromTemplate}
           />
         ) : draft ? (
           <>
             {campaignTemplate(draft.templateType)?.premium && !data.premiumAllowed ? (
-              <s-banner tone="warning" heading="Premium template">
-                <s-paragraph>
-                  This template requires a Pro or Plus plan.{" "}
-                  <s-link href="/app/plan-usage">View plans</s-link>
-                </s-paragraph>
-              </s-banner>
+              <PlanBanner plan={data.premiumPlan} heading="Premium template" tone="warning">
+                This template is available on the {data.premiumPlan} plan and above.
+              </PlanBanner>
             ) : null}
             <ProactiveCampaignEditor
               draft={draft}
@@ -388,6 +414,7 @@ export default function ProactiveChatPage() {
               currency={data.currency}
               starters={data.starters}
               premiumAllowed={data.premiumAllowed}
+              premiumPlan={data.premiumPlan}
               rendererJs={data.rendererJs}
               widgetCss={data.widgetCss}
               onCancel={() => {

@@ -3,6 +3,7 @@ import type { ChangeEvent } from "react";
 import { useFetcher } from "react-router";
 import { useAppBridge } from "../lib/ui/surface";
 import { useIsMobile } from "../lib/ui/use-mobile";
+import { PlanMeter } from "./ui/PlanGate";
 import type { ShopSettingsData } from "../lib/settings/schemas";
 import {
   dateFormatOptions,
@@ -37,6 +38,8 @@ export interface TeamSectionData {
   seatsUsed: number;
   /** null = unlimited. */
   seatQuota: number | null;
+  /** Tier that adds seats (live matrix), or null at the top tier. */
+  seatNextPlan: string | null;
   emailConfigured: boolean;
   surface: "admin" | "web";
   /** The signed-in member on the web surface (can't edit themselves). */
@@ -61,7 +64,9 @@ export function SettingsGeneral(props: {
   logoUrl: string | null;
   theme: Theme;
   inbox: Inbox;
-  embedStatus: "unknown" | "on" | "off";
+  embedStatus: "unknown" | "on" | "draft" | "off";
+  /** For "draft": the unpublished theme the embed is actually enabled on. */
+  embedThemeName: string | null;
   shopDomain: string;
   apiKey?: string;
   owner: TeamMemberRow;
@@ -198,9 +203,30 @@ export function SettingsGeneral(props: {
   const embedBadge =
     props.embedStatus === "on"
       ? { tone: "success" as const, label: "On" }
-      : props.embedStatus === "off"
-        ? { tone: "critical" as const, label: "Off" }
-        : { tone: "neutral" as const, label: "Unknown" };
+      : props.embedStatus === "draft"
+        ? { tone: "warning" as const, label: "Draft theme only" }
+        : props.embedStatus === "off"
+          ? { tone: "critical" as const, label: "Off" }
+          : { tone: "neutral" as const, label: "Unknown" };
+
+  // "draft" is a real state, not a near-miss of "off": the merchant HAS turned
+  // the embed on, just on a theme that isn't live. Saying "Off" there reads as
+  // "your setup didn't register" and sends them to redo work they already did.
+  const embedNote =
+    props.embedStatus === "draft"
+      ? `Enabled on ${props.embedThemeName ?? "an unpublished theme"} — shoppers won't see the chat until that theme is published, or you turn it on for your live theme.`
+      : null;
+
+  // The deep link can only ACTIVATE an app embed — Shopify has no deactivate
+  // parameter, and the docs are explicit that an app "can't activate them on
+  // the app user's behalf" beyond sending them into the editor with it turned
+  // on. So there is no "Turn off" button to offer: when the embed is already
+  // on, the button stops claiming to turn it on and just takes the merchant to
+  // the editor, where the toggle actually lives.
+  const embedOn = props.embedStatus === "on";
+  const embedHref = `https://${props.shopDomain}/admin/themes/current/editor?context=apps${
+    !embedOn && props.apiKey ? `&activateAppId=${props.apiKey}/chat-widget` : ""
+  }`;
 
   return (
     <s-stack gap="base">
@@ -365,17 +391,11 @@ export function SettingsGeneral(props: {
               <s-text>App is embedded to your theme</s-text>
               <s-badge tone={embedBadge.tone}>{embedBadge.label}</s-badge>
             </s-stack>
-            <s-button
-              onClick={() =>
-                window.open(
-                  `https://${props.shopDomain}/admin/themes/current/editor?context=apps${props.apiKey ? `&activateAppId=${props.apiKey}/chat-widget` : ""}`,
-                  "_blank",
-                )
-              }
-            >
-              Turn on
+            <s-button onClick={() => window.open(embedHref, "_blank")}>
+              {embedOn ? "Manage in theme editor" : "Turn on"}
             </s-button>
           </s-stack>
+          {embedNote ? <s-text color="subdued">{embedNote}</s-text> : null}
         </s-stack>
       </s-section>
 
@@ -438,11 +458,20 @@ export function SettingsGeneral(props: {
               </s-button>
             </s-stack>
           </s-stack>
-          <s-text tone="neutral">
-            {props.team.seatQuota === null
-              ? `${props.team.seatsUsed} team member${props.team.seatsUsed === 1 ? "" : "s"}`
-              : `${props.team.seatsUsed} of ${props.team.seatQuota} team seat${props.team.seatQuota === 1 ? "" : "s"} used${seatsLeft === 0 ? " — upgrade your plan to invite more." : ""}`}
-          </s-text>
+          {props.team.seatQuota === null ? (
+            <s-text tone="neutral">
+              {props.team.seatsUsed} team member{props.team.seatsUsed === 1 ? "" : "s"}
+            </s-text>
+          ) : (
+            // Same meter as every other quota: the bar turns amber at 80% and
+            // red at the cap, and names the tier that adds seats.
+            <PlanMeter
+              used={props.team.seatsUsed}
+              quota={props.team.seatQuota}
+              label="team seats"
+              nextPlan={props.team.seatNextPlan}
+            />
+          )}
           {!props.team.emailConfigured ? (
             <s-banner tone="info">
               Invitation emails aren&apos;t configured on this server yet — after inviting someone, copy the

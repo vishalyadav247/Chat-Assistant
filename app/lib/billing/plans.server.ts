@@ -308,6 +308,39 @@ export function displayQuota(plan: string, dimension: QuotaDimension): number {
   return def.quotas[dimension];
 }
 
+/**
+ * The cheapest plan that includes `feature`, as its DISPLAY NAME — the one
+ * word every upgrade badge and banner shows the merchant.
+ *
+ * Derived from the live matrix rather than written into each component,
+ * because the matrix is operator-editable from /platform: move a feature from
+ * Pro to Basic there and a hard-coded "Pro" badge starts lying, on a screen
+ * nobody thought to update. Null when no plan has it (the operator switched it
+ * off everywhere) — callers should then say nothing rather than invent a tier.
+ */
+export function requiredPlanName(feature: GatedFeature): string | null {
+  maybeRefresh();
+  for (const id of PLAN_IDS) {
+    if (PLANS[id].features.includes(feature)) return PLANS[id].name;
+  }
+  return null;
+}
+
+/**
+ * The cheapest plan whose `dimension` quota beats the current plan's, as a
+ * display name. Powers "N of M used — upgrade to X for more". Null when the
+ * merchant is already on the most generous plan for that dimension, which is
+ * exactly when a meter should stop nagging.
+ */
+export function nextPlanNameForQuota(plan: string, dimension: QuotaDimension): string | null {
+  maybeRefresh();
+  const current = displayQuota(plan, dimension);
+  for (const id of PLAN_IDS) {
+    if (PLANS[id].quotas[dimension] > current) return PLANS[id].name;
+  }
+  return null;
+}
+
 export function overageRate(plan: string): number | null {
   maybeRefresh();
   const def = PLANS[(plan as PlanId) in PLANS ? (plan as PlanId) : "free"];

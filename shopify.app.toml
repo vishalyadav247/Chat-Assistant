@@ -88,7 +88,10 @@ api_version = "2026-07"
 #   write_app_proxy          storefront widget transport (/apps/ccwidget)
 #   write_files              merchant logo/icon uploads (Shopify Files staged uploads)
 #   read_themes              READ-ONLY theme-embed detection: reads only
-#                            config/settings_data.json on the PUBLISHED theme to
+#                            config/settings_data.json — on the published theme,
+#                            and (only when that one does not carry the embed)
+#                            on unpublished/development themes, since merchants
+#                            commonly set apps up on a draft theme first — to
 #                            tell the merchant whether the chat widget is
 #                            actually switched on. Never writes a theme, never
 #                            reads template or asset source. Added before launch

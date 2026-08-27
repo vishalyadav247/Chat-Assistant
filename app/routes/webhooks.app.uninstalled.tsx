@@ -38,6 +38,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         planStatus: "none",
         subscriptionId: null,
         billingInterval: null,
+        // NOT trialStartedAt / trialDeadlineAt: the trial entitlement is per
+        // SHOP and has to outlive the install, or uninstall→reinstall restarts
+        // the free trial indefinitely (trial.server.ts).
         trialEndsAt: null,
         usageLineItemId: null,
       },

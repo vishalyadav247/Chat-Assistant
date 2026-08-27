@@ -4,7 +4,8 @@ import { useFetcher, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
-import { displayQuota } from "../lib/billing/plans.server";
+import { isUnlimitedQuota } from "../lib/billing/plan-shared";
+import { displayQuota, nextPlanNameForQuota } from "../lib/billing/plans.server";
 import { currentPeriodStart } from "../lib/billing/usage.server";
 import {
   deleteCuratedAnswer,
@@ -15,7 +16,7 @@ import { revalidateCuratedStock } from "../lib/curated/revalidate.server";
 import { NOT_TEST_EVENT } from "../lib/analytics/events.server";
 import { isPurchasable } from "../lib/search/product-search.server";
 import { StatGrid, StatTile } from "../components/ui/StatTile";
-import { QuotaMeter } from "../components/QuotaMeter";
+import { PlanMeter } from "../components/ui/PlanGate";
 import { DataTable } from "../components/DataTable";
 import { ChipInput } from "../components/ChipInput";
 import type { BrowseItemMeta } from "../components/BrowseProductsModal";
@@ -109,6 +110,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return {
     plan: shop?.plan ?? "free",
     quota: displayQuota(shop?.plan ?? "free", "curated_answers"),
+    // Tier that raises the ceiling — shown once the meter turns warning.
+    quotaNextPlan: nextPlanNameForQuota(shop?.plan ?? "free", "curated_answers"),
     answers,
     productMeta,
     suggestions,
@@ -350,7 +353,7 @@ export default function CuratedAnswersPage() {
               value={String(data.kpis.published)}
               icon="check-circle"
               tone="success"
-              sub={`of ${data.quota} total`}
+              sub={isUnlimitedQuota(data.quota) ? "unlimited on your plan" : `of ${data.quota} total`}
             />
             <StatTile
               label="Served this month"
@@ -374,7 +377,12 @@ export default function CuratedAnswersPage() {
               sub="of shopper questions matched"
             />
           </StatGrid>
-          <QuotaMeter used={data.answers.length} quota={data.quota} label="used" />
+          <PlanMeter
+            used={data.answers.length}
+            quota={data.quota}
+            label="curated answers"
+            nextPlan={data.quotaNextPlan}
+          />
         </s-section>
 
         {view === "list" ? (

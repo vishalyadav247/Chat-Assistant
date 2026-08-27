@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { Link } from "react-router";
 import type { WidgetSettingsData } from "../lib/settings/schemas";
+import { ChatboxUploadButton } from "./ChatboxUploadButton";
 import { arrayMove, DragHandle, useDragReorder } from "./DragReorder";
+import { RadioOption } from "./ui/RadioOption";
 import { htmlTextLength, RichTextEditor } from "./ui/RichTextEditor";
 import { INK, SCROLLBAR_CSS } from "./ui/tokens";
 
@@ -47,11 +49,21 @@ const FIELD_LABELS: Record<PrechatField["key"], string> = {
   phone: "Phone number",
 };
 
+/** Active team member offered as the chat face (loader-provided). */
+export interface ChatTeamMember {
+  id: string;
+  name: string;
+  role: string;
+  avatarUrl: string | null;
+}
+
 export function ChatboxChatPage(props: {
   value: WidgetSettingsData;
   onChange: (next: WidgetSettingsData) => void;
   /** Published FAQs offered by "Import from FAQs" (loader-provided). */
   faqs: ImportableFaq[];
+  /** Active team members — who "Team member profile" can choose from. */
+  teamMembers: ChatTeamMember[];
 }) {
   const { value, onChange } = props;
   const starters = value.starters;
@@ -259,29 +271,45 @@ export function ChatboxChatPage(props: {
 
       <s-section heading="Chat avatar">
         <s-stack gap="base">
-        <s-stack gap="small-300">
-          <s-choice-list
-            label="Chat avatar"
-            labelAccessibilityVisibility="exclusive"
+          {/* One single-choice list per option with the reveal panel as a
+              sibling — s-choice children flatten to text, so a picker nested
+              inside <s-choice> would be swallowed. Same pattern as the
+              order-tracking modes in SettingsChatbox. */}
+          <RadioOption
             name="chat-avatar"
-            values={[value.avatarMode]}
-            onInput={(e) => {
-              const avatarMode = (e.currentTarget.values[0] ?? "store_branding") as
-                | "store_branding"
-                | "team_member";
-              onChange({ ...value, avatarMode });
-            }}
+            value="store_branding"
+            selected={value.avatarMode}
+            label="Store branding"
+            onSelect={() => onChange({ ...value, avatarMode: "store_branding" })}
           >
-            <s-choice value="store_branding">Store branding</s-choice>
-            <s-choice value="team_member" disabled>
-              Team member profile (coming soon)
-            </s-choice>
-          </s-choice-list>
-          <s-paragraph>
-            Show your store logo and name in customer chats.{" "}
-            <Link to="/app/settings?tab=general">Edit store logo</Link>
-          </s-paragraph>
-        </s-stack>
+            <s-paragraph>
+              Show your store logo and name in customer chats.{" "}
+              <Link to="/app/settings?tab=general">Edit store logo</Link>
+            </s-paragraph>
+          </RadioOption>
+
+          <RadioOption
+            name="chat-avatar"
+            value="team_member"
+            selected={value.avatarMode}
+            label="Team member profile"
+            onSelect={() =>
+              onChange({
+                ...value,
+                avatarMode: "team_member",
+                // Pre-select when there is exactly one obvious answer, so the
+                // mode is never selected-but-unconfigured.
+                avatarMemberId:
+                  value.avatarMemberId ?? (props.teamMembers.length === 1 ? props.teamMembers[0].id : null),
+              })
+            }
+          >
+            <TeamMemberAvatarPicker
+              members={props.teamMembers}
+              selectedId={value.avatarMemberId}
+              onSelect={(id) => onChange({ ...value, avatarMemberId: id })}
+            />
+          </RadioOption>
         </s-stack>
       </s-section>
 
@@ -582,4 +610,116 @@ export function ChatboxChatPage(props: {
       </s-modal>
     </s-stack>
   );
+}
+
+/**
+ * "Team member profile" configuration: pick who fronts the chat, and give them
+ * a photo. Falls back to their initials, so a member with no photo is still a
+ * valid choice rather than a blank circle.
+ *
+ * Uploads persist immediately (upload-member-avatar writes the TeamMember row)
+ * because the photo belongs to the person, not to this unsaved draft — but the
+ * SELECTION is draft state like every other setting on this page, so it only
+ * takes effect on Save.
+ */
+function TeamMemberAvatarPicker(props: {
+  members: ChatTeamMember[];
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+}) {
+  const selected = props.members.find((m) => m.id === props.selectedId) ?? null;
+
+  if (props.members.length === 0) {
+    return (
+      <s-stack gap="small-300">
+        <s-paragraph>
+          You don&apos;t have any active team members yet. Invite one to use their profile as
+          the chat avatar.
+        </s-paragraph>
+        <div>
+          <Link to="/app/settings?tab=general">Manage team</Link>
+        </div>
+      </s-stack>
+    );
+  }
+
+  return (
+    <s-stack gap="base">
+      <s-paragraph>
+        Show a real person in customer chats — their photo and name appear on every AI and
+        agent reply.
+      </s-paragraph>
+      <s-select
+        label="Team member"
+        value={props.selectedId ?? ""}
+        onInput={(e) => props.onSelect(e.currentTarget.value || null)}
+      >
+        <s-option value="">Select a team member</s-option>
+        {props.members.map((member) => (
+          <s-option key={member.id} value={member.id}>
+            {member.name} ({member.role})
+          </s-option>
+        ))}
+      </s-select>
+
+      {selected ? (
+        <s-stack direction="inline" gap="base" alignItems="center">
+          {selected.avatarUrl ? (
+            <img
+              src={selected.avatarUrl}
+              alt=""
+              style={{
+                width: 48,
+                height: 48,
+                borderRadius: "50%",
+                objectFit: "cover",
+                display: "block",
+              }}
+            />
+          ) : (
+            <span
+              aria-hidden="true"
+              style={{
+                width: 48,
+                height: 48,
+                borderRadius: "50%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 15,
+                fontWeight: 700,
+                color: "#fff",
+                background: "linear-gradient(135deg,#6d3bf5,#3b82f6)",
+              }}
+            >
+              {memberInitials(selected.name)}
+            </span>
+          )}
+          <s-stack gap="small-500">
+            <s-text type="strong">{selected.name}</s-text>
+            <s-text color="subdued">
+              {selected.avatarUrl ? "Photo uploaded" : "No photo — initials will be shown"}
+            </s-text>
+          </s-stack>
+          <ChatboxUploadButton
+            intent="upload-member-avatar"
+            memberId={selected.id}
+            label={selected.avatarUrl ? "Replace photo" : "Upload photo"}
+            accept="image/png,image/jpeg,image/webp"
+            onUploaded={() => {
+              /* The row is already written; the loader revalidation shows it. */
+            }}
+          />
+        </s-stack>
+      ) : null}
+    </s-stack>
+  );
+}
+
+function memberInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  const first = parts[0].charAt(0);
+  const last = parts.length > 1 ? parts[parts.length - 1].charAt(0) : "";
+  return (first + last).toUpperCase();
 }

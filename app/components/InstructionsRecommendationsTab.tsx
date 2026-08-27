@@ -10,6 +10,7 @@ import type {
 } from "../routes/app.ai-agent.instructions";
 import { DataTable, type Column } from "./DataTable";
 import { BrowseProductsModal, BrowseThumb, type BrowseItemMeta } from "./BrowseProductsModal";
+import { PlanBadge, PlanBanner } from "./ui/PlanGate";
 import { useDateTime } from "../lib/format/context";
 
 // Instructions → Product recommendations tab (spec 08, design #viewInstructions
@@ -31,9 +32,12 @@ export function InstructionsRecommendationsTab(props: {
   pairs: CrossSellPairRowData[];
   productMeta: Record<string, ProductMeta>;
   rules: { excludeOutOfStock: boolean };
+  /** Plan needed for `custom_recommendations`; null when this shop has it. */
+  customRecsPlan: string | null;
   onOpenRec: (id: string) => void;
   onOpenCustom: (id: string) => void;
 }) {
+  const customRecsPlan = props.customRecsPlan;
   const dt = useDateTime();
   const shopify = useAppBridge();
   const fetcher = useFetcher<InstructionsActionResult>();
@@ -250,15 +254,34 @@ export function InstructionsRecommendationsTab(props: {
             Create custom recommendation rules for specific use cases like gifts, occasions, or
             seasonal campaigns.
           </s-paragraph>
+          {/* Gated by `custom_recommendations`, enforced in
+              instructions/save.server.ts. Existing rules stay visible and
+              editable-looking; only creating is stopped, and the banner says
+              why instead of leaving the save to fail. */}
+          <PlanBanner
+            plan={customRecsPlan}
+            heading="Custom recommendation rules are a paid feature"
+          >
+            Rules let you answer &quot;gifts for dad&quot; or &quot;summer sale&quot; with a
+            hand-picked set of products or collections.
+          </PlanBanner>
           <DataTable
             columns={customColumns}
             rows={props.customRecs}
             onRowClick={(row) => props.onOpenCustom(row.id)}
             emptyMessage="No custom recommendations yet. Add one for occasions like gifts or seasonal campaigns."
             toolbar={
-              <s-button variant="primary" icon="plus" onClick={() => props.onOpenCustom("new")}>
-                Add new
-              </s-button>
+              <s-stack direction="inline" gap="small-200" alignItems="center">
+                <s-button
+                  variant="primary"
+                  icon="plus"
+                  disabled={Boolean(customRecsPlan)}
+                  onClick={() => props.onOpenCustom("new")}
+                >
+                  Add new
+                </s-button>
+                <PlanBadge plan={customRecsPlan} />
+              </s-stack>
             }
           />
         </s-stack>
@@ -271,9 +294,16 @@ export function InstructionsRecommendationsTab(props: {
               When recommending a specific product, also suggest its companions — e.g. a tent →
               sleeping bag.
             </s-paragraph>
-            <s-button icon="plus" onClick={() => setPairStage({ stage: "anchor" })}>
-              Add pair
-            </s-button>
+            <s-stack direction="inline" gap="small-200" alignItems="center">
+              <s-button
+                icon="plus"
+                disabled={Boolean(customRecsPlan)}
+                onClick={() => setPairStage({ stage: "anchor" })}
+              >
+                Add pair
+              </s-button>
+              <PlanBadge plan={customRecsPlan} />
+            </s-stack>
           </s-grid>
           {props.pairs.length === 0 ? (
             <s-text color="subdued">No pairs yet. Add one to attach companions to a product.</s-text>

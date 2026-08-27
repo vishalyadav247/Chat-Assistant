@@ -16,7 +16,9 @@ interface UploadResult {
 }
 
 export function ChatboxUploadButton(props: {
-  intent: "upload-logo" | "upload-icon";
+  intent: "upload-logo" | "upload-icon" | "upload-member-avatar";
+  /** Required by upload-member-avatar — whose photo this is. */
+  memberId?: string;
   label: string;
   /** MIME allowlist for the file picker; the server re-validates per intent. */
   accept?: string;
@@ -49,6 +51,7 @@ export function ChatboxUploadButton(props: {
     const fd = new FormData();
     fd.set("intent", props.intent);
     fd.set("file", file);
+    if (props.memberId) fd.set("memberId", props.memberId);
     fetcher.submit(fd, { method: "post", encType: "multipart/form-data" });
     event.currentTarget.value = "";
   };

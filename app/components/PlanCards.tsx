@@ -96,18 +96,38 @@ export function savingsBadgeLabel(plans: PlanCardData[]): string | null {
   return new Set(savings).size === 1 ? `Save ${max}%` : `Save up to ${max}%`;
 }
 
+/**
+ * Trial phrase for this card. `trialDays` is the shop's REMAINING entitlement
+ * (server-resolved), not the tier's headline allowance: a shop that has already
+ * used its trial gets billed immediately, and saying "7-day free trial" to that
+ * merchant is a false pricing claim (App Store requirement 1.1.4) as well as a
+ * guaranteed support ticket. Returns "" when there is no trial to promise.
+ */
+export function trialPhraseFor(plan: PlanCardData): string {
+  if (plan.trialDays <= 0) return "";
+  // Always states what this shop will ACTUALLY get: a full allowance on a first
+  // subscription, or whatever is left of one already part-used.
+  return `${plan.trialDays}-day free trial, then `;
+}
+
 export function termsFor(
   plan: PlanCardData,
   interval: "monthly" | "yearly",
 ): string {
   if (plan.priceMonthly === 0) return "Free forever — no subscription needed.";
+  const trial = trialPhraseFor(plan);
   if (interval === "yearly") {
     const saving = yearlySavingsPercent(plan);
-    return saving > 0
-      ? `Billed ${money(plan.yearlyTotal)}/year — you save ${saving}%.`
-      : `Billed ${money(plan.yearlyTotal)}/year.`;
+    const billed =
+      saving > 0
+        ? `billed ${money(plan.yearlyTotal)}/year — you save ${saving}%.`
+        : `billed ${money(plan.yearlyTotal)}/year.`;
+    // Sentence-case the first word when no trial phrase precedes it.
+    return trial ? `${trial}${billed}` : `${billed.charAt(0).toUpperCase()}${billed.slice(1)}`;
   }
-  return `${plan.trialDays}-day free trial, then ${money(plan.priceMonthly)}/month, billed by Shopify.`;
+  return trial
+    ? `${trial}${money(plan.priceMonthly)}/month, billed by Shopify.`
+    : `${money(plan.priceMonthly)}/month, billed by Shopify.`;
 }
 
 export function ctaFor(

@@ -4,6 +4,7 @@ import { aiAllowed } from "../billing/usage.server";
 import { activeCampaignsForWidget, type WidgetCampaign } from "../campaigns/campaigns.server";
 import { getShopConfig } from "../config/shop-config.server";
 import { sanitizeHtml } from "../sanitize.server";
+import { resolveChatAvatar } from "./chat-avatar.server";
 import {
   availabilityTtlSeconds,
   isAgentOnline,
@@ -51,10 +52,12 @@ export type WidgetConfigPayload =
        *  templates already filtered server-side by plan. */
       campaigns: WidgetCampaign[];
       /** Bot/agent identity on message bubbles (Chatbox → Chat avatar, spec 06):
-       *  store_branding → Settings → General → Store information: logo (or the
-       *  name's initials when no logo) as the avatar + name as the author
-       *  caption. null → default chat icon, no caption. */
-      avatar: { url: string | null; name: string } | null;
+       *  store branding (Settings → General store logo + name) or the chosen
+       *  team member's photo + name. The image, or the name's initials when
+       *  there is none, is the avatar; the name is the author caption.
+       *  Resolved by chat-avatar.server.ts, which never returns null — a shop
+       *  with neither a logo nor a name still yields a name to fall back on. */
+      avatar: { url: string | null; name: string };
     };
 
 export async function buildWidgetConfig(
@@ -109,6 +112,16 @@ export async function buildWidgetConfig(
   // innerHTML. They were sanitized on save only, so any other write path
   // (seed, import, migration, direct DB) bypassed it — sanitize at serve time
   // too, exactly like featuredFaqs below (QA D16).
+  // Bot identity on message bubbles. Store branding or the chosen team member,
+  // resolved in one place so the preview and inbox cannot disagree with what
+  // the shopper actually sees (chat-avatar.server.ts).
+  const avatar = await resolveChatAvatar(
+    shopId,
+    config.widget,
+    config.settings.storeInfo,
+    config.shopName || shopDomain.replace(".myshopify.com", ""),
+  );
+
   const safeWidget = {
     ...config.widget,
     starters: {
@@ -161,12 +174,6 @@ export async function buildWidgetConfig(
     },
     cartDrawer: config.settings.cartDrawer,
     campaigns,
-    avatar:
-      config.widget.avatarMode === "store_branding"
-        ? {
-            url: config.settings.storeInfo.logoUrl || null,
-            name: config.settings.storeInfo.name.trim() || config.shopName || shopDomain.replace(".myshopify.com", ""),
-          }
-        : null,
+    avatar,
   };
 }

@@ -8,6 +8,8 @@ import {
   displayQuota,
   getQuota,
   hasFeature,
+  nextPlanNameForQuota,
+  requiredPlanName,
   requirePlan,
   PlanGateError,
 } from "../lib/billing/plans.server";
@@ -340,17 +342,41 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     discountGate: {
       showBanner: !hasFeature(plan, "discount_realtime_sync"),
       realtime: hasFeature(plan, "discount_realtime_sync"),
+      // Tier that unlocks it, straight from the live matrix — the tab used to
+      // say "Pro/Plus" in three places, which an operator edit would falsify.
+      realtimePlan: hasFeature(plan, "discount_realtime_sync")
+        ? null
+        : requiredPlanName("discount_realtime_sync"),
       realtimeEnabled: shopSettings.discountRealtime,
     },
     // Catalog auto sync (Products / Collections tabs, 2026-08-17): same shape —
     // plan feature availability + the merchant's per-type toggle.
     catalogGate: {
       available: hasFeature(plan, "catalog_auto_sync"),
+      availablePlan: hasFeature(plan, "catalog_auto_sync")
+        ? null
+        : requiredPlanName("catalog_auto_sync"),
       products: shopSettings.catalogAutoSync.products,
       collections: shopSettings.catalogAutoSync.collections,
     },
     // Master training permissions (spec 07) — the Learn card switches.
     learnMaster: shopSettings.learn,
+    // Plan signals (spec 15). Names come from the LIVE matrix so a feature the
+    // operator moves between tiers relabels everywhere at once.
+    planSignals: {
+      csvImport: hasFeature(plan, "csv_import") ? null : requiredPlanName("csv_import"),
+      fileUpload: hasFeature(plan, "file_upload") ? null : requiredPlanName("file_upload"),
+      productsSynced: {
+        used: products.length,
+        quota: displayQuota(plan, "products_synced"),
+        nextPlan: nextPlanNameForQuota(plan, "products_synced"),
+      },
+      metafieldsNext: nextPlanNameForQuota(plan, "metafields_enabled"),
+      fileUploadsNext: nextPlanNameForQuota(plan, "file_uploads"),
+      manualQasNext: nextPlanNameForQuota(plan, "manual_qas"),
+      crawlPagesNext: nextPlanNameForQuota(plan, "crawl_pages"),
+      policyPagesNext: nextPlanNameForQuota(plan, "policy_pages"),
+    },
   };
 };
 
@@ -1061,10 +1087,15 @@ export default function TrainingDataPage() {
             currency={data.shop.currency}
             masterEnabled={data.learnMaster.products}
             autoSyncAvailable={data.catalogGate.available}
+            autoSyncPlan={data.catalogGate.availablePlan}
             autoSyncEnabled={data.catalogGate.products}
             metafields={data.metafields.rows}
             metafieldQuota={data.metafields.quota}
+            metafieldNextPlan={data.planSignals.metafieldsNext}
             metafieldSyncAt={data.metafields.lastSyncedAt}
+            syncedUsed={data.planSignals.productsSynced.used}
+            syncedQuota={data.planSignals.productsSynced.quota}
+            syncedNextPlan={data.planSignals.productsSynced.nextPlan}
           />
         ) : null}
         {tab === "collections" ? (
@@ -1073,6 +1104,7 @@ export default function TrainingDataPage() {
             lastSyncedAt={data.sync.collectionSyncAt}
             masterEnabled={data.learnMaster.collections}
             autoSyncAvailable={data.catalogGate.available}
+            autoSyncPlan={data.catalogGate.availablePlan}
             autoSyncEnabled={data.catalogGate.collections}
           />
         ) : null}
@@ -1083,6 +1115,7 @@ export default function TrainingDataPage() {
             masterEnabled={data.learnMaster.discounts}
             showUpgradeBanner={data.discountGate.showBanner}
             realtime={data.discountGate.realtime}
+            realtimePlan={data.discountGate.realtimePlan}
             realtimeEnabled={data.discountGate.realtimeEnabled}
             shopDomain={data.shop.domain}
           />
@@ -1100,6 +1133,7 @@ export default function TrainingDataPage() {
             suggested={data.knowledge.suggested}
             chunkTotal={data.knowledge.chunkTotal}
             quotas={data.knowledge.quotas}
+            planSignals={data.planSignals}
             csvRowCap={data.knowledge.csvRowCap}
             prefillQuestion={prefillQa}
             prefillUnresolvedId={prefillQa ? unresolvedId : ""}

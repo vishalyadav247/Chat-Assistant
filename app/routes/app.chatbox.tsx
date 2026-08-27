@@ -4,7 +4,7 @@ import { useFetcher, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
-import { hasFeature } from "../lib/billing/plans.server";
+import { hasFeature, requiredPlanName } from "../lib/billing/plans.server";
 import { resolveAvailabilityFor } from "../lib/settings/availability.server";
 import { loadShopSettings } from "../lib/settings/save.server";
 import {
@@ -31,7 +31,7 @@ import { APP_NAME } from "./app";
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { shopId, shopDomain } = await requireShopAccess(request, { permission: "chatbox" });
 
-  const [shop, settings, shopSettings, faqs, categories, importableFaqs] = await Promise.all([
+  const [shop, settings, shopSettings, faqs, categories, importableFaqs, teamMembers] = await Promise.all([
     db.shop.findUnique({ where: { id: shopId } }),
     loadWidgetSettings(shopId),
     loadShopSettings(shopId),
@@ -52,6 +52,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       take: 300,
       select: { id: true, question: true, answerHtml: true },
     }),
+    db.teamMember.findMany({
+      where: { shopId, status: "active" },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, role: true, avatarUrl: true },
+    }),
   ]);
 
   const plan = shop?.plan ?? "free";
@@ -62,6 +67,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     settings,
     // Open enforcement mode → true for every plan today (plans.server.ts).
     removeBrandingAllowed: hasFeature(plan, "remove_branding"),
+    // Tier that unlocks it (live matrix); null when this plan already has it.
+    removeBrandingPlan: hasFeature(plan, "remove_branding")
+      ? null
+      : requiredPlanName("remove_branding"),
     availability: { status: availability.status, message: availability.message },
     featuredFaqs: faqs.map((f) => ({
       id: f.id,
@@ -89,6 +98,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       logoUrl: shopSettings.storeInfo.logoUrl,
       name: shopSettings.storeInfo.name.trim() || shop?.name || shopDomain.replace(".myshopify.com", ""),
     },
+    // Roster for "Team member profile". Active members only — an invited or
+    // disabled account has no business fronting the storefront chat.
+    teamMembers,
   };
 };
 
@@ -209,12 +221,18 @@ export default function ChatboxPage() {
           <div>
             {tab === "general" ? <ChatboxGeneral value={draft} onChange={setDraft} /> : null}
             {tab === "chatpage" ? (
-              <ChatboxChatPage value={draft} onChange={setDraft} faqs={data.importableFaqs} />
+              <ChatboxChatPage
+                value={draft}
+                onChange={setDraft}
+                faqs={data.importableFaqs}
+                teamMembers={data.teamMembers}
+              />
             ) : null}
             {tab === "appearance" ? (
               <ChatboxAppearance
                 value={draft}
                 removeBrandingAllowed={data.removeBrandingAllowed}
+                removeBrandingPlan={data.removeBrandingPlan}
                 onChange={setDraft}
               />
             ) : null}
@@ -234,6 +252,7 @@ export default function ChatboxPage() {
                 survey={data.survey}
                 orderTrackingMode={data.orderTrackingMode}
                 storeInfo={data.storeInfo}
+                teamMembers={data.teamMembers}
               />
             </s-stack>
           </div>

@@ -3,7 +3,7 @@ import { useLoaderData, useNavigate, useRouteError, useSearchParams } from "reac
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { z } from "zod";
 import db from "../db.server";
-import { PlanGateError } from "../lib/billing/plans.server";
+import { hasFeature, requiredPlanName, PlanGateError } from "../lib/billing/plans.server";
 import {
   handoverConfigSchema,
   shopSettingsSchema,
@@ -96,8 +96,9 @@ export interface InstructionsActionResult {
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { shopId } = await requireShopAccess(request, { permission: "ai_agent" });
 
-  const [persona, guardrails, handoverRow, settingsRow, recommendations, customRecs, pairs] =
+  const [shop, persona, guardrails, handoverRow, settingsRow, recommendations, customRecs, pairs] =
     await Promise.all([
+      db.shop.findUnique({ where: { id: shopId }, select: { plan: true } }),
       db.persona.findUnique({ where: { shopId } }),
       db.guardrails.findUnique({ where: { shopId } }),
       db.handoverConfig.findUnique({ where: { shopId }, select: { config: true } }),
@@ -121,6 +122,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         select: { id: true, productId: true, companionIds: true },
       }),
     ]);
+
+  const plan = shop?.plan ?? "free";
 
   // Meta for every referenced product/collection so tables and detail views
   // can render titles/thumbnails without refetching.
@@ -175,6 +178,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     collectionMeta,
     handover: handoverConfigSchema.parse(handoverRow?.config ?? {}) as HandoverConfigData,
     rules: shopSettingsSchema.parse(settingsRow?.settings ?? {}).recommendationRules,
+    // Plan signals (spec 15): the tier that unlocks each gated control, or
+    // null when this shop already has it. Names come from the live matrix.
+    planSignals: {
+      customRecs: hasFeature(plan, "custom_recommendations")
+        ? null
+        : requiredPlanName("custom_recommendations"),
+      multiLanguage: hasFeature(plan, "multi_language")
+        ? null
+        : requiredPlanName("multi_language"),
+    },
   };
 };
 
@@ -350,7 +363,10 @@ export default function InstructionsPage() {
         />
 
         {tab === "general" ? (
-          <InstructionsGeneralTab initial={data.general} />
+          <InstructionsGeneralTab
+            initial={data.general}
+            multiLanguagePlan={data.planSignals.multiLanguage}
+          />
         ) : null}
         {tab === "recommendations" ? (
           <InstructionsRecommendationsTab
@@ -359,6 +375,7 @@ export default function InstructionsPage() {
             pairs={data.pairs}
             productMeta={data.productMeta}
             rules={data.rules}
+            customRecsPlan={data.planSignals.customRecs}
             onOpenRec={(id) =>
               setSearchParams((prev) => {
                 const params = new URLSearchParams(prev);

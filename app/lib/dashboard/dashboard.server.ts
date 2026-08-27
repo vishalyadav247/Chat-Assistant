@@ -204,8 +204,14 @@ export async function setupChecklist(
   const steps: ChecklistStep[] = [
     {
       id: "embed",
-      label: "Embed app to your theme",
-      state: embedStatus === "on" ? "done" : embedStatus === "off" ? "todo" : "unknown",
+      // "draft" is NOT done — the embed is enabled, but on a theme shoppers
+      // aren't served, so the chat still isn't live. The label says which,
+      // rather than repeating the generic step text and looking stuck.
+      label:
+        embedStatus === "draft"
+          ? "Embed app to your LIVE theme (currently on a draft theme)"
+          : "Embed app to your theme",
+      state: embedStatus === "on" ? "done" : embedStatus === "unknown" ? "unknown" : "todo",
       href: "/app/settings?tab=general",
       linkLabel: embedStatus === "unknown" ? "Check in Theme editor" : "Settings",
       ...(embedStatus === "unknown" ? { externalUrl: themeEditorUrl } : {}),

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { WidgetSettingsData } from "../lib/settings/schemas";
 import { useIsMobile } from "../lib/ui/use-mobile";
 import { ensureWidgetPreviewAssets } from "../lib/ui/widget-preview-assets";
+import type { ChatTeamMember } from "./ChatboxChatPage";
 
 // Live preview (spec 06) with parity BY CONSTRUCTION: it injects the exact
 // storefront assets (extensions/chat-widget/assets/widget-renderer.js + .css,
@@ -99,6 +100,9 @@ export function ChatboxPreview(props: {
   /** Store information (Settings → General) — the "Store branding" chat
    *  avatar (logo or name initials) + author caption on bot messages. */
   storeInfo: { logoUrl: string | null; name: string };
+  /** Active team members — resolves the "Team member profile" avatar from the
+   *  unsaved draft, mirroring resolveChatAvatar on the server. */
+  teamMembers: ChatTeamMember[];
 }) {
   const { settings, tab, availability, featuredFaqs } = props;
   const containerRef = useRef<HTMLDivElement>(null);
@@ -167,12 +171,19 @@ export function ChatboxPreview(props: {
       orderTracking: { mode: props.orderTrackingMode, customUrl: "" },
     };
 
-    // Same rule as config.server.ts: store branding → Settings → General
-    // store logo/name (NOT the chatbox header logo); else default chat icon.
+    // Same rule as chat-avatar.server.ts, resolved against the DRAFT so the
+    // preview reacts before the settings are saved: the chosen team member, or
+    // store branding (Settings → General logo/name — NOT the chatbox header
+    // logo) whenever the mode is store branding or the member can't be
+    // resolved. Never null: the fallback is the store, not a blank circle.
+    const member =
+      settings.avatarMode === "team_member" && settings.avatarMemberId
+        ? props.teamMembers.find((m) => m.id === settings.avatarMemberId)
+        : undefined;
     R.setAvatar?.(
-      settings.avatarMode === "store_branding"
-        ? { url: props.storeInfo.logoUrl, name: props.storeInfo.name }
-        : null,
+      member
+        ? { url: member.avatarUrl, name: member.name || props.storeInfo.name }
+        : { url: props.storeInfo.logoUrl, name: props.storeInfo.name },
     );
 
     container.textContent = "";
@@ -267,6 +278,7 @@ export function ChatboxPreview(props: {
     props.survey,
     props.orderTrackingMode,
     props.storeInfo,
+    props.teamMembers,
   ]);
 
   return (

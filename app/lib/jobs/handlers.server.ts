@@ -9,6 +9,7 @@ import {
   deleteProductFromWebhook,
   upsertDiscountFromWebhook,
   deleteDiscountFromWebhook,
+  syncCollectionMembershipFromWebhook,
 } from "../ingestion/catalog-sync.server";
 import { logError } from "../log.server";
 import { invalidateShopConfig } from "../config/shop-config.server";
@@ -17,6 +18,9 @@ import { invalidateShopConfig } from "../config/shop-config.server";
 export const JOBS = {
   catalogSync: "catalog-sync",
   collectionSync: "collection-sync",
+  // One collection's product membership (COLLECTIONS_UPDATE) — enumerating it
+  // is far past a webhook handler's budget.
+  collectionMembership: "collection-membership",
   discountSync: "discount-sync",
   productUpsert: "product-upsert",
   productDelete: "product-delete",
@@ -58,6 +62,13 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
   await boss.work<ShopJob>(JOBS.collectionSync, async ([job]) => {
     await fullCollectionSync(job.data.shopDomain);
   });
+
+  await boss.work<ShopJob & { collectionId: string }>(
+    JOBS.collectionMembership,
+    async ([job]) => {
+      await syncCollectionMembershipFromWebhook(job.data.shopDomain, job.data.collectionId);
+    },
+  );
 
   await boss.work<ShopJob>(JOBS.discountSync, async ([job]) => {
     await fullDiscountSync(job.data.shopDomain);
@@ -395,6 +406,7 @@ export async function cleanupShop(shopDomain: string): Promise<void> {
     db.product.deleteMany({ where: { shopId } }),
     db.productMetafieldDefinition.deleteMany({ where: { shopId } }),
     db.collection.deleteMany({ where: { shopId } }),
+    db.collectionProduct.deleteMany({ where: { shopId } }),
     db.discount.deleteMany({ where: { shopId } }),
     db.syncState.deleteMany({ where: { shopId } }),
     db.dataRequest.deleteMany({ where: { shopId } }),
@@ -421,6 +433,10 @@ export async function cleanupShop(shopDomain: string): Promise<void> {
         planStatus: "none",
         subscriptionId: null,
         billingInterval: null,
+        // trialStartedAt / trialDeadlineAt survive the purge on purpose: they
+        // are an abuse-prevention record about the SHOP (a myshopify domain and
+        // two timestamps), not customer personal data, and erasing them would
+        // turn shop/redact into a free-trial reset button (trial.server.ts).
         trialEndsAt: null,
         usageLineItemId: null,
       },

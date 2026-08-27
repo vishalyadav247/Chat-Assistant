@@ -42,6 +42,7 @@ import {
 } from "../lib/billing/promo-codes.server";
 import { PlanDiscountCard, PlanDoneForYouCard } from "../components/PlanExtras";
 import { PlanFaq } from "../components/PlanFaq";
+import { trialDaysByPlan } from "../lib/billing/trial.server";
 import { requireShopAccess } from "../lib/access.server";
 import { routeError } from "../lib/ui/route-error";
 import { useDateTime } from "../lib/format/context";
@@ -117,6 +118,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         planStatus: true,
         billingInterval: true,
         trialEndsAt: true,
+        // Entitlement ledger — the cards must advertise the trial this shop can
+        // still get, not the tier's headline allowance (trial.server.ts).
+        trialStartedAt: true,
+        trialDeadlineAt: true,
         subscriptionId: true,
         // Needed by overageBillable() below — a shop with no usage line item
         // (every ANNUAL subscription) can never be charged for overage.
@@ -131,6 +136,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     shop?.subscriptionId ?? null,
   );
 
+  // Remaining trial days per tier for this shop: a full allowance on a first
+  // subscription, fewer once part-used, 0 once spent.
+  const trialDays = trialDaysByPlan(
+    shop ?? { trialStartedAt: null, trialDeadlineAt: null },
+    Object.keys(PLANS) as (keyof typeof PLANS)[],
+  );
+
   const plans: PlanCardData[] = Object.values(PLANS).map((def) => ({
     id: def.id,
     name: def.name,
@@ -138,7 +150,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     priceMonthly: def.priceMonthly,
     priceYearlyPerMonth: def.priceYearlyPerMonth,
     yearlyTotal: def.id === "free" ? 0 : yearlyTotal(def.id),
-    trialDays: def.trialDays,
+    trialDays: trialDays[def.id] ?? 0,
     overagePerConversation: def.overagePerConversation,
     bullets: bulletsFor(def),
     popular: def.id === "pro",

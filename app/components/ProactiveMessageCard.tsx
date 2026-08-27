@@ -12,6 +12,7 @@ import type { BrowseItemMeta } from "./BrowseProductsModal";
 import { BrowseProductsModal, BrowseThumb } from "./BrowseProductsModal";
 import { RadioOption } from "./ui/RadioOption";
 import { htmlTextLength, RichTextEditor } from "./ui/RichTextEditor";
+import { PlanBadge } from "./ui/PlanGate";
 import { INK, RADIUS, SPACE } from "./ui/tokens";
 
 // Proactive-chat editor → Message card (spec 12). The tab strip, the fields
@@ -19,30 +20,14 @@ import { INK, RADIUS, SPACE } from "./ui/tokens";
 // reference (.claude/resources/proactive_chat/*.png); which tabs exist is
 // declared per template in lib/campaigns/templates.ts.
 
-function UpgradeBadge(props: { label?: string }) {
-  return (
-    <span
-      style={{
-        fontSize: 10.5,
-        fontWeight: 800,
-        borderRadius: RADIUS.pill,
-        padding: "2px 8px",
-        color: "#8a5a00",
-        background: "#fde68a",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {props.label ?? "Pro +"}
-    </span>
-  );
-}
-
 /** Message-type tab strip. Gated tabs render disabled with the upgrade chip,
- *  exactly like the design's "Product Quiz — Pro +". */
+ *  exactly like the design's "Product Quiz — Pro +" (the tier now comes from
+ *  the live matrix, so it stays true if the operator moves the feature). */
 function KindTabs(props: {
   kinds: CampaignMessageData["kind"][];
   active: CampaignMessageData["kind"];
   premiumAllowed: boolean;
+  premiumPlan: string | null;
   onChange: (kind: CampaignMessageData["kind"]) => void;
 }) {
   if (props.kinds.length < 2) return null;
@@ -90,7 +75,7 @@ function KindTabs(props: {
           >
             {active ? <s-icon type="check" size="small" /> : null}
             {MESSAGE_KIND_LABELS[kind]}
-            {gated ? <UpgradeBadge /> : null}
+            {gated ? <PlanBadge plan={props.premiumPlan} /> : null}
           </button>
         );
       })}
@@ -106,6 +91,7 @@ export function ProactiveMessageCard(props: {
   extraMeta: Record<string, BrowseItemMeta>;
   onExtraMeta: (meta: Record<string, BrowseItemMeta>) => void;
   premiumAllowed: boolean;
+  premiumPlan: string | null;
 }) {
   const { draft, setDraft } = props;
   const tpl = campaignTemplate(draft.templateType);
@@ -225,7 +211,7 @@ export function ProactiveMessageCard(props: {
               label={option.label}
               details={option.help}
               disabled={gated}
-              badge={gated ? <UpgradeBadge label="👑 Upgrade" /> : null}
+              badge={gated ? <PlanBadge plan={props.premiumPlan} /> : null}
               onSelect={(recommendation) => setMessage({ recommendation })}
             >
               {option.value === "custom" ? productPicker : null}
@@ -436,6 +422,7 @@ export function ProactiveMessageCard(props: {
           kinds={tpl?.messageKinds ?? ["text"]}
           active={message.kind}
           premiumAllowed={props.premiumAllowed}
+          premiumPlan={props.premiumPlan}
           onChange={(kind) => setMessage({ kind })}
         />
         {body}

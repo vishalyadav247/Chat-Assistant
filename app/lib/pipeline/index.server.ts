@@ -766,12 +766,16 @@ async function* questionLane(args: {
 }): AsyncIterable<PipelineFrame> {
   const guardrails = args.config.guardrails;
   const minMeaningScore = guardrails?.minMeaningScore ?? 0.3;
-  const [hits, discountContext] = await Promise.all([
+  const [hits, discountContext, collectionContext] = await Promise.all([
     knowledgeSearch(args.shopId, args.queryEmbedding, 3),
     // Master "Learn discounts" permission (spec 07): OFF ⇒ no discount facts,
     // regardless of per-row learnEnabled.
     args.config.settings.learn.discounts
       ? activeDiscountContext(args.shopId, args.message)
+      : Promise.resolve(""),
+    // Same contract for collections, gated by "Learn collections".
+    args.config.settings.learn.collections
+      ? shopCollectionContext(args.shopId, args.message)
       : Promise.resolve(""),
   ]);
   const strongEnough = hits.length > 0 && hits[0].score >= minMeaningScore;
@@ -803,12 +807,26 @@ async function* questionLane(args: {
       injected: Boolean(discountContext),
     },
   );
+  args.trace.step(
+    "collection_context",
+    "Synced collection names",
+    !args.config.settings.learn.collections ? "skip" : collectionContext ? "hit" : "pass",
+    {
+      reason: args.config.settings.learn.collections ? null : "Learn collections is off",
+      injected: Boolean(collectionContext),
+    },
+  );
 
   // Discount questions are grounded mechanically from the synced Discount
   // mirror (spec 02 backlog: "synced discounts become RAG-available later").
   // When we hold real discount facts, the no-knowledge fallback is skipped —
   // the context IS the store info for this turn.
-  if ((guardrails?.answerOnlyFromKnowledge ?? true) && !strongEnough && !discountContext) {
+  if (
+    (guardrails?.answerOnlyFromKnowledge ?? true) &&
+    !strongEnough &&
+    !discountContext &&
+    !collectionContext
+  ) {
     args.trace.step("rag_fallback", "No grounded facts, serving the fallback message", "miss", {
       rule: "Answer only from knowledge is ON, so the model is not allowed to improvise",
       effect: "fallback reply; the question is logged to the unresolved queue",
@@ -831,7 +849,7 @@ async function* questionLane(args: {
   }
 
   const context =
-    hits.map((h) => `[${h.topic}] ${h.body}`).join("\n\n") + discountContext;
+    hits.map((h) => `[${h.topic}] ${h.body}`).join("\n\n") + discountContext + collectionContext;
   const stream = getLlmProvider().chatStream(
     [
       { role: "system", content: `${args.personaPrompt}\n${QUESTION_ANSWER}` },
@@ -902,6 +920,38 @@ async function activeDiscountContext(shopId: string, message: string): Promise<s
     return `- ${d.title}${d.summary ? `: ${d.summary}` : ""}${ends}`;
   });
   return `\n\n[Current discounts — the only discounts that exist]\n${lines.join("\n")}`;
+}
+
+// "what do you sell?", "what categories are there?", "do you have a winter
+// range?" — questions about the SHAPE of the catalogue, which product search
+// cannot answer: it returns individual products, never the sections they sit
+// in. Mirrors DISCOUNT_INTENT_RE; exported so the QA suite tests the real one.
+export const COLLECTION_INTENT_RE =
+  /\b(collections?|categor(?:y|ies)|ranges?|lines?|departments?|sections?|what (?:do|kind of|type of|products?) (?:you|do you) (?:sell|have|offer|carry)|browse|shop by)\b/i;
+
+/** How many collection names may enter the prompt. Enough to describe a store,
+ *  short enough not to crowd out the RAG chunks that answer the actual
+ *  question. */
+const MAX_COLLECTION_FACTS = 25;
+
+async function shopCollectionContext(shopId: string, message: string): Promise<string> {
+  if (!COLLECTION_INTENT_RE.test(message)) return "";
+  const collections = await db.collection.findMany({
+    // Per-row learnEnabled on top of the master switch the caller checked —
+    // same two-level contract as products and discounts (spec 07).
+    where: { shopId, learnEnabled: true },
+    orderBy: { productCount: "desc" },
+    take: MAX_COLLECTION_FACTS,
+    select: { title: true, description: true, productCount: true },
+  });
+  if (collections.length === 0) return "";
+  const lines = collections.map((c) => {
+    // One clause of description at most: enough to disambiguate two similarly
+    // named collections, not enough to become the answer.
+    const blurb = c.description.replace(/\s+/g, " ").trim().slice(0, 100);
+    return `- ${c.title} (${c.productCount} product${c.productCount === 1 ? "" : "s"})${blurb ? `: ${blurb}` : ""}`;
+  });
+  return `\n\n[Store collections — the only categories that exist]\n${lines.join("\n")}`;
 }
 
 // ── Shared helpers ──────────────────────────────────────────────────────────
@@ -1136,6 +1186,12 @@ async function saveMessage(
  * hand-picked products (stock/price still enforced). Collections deferred
  * (membership not mirrored).
  */
+/** How many collection members one custom rule may pull in. Deliberately far
+ *  above the 8 that survive ranking: the price/stock filters below can discard
+ *  most of them, and a rule that returns nothing is worse than one that reads
+ *  a few more rows. */
+const COLLECTION_POOL_LIMIT = 100;
+
 async function customRecommendationPool(
   shopId: string,
   message: string,
@@ -1145,19 +1201,38 @@ async function customRecommendationPool(
   try {
     const rows = await db.customRecommendation.findMany({
       where: { shopId, status: "active" },
-      select: { id: true, searchTerms: true, productIds: true },
+      select: { id: true, searchTerms: true, productIds: true, collectionIds: true },
     });
     const lower = message.toLowerCase();
+    // A rule targeting COLLECTIONS is just as valid as one targeting products.
+    // Requiring productIds here is what made every collection-only rule a
+    // silent no-op: it saved, it looked active, and it could never match.
     const matched = rows.find(
       (r) =>
-        r.productIds.length > 0 &&
+        (r.productIds.length > 0 || r.collectionIds.length > 0) &&
         r.searchTerms.some((t) => t.trim().length > 2 && lower.includes(t.trim().toLowerCase())),
     );
     if (!matched) return null;
+
+    // Explicit products first, then everything in the named collections. The
+    // merchant's own picks outrank a whole-collection sweep.
+    const targetIds = [...matched.productIds];
+    if (matched.collectionIds.length > 0) {
+      const members = await db.collectionProduct.findMany({
+        where: { shopId, collectionId: { in: matched.collectionIds } },
+        select: { shopifyProductId: true },
+        take: COLLECTION_POOL_LIMIT,
+      });
+      for (const m of members) {
+        if (!targetIds.includes(m.shopifyProductId)) targetIds.push(m.shopifyProductId);
+      }
+    }
+    if (targetIds.length === 0) return null;
+
     const products = await db.product.findMany({
       where: {
         shopId,
-        shopifyProductId: { in: matched.productIds },
+        shopifyProductId: { in: targetIds },
         ...purchasableWhere(excludeOutOfStock),
         ...(priceMax !== null ? { price: { lte: priceMax } } : {}),
       },
@@ -1166,10 +1241,22 @@ async function customRecommendationPool(
         imageUrl: true, handle: true, variants: true,
         productType: true, tags: true, description: true, metafieldText: true,
       },
-      take: 8,
     });
     if (products.length === 0) return null;
-    return products.map((p, i) => ({
+    // Rank by the merchant's own order — explicit picks, then collection
+    // members — and only THEN take the top 8. Letting the database's arbitrary
+    // row order decide would let a 100-product collection sweep bury the
+    // handful of products the merchant actually chose.
+    const rank = new Map(targetIds.map((gid, i) => [gid, i]));
+    const ordered = products
+      .slice()
+      .sort(
+        (a, b) =>
+          (rank.get(a.shopifyProductId) ?? Number.MAX_SAFE_INTEGER) -
+          (rank.get(b.shopifyProductId) ?? Number.MAX_SAFE_INTEGER),
+      )
+      .slice(0, 8);
+    return ordered.map((p, i) => ({
       id: p.id,
       shopifyProductId: p.shopifyProductId,
       title: p.title,

@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { useNavigate } from "react-router";
 import type { DiscountRow } from "../routes/app.ai-agent.training";
 import { DataTable } from "./DataTable";
 import {
@@ -10,6 +9,7 @@ import {
   useSyncWatcher,
   useTrainingFetcher,
 } from "./TrainingShared";
+import { PlanBanner } from "./ui/PlanGate";
 
 // Discounts tab (spec 07, design discount_screen_2.png): upgrade banner for
 // plans without real-time discount sync, learn card with master AI switch,
@@ -34,6 +34,8 @@ export function TrainingDiscountsTab(props: {
   showUpgradeBanner: boolean;
   /** Plan allows real-time sync (Pro+; always true in open enforcement). */
   realtime: boolean;
+  /** Tier that unlocks it (live matrix), or null when this plan has it. */
+  realtimePlan: string | null;
   /** Merchant's saved toggle state (ShopSettings.discountRealtime). */
   realtimeEnabled: boolean;
   /** myshopify domain — Manage links to the store's Discounts admin. */
@@ -45,7 +47,6 @@ export function TrainingDiscountsTab(props: {
   const dt = useDateTime();
   const { submit, pendingIntent } = useTrainingFetcher();
   const syncWatch = useSyncWatcher(props.lastSyncedAt, "Discounts synced");
-  const navigate = useNavigate();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
   const rows = props.rows.filter((row) => {
@@ -67,15 +68,10 @@ export function TrainingDiscountsTab(props: {
   return (
     <s-stack gap="base">
       {props.showUpgradeBanner ? (
-        <s-banner tone="info" heading="Upgrade to real-time discount sync">
-          <s-paragraph>
-            Pro/Plus plans sync discounts instantly when you edit them in Shopify via webhooks. No
-            manual sync needed.
-          </s-paragraph>
-          <s-button variant="primary" onClick={() => navigate("/app/plan-usage")}>
-            Upgrade to Pro
-          </s-button>
-        </s-banner>
+        <PlanBanner plan={props.realtimePlan} heading="Upgrade to real-time discount sync">
+          Discounts sync instantly when you edit them in Shopify via webhooks — no manual sync
+          needed.
+        </PlanBanner>
       ) : null}
 
       <LearnCard
@@ -108,9 +104,10 @@ export function TrainingDiscountsTab(props: {
               info={
                 props.realtime
                   ? "Discount webhooks keep this data fresh automatically."
-                  : "Available on Pro and Plus plans — discount webhooks keep this data fresh automatically."
+                  : `Available on ${props.realtimePlan ?? "higher"} plans — discount webhooks keep this data fresh automatically.`
               }
               locked={!props.realtime}
+              lockedPlan={props.realtimePlan}
               lastSyncedAt={props.lastSyncedAt}
               running={syncWatch.syncing}
             />

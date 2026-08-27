@@ -4,6 +4,8 @@ import { useFetcher, useLoaderData, useRevalidator, useRouteError } from "react-
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { z } from "zod";
 import db from "../db.server";
+import { hasFeature, requiredPlanName } from "../lib/billing/plans.server";
+import { PlanBanner } from "../components/ui/PlanGate";
 import { getVapidPublicKey } from "../lib/notify/vapid.server";
 import { sendPushToMembers } from "../lib/notify/push.server";
 import { requireShopAccess } from "../lib/access.server";
@@ -38,8 +40,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
   const member = access.member;
   const subs = await db.pushSubscription.count({ where: { shopId: access.shopId, memberId: member.id } });
+  // Push is plan-gated server-side in app.push-subscription; without this the
+  // member could enable it here and simply never receive anything.
+  const shop = await db.shop.findUnique({ where: { id: access.shopId }, select: { plan: true } });
+  const pushAllowed = hasFeature(shop?.plan ?? "free", "push_notifications");
   return {
     available: true as const,
+    pushAllowed,
+    pushPlan: pushAllowed ? null : requiredPlanName("push_notifications"),
     member: { name: member.name, email: member.email, role: member.role, hasPassword: Boolean(member.passwordHash) },
     prefs: parseNotifyPrefs(member.notifyPrefs, member.role),
     vapidPublicKey: await getVapidPublicKey(),
@@ -310,8 +318,12 @@ function AccountForm({ data }: { data: AccountData }) {
 
         <s-section heading="Browser notifications">
           <s-stack gap="base">
+            <PlanBanner plan={data.pushPlan} heading="Browser notifications need a higher plan">
+              You can set your preferences now, but notifications won&apos;t be delivered until your
+              store upgrades.
+            </PlanBanner>
             <s-paragraph>{pushHelp}</s-paragraph>
-            {data.vapidPublicKey && push !== "unsupported" && push !== "denied" ? (
+            {data.pushAllowed && data.vapidPublicKey && push !== "unsupported" && push !== "denied" ? (
               <s-stack direction="inline" gap="small">
                 {subscribedHere ? (
                   <s-button disabled={pushBusy} onClick={disablePush}>

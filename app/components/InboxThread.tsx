@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useDateTime } from "../lib/format/context";
 import { useIsMobile } from "../lib/ui/use-mobile";
+import { ChatProductCards } from "./ChatProductCards";
 import {
   authorLabel,
   avatarGradient,
@@ -25,6 +26,8 @@ export function InboxThread({
   busy,
   botAvatar,
   team,
+  currency,
+  shopDomain,
   onBack,
   onShowDetails,
   onStar,
@@ -39,6 +42,10 @@ export function InboxThread({
   botAvatar: { url: string | null; name: string };
   /** Team roster (id → display name) for attributing human replies. */
   team: Array<{ id: string; name: string }>;
+  /** Shop currency, for pricing recommended-product cards. */
+  currency: string;
+  /** Storefront domain, so card links open the real product page. */
+  shopDomain: string;
   /** Mobile only (spec 19): clears ?c= to return to the conversation list. */
   onBack: () => void;
   /** Opens the details slide-over where the Details column is hidden (<1241px). */
@@ -262,6 +269,17 @@ export function InboxThread({
                     · {dt.time(m.createdAt)}
                   </span>
                   <span className={`cin-bubble ${out ? "out" : "in"}`}>{m.content}</span>
+                  {/* The AI's recommendations, exactly as the shopper saw them
+                      — an agent picking up the thread needs to know which
+                      products were already put in front of them. */}
+                  {m.productCards?.length ? (
+                    <ChatProductCards
+                      cards={m.productCards}
+                      currency={currency}
+                      shopDomain={shopDomain}
+                      align={out ? "end" : "start"}
+                    />
+                  ) : null}
                 </span>
               </div>
               {m.id === lastSeenId ? <div className="cin-seen">Seen</div> : null}

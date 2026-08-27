@@ -189,8 +189,11 @@ const strictCampaignSettingsSchema = z
       issue("Pick the discount code this campaign offers", ["message", "discountCode"]);
     }
     if (s.message.kind === "product_recommendation" && s.message.recommendation === "custom") {
-      if (s.message.productIds.length === 0) {
-        issue("Pick at least one product to recommend", ["message", "productIds"]);
+      // Either targeting works: named products, or the collections they live
+      // in. Demanding productIds made a collection-only campaign unsavable
+      // even though the picker offers collections.
+      if (s.message.productIds.length === 0 && s.message.collectionIds.length === 0) {
+        issue("Pick at least one product or collection to recommend", ["message", "productIds"]);
       }
     }
     if (s.message.kind === "floater" && s.message.floaterMessage.trim() === "") {
@@ -494,24 +497,43 @@ async function staticRecommendationCards(
   shopId: string,
   source: string,
   explicitIds: string[],
+  collectionIds: string[] = [],
 ): Promise<CampaignProductCard[]> {
   if (source === "custom") {
-    if (explicitIds.length === 0) return [];
+    // Explicit products first; collections top the card row up. A campaign
+    // that named only collections used to resolve to nothing at all — it
+    // saved, went live, and showed an empty bubble.
+    const ordered = [...explicitIds];
+    if (ordered.length < MAX_CAMPAIGN_CARDS && collectionIds.length > 0) {
+      const members = await db.collectionProduct.findMany({
+        where: { shopId, collectionId: { in: collectionIds } },
+        select: { shopifyProductId: true },
+        // Over-fetch: status/stock below discards some, and a bubble with two
+        // cards where three were available reads as a bug.
+        take: MAX_CAMPAIGN_CARDS * 10,
+      });
+      for (const m of members) {
+        if (!ordered.includes(m.shopifyProductId)) ordered.push(m.shopifyProductId);
+      }
+    }
+    if (ordered.length === 0) return [];
     const rows = await db.product.findMany({
       where: {
         shopId,
-        shopifyProductId: { in: explicitIds.slice(0, MAX_CAMPAIGN_CARDS) },
+        shopifyProductId: { in: ordered },
         status: "active",
         stock: { gt: 0 },
       },
       select: CARD_SELECT,
     });
     const byGid = new Map(rows.map((r) => [r.shopifyProductId, toCard(r)]));
-    // Preserve the merchant's chosen order.
-    return explicitIds
-      .slice(0, MAX_CAMPAIGN_CARDS)
+    // Preserve the merchant's chosen order, and only cap AFTER the
+    // status/stock filter — capping first would return two cards because the
+    // third pick happened to be out of stock.
+    return ordered
       .map((gid) => byGid.get(gid))
-      .filter((c): c is CampaignProductCard => Boolean(c));
+      .filter((c): c is CampaignProductCard => Boolean(c))
+      .slice(0, MAX_CAMPAIGN_CARDS);
   }
 
   const listTitle = source === "new_arrivals" ? "New arrivals" : "Best sellers";
@@ -672,7 +694,12 @@ export async function activeCampaignsForWidget(
     const contextual = wantsProducts && isContextualRecommendation(source);
     const products =
       wantsProducts && !contextual
-        ? await staticRecommendationCards(shopId, source, settings.message.productIds)
+        ? await staticRecommendationCards(
+            shopId,
+            source,
+            settings.message.productIds,
+            settings.message.collectionIds,
+          )
         : [];
 
     projected.push({

@@ -49,7 +49,15 @@ model Shop {
   planStatus    String    @default("none") // none | trial | active | cancelled
   subscriptionId  String? // gid of the active AppSubscription
   billingInterval String? // monthly | yearly
-  trialEndsAt     DateTime?
+  trialEndsAt     DateTime? // end of the CURRENT subscription's trial (Shopify's value)
+  // Trial entitlement ledger (app/lib/billing/trial.server.ts). Deliberately
+  // separate from trialEndsAt: that field tracks the live subscription and is
+  // cleared on cancel/uninstall, while these two record what this SHOP has
+  // already been granted and must survive uninstall, reinstall and plan
+  // switches. Nothing may move trialDeadlineAt forward except the rolling
+  // TRIAL_WINDOW_DAYS reset — that is the whole anti-abuse property.
+  trialStartedAt  DateTime?
+  trialDeadlineAt DateTime?
   usageLineItemId String? // AppSubscriptionLineItem gid for usage records
   aiEnabled     Boolean   @default(true)
   installedAt   DateTime  @default(now())
@@ -141,6 +149,30 @@ model Collection {
   @@unique([shopId, shopifyCollectionId])
   @@index([shopId])
   @@map("collections")
+}
+
+/// Product ↔ collection membership, mirrored during the collection sync.
+///
+/// Collections were synced for two years without this table, which made every
+/// collection-targeted feature a no-op: a custom recommendation or campaign
+/// could name collections, save cleanly, and then never match anything,
+/// because nothing could turn a collection into products. Membership is
+/// enumerated from the COLLECTION side (Collection.products) rather than added
+/// to the product query, which is already near the GraphQL cost ceiling.
+model CollectionProduct {
+  id               String @id @default(cuid())
+  shopId           String
+  /// Collection GID (Collection.shopifyCollectionId, not the row id — the sync
+  /// writes membership before it has resolved local ids).
+  collectionId     String
+  /// Product GID (Product.shopifyProductId), same reasoning.
+  shopifyProductId String
+
+  @@unique([shopId, collectionId, shopifyProductId])
+  @@index([shopId, collectionId])
+  // "which collections is this product in?" — the recommendation path.
+  @@index([shopId, shopifyProductId])
+  @@map("collection_products")
 }
 
 model Discount {
@@ -580,6 +612,10 @@ model TeamMember {
   shopId       String
   email        String
   name         String
+  // Profile photo (Shopify Files CDN URL, uploaded from Chatbox → Chat page).
+  // Only used when the chat avatar is set to "Team member profile"; falls back
+  // to the member's initials when null.
+  avatarUrl    String?
   role         String    @default("agent") // owner | admin | agent
   status       String    @default("invited") // invited | active | disabled
   passwordHash String?

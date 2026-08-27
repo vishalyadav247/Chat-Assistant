@@ -58,6 +58,20 @@ export async function clampRange(shopId: string, range: AnalyticsRange): Promise
   return best;
 }
 
+/**
+ * Which ranges this plan may actually read. clampRange() silently narrows a
+ * too-wide request, which is correct enforcement but invisible: the merchant
+ * picked "Last 12 months", got 30 days of data, and had no way to tell that
+ * from a quiet quarter. The selector uses this to lock the rest and say why.
+ */
+export async function allowedRanges(shopId: string): Promise<AnalyticsRange[]> {
+  requireShopId(shopId);
+  const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
+  const allowedDays = getQuota(shop?.plan ?? "free", "analytics_range_days");
+  if (isUnlimitedQuota(allowedDays)) return [...ANALYTICS_RANGES];
+  return ANALYTICS_RANGES.filter((r) => RANGE_DAYS[r] <= allowedDays);
+}
+
 function isoDate(day: Date): string {
   return day.toISOString().slice(0, 10);
 }

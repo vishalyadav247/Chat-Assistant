@@ -1,5 +1,7 @@
 import type { ActionFunctionArgs } from "react-router";
 import db from "../db.server";
+import { JOBS } from "../lib/jobs/handlers.server";
+import { enqueue } from "../lib/jobs/queue.server";
 import { authenticate } from "../shopify.server";
 
 // Collections change rarely and the payload is tiny — direct upsert is still
@@ -29,9 +31,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           description: (p.body_html ?? "").replace(/<[^>]*>/g, " ").trim(),
         },
       });
+      // Products may have moved in or out. The payload doesn't say which, and
+      // enumerating them takes far longer than the 5s webhook budget — enqueue.
+      await enqueue(JOBS.collectionMembership, { shopDomain: shop, collectionId: shopifyCollectionId });
       break;
     case "COLLECTIONS_DELETE":
       await db.collection.deleteMany({ where: { shopId, shopifyCollectionId } });
+      // Membership dies with the collection — otherwise a collection-targeted
+      // recommendation keeps resolving through a collection Shopify deleted.
+      await db.collectionProduct.deleteMany({ where: { shopId, collectionId: shopifyCollectionId } });
       break;
     default:
       console.log(`Unhandled collections webhook topic: ${topic}`);

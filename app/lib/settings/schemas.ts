@@ -61,6 +61,11 @@ export const widgetSettingsSchema = z.object({
     .object({ enabled: z.boolean().catch(true), items: z.array(starterSchema).catch([]) })
     .catch({ enabled: true, items: [] }),
   avatarMode: z.enum(["store_branding", "team_member"]).catch("store_branding"),
+  /** Which TeamMember fronts the chat when avatarMode is "team_member".
+   *  Null (or a member since removed/disabled) falls back to store branding —
+   *  see resolveChatAvatar; a blank avatar on the storefront is never the
+   *  right answer to "the chosen member left". */
+  avatarMemberId: z.string().max(40).nullable().catch(null),
   prechat: z
     .object({
       mode: z.enum(["guest", "anonymous", "both"]).catch("both"),

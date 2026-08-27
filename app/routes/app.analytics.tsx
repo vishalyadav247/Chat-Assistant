@@ -11,7 +11,12 @@ import {
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
-import { hasFeature, PlanGateError } from "../lib/billing/plans.server";
+import {
+  hasFeature,
+  nextPlanNameForQuota,
+  requiredPlanName,
+  PlanGateError,
+} from "../lib/billing/plans.server";
 import {
   DASHBOARD_RANGES,
   dashboardMetrics,
@@ -19,6 +24,7 @@ import {
 } from "../lib/dashboard/dashboard.server";
 import {
   ANALYTICS_RANGES,
+  allowedRanges,
   conversationSeries,
   csatSummary,
   exportAnalyticsCsv,
@@ -97,6 +103,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     pendingQuestions,
     exportsAllowed: hasFeature(plan, "exports"),
     unansweredAllowed: hasFeature(plan, "unanswered_analytics"),
+    // Plan signals (spec 15). The range list is what this plan may read; the
+    // selector locks the rest instead of quietly returning a shorter window.
+    planSignals: {
+      exports: hasFeature(plan, "exports") ? null : requiredPlanName("exports"),
+      unanswered: hasFeature(plan, "unanswered_analytics")
+        ? null
+        : requiredPlanName("unanswered_analytics"),
+      ranges: await allowedRanges(shopId),
+      rangeNextPlan: nextPlanNameForQuota(plan, "analytics_range_days"),
+    },
   };
 };
 
@@ -209,6 +225,8 @@ export default function AnalyticsPage() {
         <AnalyticsLineChart
           series={data.series}
           range={data.chartRange}
+          allowedRanges={data.planSignals.ranges}
+          rangeNextPlan={data.planSignals.rangeNextPlan}
           onRangeChange={(range) =>
             setSearchParams((params) => {
               params.set("crange", range);

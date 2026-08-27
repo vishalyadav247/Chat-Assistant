@@ -28,7 +28,7 @@ import { DashboardLiveFeed } from "../components/DashboardLiveFeed";
 import { StripBanner } from "../components/ui/StripBanner";
 import { SPACE } from "../components/ui/tokens";
 import { currentUsage } from "../lib/billing/usage.server";
-import { getQuota } from "../lib/billing/plans.server";
+import { getQuota, nextPlanNameForQuota } from "../lib/billing/plans.server";
 import { requireShopAccess } from "../lib/access.server";
 import { routeError } from "../lib/ui/route-error";
 import { logError } from "../lib/log.server";
@@ -151,6 +151,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     atcThisMonth,
     usage,
     quota: Number.isSafeInteger(quota) && quota < Number.MAX_SAFE_INTEGER ? quota : null,
+    // Tier that raises the monthly conversation cap — named in the near-cap
+    // banner so "upgrade" points somewhere specific.
+    quotaNextPlan: nextPlanNameForQuota(shop?.plan ?? "free", "conversations"),
   };
 };
 
@@ -224,7 +227,10 @@ export default function DashboardPage() {
       tone="warning"
       icon="chart-line"
       title={`You've used ${data.usage} of ${data.quota} conversations this month`}
-      action={{ label: "View plans", onClick: () => navigate("/app/plan-usage") }}
+      action={{
+        label: data.quotaNextPlan ? `Upgrade to ${data.quotaNextPlan}` : "View plans",
+        onClick: () => navigate("/app/plan-usage"),
+      }}
     >
       When the limit is reached the assistant pauses until the next billing period — upgrade to
       keep it answering.

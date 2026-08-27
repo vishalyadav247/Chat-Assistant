@@ -87,6 +87,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
               planStatus: "none",
               subscriptionId: null,
               billingInterval: null,
+              // trialStartedAt / trialDeadlineAt deliberately survive — see the
+              // same note in cleanupShop (app/lib/jobs/handlers.server.ts).
               trialEndsAt: null,
               usageLineItemId: null,
             },

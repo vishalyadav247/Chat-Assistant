@@ -252,8 +252,44 @@ export interface InboxThreadMessage {
   /** Team member who sent an agent reply (null = AI / admin reply / legacy). */
   authorMemberId: string | null;
   content: string;
+  /** Products the AI recommended on this turn — what the shopper saw. */
+  productCards: ThreadProductCard[] | null;
   createdAt: string; // ISO
   seenAt: string | null;
+}
+
+export interface ThreadProductCard {
+  shopifyProductId: string;
+  title: string;
+  price: number;
+  imageUrl: string | null;
+  handle: string;
+}
+
+/**
+ * `Message.productCards` is a JSON column written by the pipeline, so rows
+ * predating any shape change are still in there. Parse defensively and drop
+ * anything malformed: a transcript that renders without its cards is a smaller
+ * problem than an inbox that crashes on one bad row.
+ */
+function toThreadProductCards(raw: unknown): ThreadProductCard[] | null {
+  if (!Array.isArray(raw)) return null;
+  const cards: ThreadProductCard[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const c = item as Record<string, unknown>;
+    const id = typeof c.shopifyProductId === "string" ? c.shopifyProductId : "";
+    const title = typeof c.title === "string" ? c.title : "";
+    if (!id || !title) continue;
+    cards.push({
+      shopifyProductId: id,
+      title,
+      price: typeof c.price === "number" && Number.isFinite(c.price) ? c.price : 0,
+      imageUrl: typeof c.imageUrl === "string" ? c.imageUrl : null,
+      handle: typeof c.handle === "string" ? c.handle : "",
+    });
+  }
+  return cards.length > 0 ? cards : null;
 }
 
 export interface InboxConversationDetail {
@@ -322,6 +358,7 @@ export async function getConversationDetail(
         author: true,
         authorMemberId: true,
         content: true,
+        productCards: true,
         createdAt: true,
         seenAt: true,
       },
@@ -347,6 +384,7 @@ export async function getConversationDetail(
       author: m.author,
       authorMemberId: m.authorMemberId,
       content: m.content,
+      productCards: toThreadProductCards(m.productCards),
       createdAt: m.createdAt.toISOString(),
       seenAt: m.seenAt ? m.seenAt.toISOString() : null,
     })),

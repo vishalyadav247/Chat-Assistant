@@ -45,6 +45,8 @@ export function ManageMetafieldsModal(props: {
   rows: MetafieldDefinitionRow[];
   /** Plan cap on enabled metafields (display value from the plan matrix). */
   quota: number;
+  /** Plan that raises the cap, or null when already on the top tier. */
+  nextPlan: string | null;
   /** SyncState.metafieldSyncAt — last definitions refresh (any path). */
   lastSyncedAt: string | null;
 }) {
@@ -142,7 +144,8 @@ export function ManageMetafieldsModal(props: {
         {atLimit && !limitDismissed ? (
           <DismissibleBanner tone="warning" onDismiss={() => setLimitDismissed(true)}>
             You&apos;ve reached the metafields limit for your plan ({enabledCount} of {props.quota}{" "}
-            enabled). Disable one to enable another, or upgrade for more.
+            enabled). Disable one to enable another
+            {props.nextPlan ? `, or upgrade to ${props.nextPlan} for more` : ""}.
           </DismissibleBanner>
         ) : null}
 

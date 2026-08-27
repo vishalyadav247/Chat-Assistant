@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { InboxDetail } from "./InboxShared";
+import { PlanBadge } from "./ui/PlanGate";
 import type { RecentOrder } from "../lib/inbox/recent-orders.server";
 
 /** Orders carry their OWN currency (presentment can differ from the shop's), so
@@ -103,6 +104,7 @@ export function InboxDetails({
   active,
   recentOrders,
   cartViewEnabled,
+  cartViewPlan,
   currency,
   assignees,
   onAssign,
@@ -112,6 +114,8 @@ export function InboxDetails({
   active: InboxDetail | null;
   recentOrders: RecentOrder[];
   cartViewEnabled: boolean;
+  /** Tier that unlocks the live cart, or null when this plan has it. */
+  cartViewPlan: string | null;
   currency: string;
   assignees: { id: string; name: string }[];
   onAssign: (assigneeId: string) => void;
@@ -218,10 +222,14 @@ export function InboxDetails({
         <div className="cin-dcard">
           <div className="cin-cart-head">
             <span className="cin-dtitle sm">Shopping cart</span>
-            {!cartViewEnabled ? <span className="cin-upgrade">👑 Upgrade</span> : null}
+            {!cartViewEnabled ? <PlanBadge plan={cartViewPlan} /> : null}
           </div>
           {!cartViewEnabled ? (
-            <div className="cin-cf last">Upgrade your plan to see the visitor&apos;s live cart.</div>
+            <div className="cin-cf last">
+              {cartViewPlan
+                ? `Upgrade to ${cartViewPlan} to see the visitor's live cart.`
+                : "Upgrade your plan to see the visitor's live cart."}
+            </div>
           ) : cart.length === 0 ? (
             <div className="cin-cf last">No cart data yet.</div>
           ) : (

@@ -465,12 +465,105 @@ const COLLECTIONS_QUERY = `#graphql
   }
 `;
 
+/** Membership is enumerated per collection — see MAX_COLLECTION_PRODUCTS. */
+const COLLECTION_PRODUCTS_QUERY = `#graphql
+  query CatalogSyncCollectionProducts($id: ID!, $cursor: String) {
+    collection(id: $id) {
+      products(first: 250, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes { id }
+      }
+    }
+  }
+`;
+
+/**
+ * Membership cap per collection. A collection with more members than this is
+ * "everything we sell" — useless as a recommendation target, and enumerating
+ * it would cost far more than it can ever be worth. The cap is logged, never
+ * silent: a truncated collection still recommends, from its first N products.
+ */
+const MAX_COLLECTION_PRODUCTS = 2000;
+
+/**
+ * Mirror one collection's product membership into `collection_products`.
+ *
+ * Replace-in-a-transaction rather than upsert-and-diff: Shopify is the
+ * authority on who is in a collection, and a partial write that left stale
+ * members behind would recommend products that have since been pulled from the
+ * collection — the exact failure a merchant would blame on the AI.
+ */
+async function syncCollectionMembership(
+  admin: Awaited<ReturnType<typeof unauthenticated.admin>>["admin"],
+  shopId: string,
+  collectionId: string,
+): Promise<number> {
+  const ids: string[] = [];
+  let cursor: string | null = null;
+  let capped = false;
+  do {
+    const response = await admin.graphql(COLLECTION_PRODUCTS_QUERY, {
+      variables: { id: collectionId, cursor },
+    });
+    const body = (await response.json()) as {
+      data: {
+        collection: {
+          products: {
+            pageInfo: { hasNextPage: boolean; endCursor: string | null };
+            nodes: Array<{ id: string }>;
+          };
+        } | null;
+      };
+    };
+    const page = body.data.collection?.products;
+    if (!page) break;
+    for (const node of page.nodes) ids.push(node.id);
+    if (ids.length >= MAX_COLLECTION_PRODUCTS) {
+      capped = true;
+      break;
+    }
+    cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+  } while (cursor);
+
+  if (capped) {
+    ids.length = MAX_COLLECTION_PRODUCTS;
+    console.log(
+      `collection_membership_capped shop=${shopId} collection=${collectionId} cap=${MAX_COLLECTION_PRODUCTS}`,
+    );
+  }
+
+  await db.$transaction([
+    db.collectionProduct.deleteMany({ where: { shopId, collectionId } }),
+    db.collectionProduct.createMany({
+      data: ids.map((shopifyProductId) => ({ shopId, collectionId, shopifyProductId })),
+      skipDuplicates: true,
+    }),
+  ]);
+  return ids.length;
+}
+
+/**
+ * Refresh ONE collection's membership (COLLECTIONS_UPDATE). The webhook
+ * payload carries no products, and re-enumerating them is far too slow for a
+ * webhook handler's 5s budget — so the handler enqueues this instead.
+ */
+export async function syncCollectionMembershipFromWebhook(
+  shopDomain: string,
+  collectionId: string,
+): Promise<void> {
+  const shopId = await existingShopId(shopDomain);
+  if (!shopId) return;
+  const { admin } = await unauthenticated.admin(shopDomain);
+  await syncCollectionMembership(admin, shopId, collectionId);
+}
+
 export async function fullCollectionSync(shopDomain: string): Promise<void> {
   const shopId = await existingShopId(shopDomain);
   if (!shopId) return;
   const { admin } = await unauthenticated.admin(shopDomain);
   let cursor: string | null = null;
   let total = 0;
+  let members = 0;
   const seenIds = new Set<string>();
 
   do {
@@ -510,6 +603,11 @@ export async function fullCollectionSync(shopDomain: string): Promise<void> {
       });
       seenIds.add(node.id);
       total++;
+      // Membership, so collection-targeted recommendations can resolve to
+      // actual products. Enumerated per collection rather than nested in the
+      // page query above: 100 collections × 250 products in one request would
+      // blow the GraphQL cost budget.
+      members += await syncCollectionMembership(admin, shopId, node.id);
     }
     cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
   } while (cursor);
@@ -520,6 +618,11 @@ export async function fullCollectionSync(shopDomain: string): Promise<void> {
   const pruned = await db.collection.deleteMany({
     where: { shopId, shopifyCollectionId: { notIn: [...seenIds] } },
   });
+  // Membership of a pruned collection has to go with it, or a recommendation
+  // would keep resolving through a collection that no longer exists.
+  await db.collectionProduct.deleteMany({
+    where: { shopId, collectionId: { notIn: [...seenIds] } },
+  });
   if (pruned.count > 0) console.log(`collection_sync_pruned ${shopDomain} collections=${pruned.count}`);
 
   await db.syncState.upsert({
@@ -527,7 +630,7 @@ export async function fullCollectionSync(shopDomain: string): Promise<void> {
     update: { collectionSyncAt: new Date() },
     create: { shopId, collectionSyncAt: new Date() },
   });
-  await recordEvent(shopId, "collection_synced", { collections: total });
+  await recordEvent(shopId, "collection_synced", { collections: total, members });
 }
 
 // ── Discounts ───────────────────────────────────────────────────────────────

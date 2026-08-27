@@ -29,7 +29,7 @@ import { SettingsPrivacy } from "../components/SettingsPrivacy";
 import { requireShopAccess } from "../lib/access.server";
 import { applyTeamIntent, isTeamIntent } from "../lib/team/team-intents.server";
 import { listMembers } from "../lib/team/team.server";
-import { getQuota } from "../lib/billing/plans.server";
+import { getQuota, hasFeature, nextPlanNameForQuota, requiredPlanName } from "../lib/billing/plans.server";
 import { emailConfigured } from "../lib/email/email.server";
 import { formatDate as formatDateWithPrefs } from "../lib/format/datetime";
 import { routeError } from "../lib/ui/route-error";
@@ -88,9 +88,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     // recomputing it on hydration risks an SSR mismatch (see timezones.ts).
     timezoneOptions: withSelected(timezoneOptions(), timezone),
     // Theme app-embed detection (spec 13's helper; "unknown" until read_themes).
-    embedStatus: await (async () => {
-      const { getEmbedStatus } = await import("../lib/embed-status.server");
-      return getEmbedStatus(shopDomain);
+    // `fresh` because this page is where the merchant reads the badge and acts
+    // on it — a refresh right after toggling the embed must show the new state,
+    // not a cached one. This loader does not poll (see shouldRevalidate).
+    embed: await (async () => {
+      const { getEmbedDetail } = await import("../lib/embed-status.server");
+      return getEmbedDetail(shopDomain, { fresh: true });
     })(),
     defaultStoreName: shop?.name ?? fallbackName,
     // null until SHOPIFY_APP_STORE_HANDLE is set (listing live) — link hidden.
@@ -109,10 +112,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         const q = getQuota(shop?.plan ?? "free", "team_seats");
         return q >= 1_000_000 ? null : q;
       })(),
+      seatNextPlan: nextPlanNameForQuota(shop?.plan ?? "free", "team_seats"),
       emailConfigured: emailConfigured(),
       surface: access.surface,
       selfId: access.member?.id ?? null,
     },
+    // CSAT survey is plan-gated at proxy.survey; without this the merchant
+    // configures a survey that silently never reaches a shopper.
+    surveyPlan: hasFeature(shop?.plan ?? "free", "survey")
+      ? null
+      : requiredPlanName("survey"),
     availabilityPreview: { status: preview.status, message: preview.message },
     dataRequests: dataRequestRows.map((row) => ({
       id: row.id,
@@ -463,7 +472,8 @@ export default function SettingsPage() {
             logoUrl={draft.storeInfo.logoUrl}
             theme={draft.theme}
             inbox={draft.inbox}
-            embedStatus={data.embedStatus}
+            embedStatus={data.embed.status}
+            embedThemeName={data.embed.themeName}
             shopDomain={data.shopDomain}
             apiKey={data.apiKey}
             owner={data.owner}
@@ -517,6 +527,7 @@ export default function SettingsPage() {
         {view === "survey" ? (
           <SettingsSurvey
             value={draft.survey}
+            planLock={data.surveyPlan}
             onChange={(survey) => setDraft((d) => ({ ...d, survey }))}
             onCancel={cancelSubView}
           />

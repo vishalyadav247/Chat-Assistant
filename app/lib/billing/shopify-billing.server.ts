@@ -1,4 +1,5 @@
 import db from "../../db.server";
+import { adminAppUrl } from "../format/admin-url";
 import { requireShopId } from "../tenancy.server";
 import { runtimeConfig } from "../platform/runtime-config.server";
 import { DEFAULT_PLANS, PLANS, PLAN_IDS, type PlanId } from "./plans.server";
@@ -6,6 +7,11 @@ import { recordEvent } from "../analytics/events.server";
 import { invalidateShopConfig } from "../config/shop-config.server";
 import { logError, logWarn } from "../log.server";
 import { confirmRedemption, releaseRedemptionsForShop } from "./promo-codes.server";
+import {
+  trialAllowanceFor,
+  trialDaysForNewSubscription,
+  trialLedgerAfterGrant,
+} from "./trial.server";
 
 // Shopify Billing API integration (spec 15 / feature 15b), behind a
 // BillingProvider interface so the confirmation flow is unit-testable offline.
@@ -107,9 +113,11 @@ function appUrl(): string {
 function callbackUrl(shopDomain: string, plan: PlanId, interval: BillingIntervalId): string {
   const path = `/app/billing-callback?plan=${plan}&interval=${interval}`;
   const apiKey = process.env.SHOPIFY_API_KEY;
+  // Without a key the app-list fallback in adminAppUrl() would drop the
+  // callback path entirely, so this path keeps its own fallback: the raw app
+  // domain, which at least still carries the query string.
   if (!apiKey) return `${appUrl()}${path}`;
-  const storeHandle = shopDomain.replace(/\.myshopify\.com$/i, "");
-  return `https://admin.shopify.com/store/${storeHandle}/apps/${apiKey}${path}`;
+  return adminAppUrl(shopDomain, apiKey, path);
 }
 
 export function isPaidPlan(plan: string): plan is PaidPlanId {
@@ -277,6 +285,11 @@ const realProvider: BillingProvider = {
       });
     }
 
+    // NOT def.trialDays: the shop's REMAINING entitlement (trial.server.ts).
+    // Shopify grants whatever we ask for, so asking for the headline allowance
+    // every time restarts the trial on every reinstall and every plan switch.
+    const trialDays = await trialDaysForNewSubscription(shopDomain, plan);
+
     const response = await admin.graphql(CREATE_MUTATION, {
       variables: {
         name: subscriptionNameFor(plan),
@@ -285,7 +298,7 @@ const realProvider: BillingProvider = {
         // test outside production, and allow forcing test charges in production
         // (app review + partner test stores) via env.
         test: process.env.NODE_ENV !== "production" || runtimeConfig().billingForceTestCharges,
-        trialDays: def.trialDays > 0 ? def.trialDays : undefined,
+        trialDays: trialDays > 0 ? trialDays : undefined,
         lineItems,
       },
     });
@@ -347,11 +360,17 @@ function mockSubscriptionId(): string {
   return `gid://shopify/AppSubscription/mock-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
 }
 
-/** Rebuild the subscription the mock "created" purely from callback params. */
+/**
+ * Rebuild the subscription the mock "created" purely from callback params.
+ * `trialDays` is the shop's remaining entitlement, resolved by the caller —
+ * the mock must not hand out the headline allowance the real provider no
+ * longer asks for, or mock-mode tests would prove the wrong behaviour.
+ */
 export function mockSubscriptionFromParams(
   plan: PaidPlanId,
   interval: BillingIntervalId,
   chargeId?: string | null,
+  trialDays: number = PLANS[plan].trialDays,
 ): ActiveSubscription {
   const def = PLANS[plan];
   const id = chargeId || mockSubscriptionId();
@@ -360,7 +379,7 @@ export function mockSubscriptionFromParams(
     name: subscriptionNameFor(plan),
     status: "ACTIVE",
     createdAt: new Date().toISOString(),
-    trialDays: def.trialDays,
+    trialDays,
     interval,
     // Mirrors the real provider: no usage line on yearly subscriptions (D1).
     usageLineItemId:
@@ -374,7 +393,12 @@ const mockProvider: BillingProvider = {
   async createSubscription({ shopDomain, plan, interval }) {
     const id = mockSubscriptionId();
     const confirmationUrl = `${callbackUrl(shopDomain, plan, interval)}&charge_id=${encodeURIComponent(id)}`;
-    console.log(`[billing mock] createSubscription ${shopDomain} ${plan}/${interval} → ${id}`);
+    // Resolved for parity with the real provider (and so the log tells the
+    // truth), even though the mock's trial is re-derived at callback time.
+    const trialDays = await trialDaysForNewSubscription(shopDomain, plan);
+    console.log(
+      `[billing mock] createSubscription ${shopDomain} ${plan}/${interval} trial=${trialDays}d → ${id}`,
+    );
     return { confirmationUrl, subscriptionId: id };
   },
 
@@ -382,13 +406,18 @@ const mockProvider: BillingProvider = {
     // Mock has no Shopify to ask — return what the Shop row says.
     const shop = await db.shop.findUnique({ where: { domain: shopDomain } });
     if (!shop?.subscriptionId || !isPaidPlan(shop.plan)) return null;
-    const def = PLANS[shop.plan];
+    // Trial length is whatever the shop's live trial actually has left, not the
+    // plan's headline allowance — the webhook backfill path reads this.
+    const start = shop.trialStartedAt ?? shop.installedAt;
+    const trialDays = shop.trialEndsAt
+      ? Math.max(0, Math.round((shop.trialEndsAt.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)))
+      : 0;
     return {
       id: shop.subscriptionId,
       name: subscriptionNameFor(shop.plan),
       status: "ACTIVE",
-      createdAt: shop.installedAt.toISOString(),
-      trialDays: def.trialDays,
+      createdAt: start.toISOString(),
+      trialDays,
       interval: isBillingInterval(shop.billingInterval ?? "")
         ? (shop.billingInterval as BillingIntervalId)
         : null,
@@ -432,7 +461,14 @@ export async function completeBillingReturn(args: {
   if (!shop) return { ok: false, error: "shop not found" };
 
   const subscription = isBillingTestMode()
-    ? mockSubscriptionFromParams(args.plan, args.interval, args.chargeId)
+    ? mockSubscriptionFromParams(
+        args.plan,
+        args.interval,
+        args.chargeId,
+        // Same ledger the real provider consulted at create time — the mock
+        // must not fabricate a full-length trial the entitlement doesn't allow.
+        await trialDaysForNewSubscription(args.shopDomain, args.plan),
+      )
     : await getBillingProvider().getActiveSubscription(args.shopDomain);
 
   if (!subscription || subscription.status !== "ACTIVE") {
@@ -476,6 +512,16 @@ export async function completeBillingReturn(args: {
   const planStatus = trialEndsAt && trialEndsAt.getTime() > Date.now() ? "trial" : "active";
   const interval = subscription.interval ?? args.interval;
 
+  // Record the entitlement this trial came out of. Idempotent: an existing
+  // ledger is carried forward, so a replayed callback can never push the
+  // deadline further out (trial.server.ts).
+  const ledger = trialLedgerAfterGrant({
+    ledger: shop,
+    allowanceDays: trialAllowanceFor(verifiedPlan),
+    subscriptionCreatedAt: created,
+    trialEndsAt,
+  });
+
   // QA D8: a replayed return URL converges on the same row — don't record a
   // duplicate plan_changed event when nothing actually changed.
   const unchanged =
@@ -484,6 +530,7 @@ export async function completeBillingReturn(args: {
     shop.subscriptionId === subscription.id &&
     shop.billingInterval === interval &&
     (shop.trialEndsAt?.getTime() ?? null) === (trialEndsAt?.getTime() ?? null) &&
+    (shop.trialDeadlineAt?.getTime() ?? null) === (ledger.trialDeadlineAt?.getTime() ?? null) &&
     shop.usageLineItemId === subscription.usageLineItemId;
   // Promo code riding on this subscription (if any) is now redeemed.
   await confirmRedemption(shop.id, subscription.id);
@@ -498,6 +545,8 @@ export async function completeBillingReturn(args: {
       subscriptionId: subscription.id,
       billingInterval: interval,
       trialEndsAt,
+      trialStartedAt: ledger.trialStartedAt,
+      trialDeadlineAt: ledger.trialDeadlineAt,
       usageLineItemId: subscription.usageLineItemId,
     },
   });
@@ -535,6 +584,10 @@ export async function downgradeToFree(shopDomain: string): Promise<BillingReturn
       planStatus: "none",
       subscriptionId: null,
       billingInterval: null,
+      // Only the LIVE subscription's trial ends here. trialStartedAt /
+      // trialDeadlineAt are the shop's entitlement ledger and must survive —
+      // clearing them would let "downgrade to Free, resubscribe" mint a new
+      // 7-day trial on demand (trial.server.ts).
       trialEndsAt: null,
       usageLineItemId: null,
     },

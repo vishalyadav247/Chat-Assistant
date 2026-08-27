@@ -23,6 +23,8 @@ export function TrainingCollectionsTab(props: {
   masterEnabled: boolean;
   /** Plan feature `catalog_auto_sync` (Pro+) — toggle is locked when false. */
   autoSyncAvailable: boolean;
+  /** Tier that unlocks auto sync, or null when this plan has it. */
+  autoSyncPlan: string | null;
   /** ShopSettings.catalogAutoSync.collections — daily full re-sync (webhooks unaffected). */
   autoSyncEnabled: boolean;
 }) {
@@ -56,6 +58,7 @@ export function TrainingCollectionsTab(props: {
             <AutoSyncControl
               type="collections"
               available={props.autoSyncAvailable}
+              availablePlan={props.autoSyncPlan}
               enabled={props.autoSyncEnabled}
               busy={pendingIntent === "catalog-autosync"}
               lastSyncedAt={props.lastSyncedAt}

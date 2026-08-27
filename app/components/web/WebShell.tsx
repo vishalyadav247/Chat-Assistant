@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { Form, NavLink, useLocation } from "react-router";
+import { adminAppUrl } from "../../lib/format/admin-url";
 import { ensurePushSubscribed, pushState, subscribePush } from "../../lib/ui/push-client";
 import { useIsMobile } from "../../lib/ui/use-mobile";
 import { useNavDrawer } from "./use-nav-drawer";
@@ -20,6 +21,8 @@ export interface WebNavItem {
 export interface WebShellProps {
   shopName: string;
   shopDomain: string;
+  /** SHOPIFY_API_KEY — deep-links the admin link at this app, not the app list. */
+  apiKey: string;
   member: { name: string; role: string; email: string };
   nav: WebNavItem[];
   vapidPublicKey: string;
@@ -45,7 +48,9 @@ const DISMISS_KEY = "cc_push_notice_dismissed";
 export function WebShell(props: WebShellProps) {
   const location = useLocation();
   const isMobile = useIsMobile();
-  const adminUrl = `https://admin.shopify.com/store/${props.shopDomain.replace(".myshopify.com", "")}/apps`;
+  // "/app" so the merchant lands on the dashboard of THIS app. Without the key
+  // this degrades to the admin's app list rather than a broken /apps/ URL.
+  const adminUrl = adminAppUrl(props.shopDomain, props.apiKey, "/app");
   const inboxBadge = props.nav.find((item) => item.href === "/app/inbox")?.badge ?? 0;
 
   // Mobile drawer (spec 19): the same rail markup slides in ≤900px; CSS alone

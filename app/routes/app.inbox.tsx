@@ -4,7 +4,7 @@ import { useFetcher, useLoaderData, useRevalidator, useRouteError, useSearchPara
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
-import { hasFeature } from "../lib/billing/plans.server";
+import { hasFeature, requiredPlanName } from "../lib/billing/plans.server";
 import {
   blockConversation,
   deleteConversation,
@@ -24,11 +24,13 @@ import { BRAND } from "../components/ui/tokens";
 import { assigneeOptions, isValidAssignee, parseNotifyPrefs } from "../lib/team/team.server";
 import { loadShopSettings } from "../lib/settings/save.server";
 import { loadWidgetSettings } from "../lib/widget/settings-save.server";
+import { resolveChatAvatar } from "../lib/widget/chat-avatar.server";
 import { playChime, useInboxLive } from "../lib/ui/inbox-live";
 import { useIsMobile } from "../lib/ui/use-mobile";
 import { OpenInWebButton } from "../components/web/OpenInWebButton";
 import { InboxFilters } from "../components/InboxFilters";
 import { InboxList } from "../components/InboxList";
+import { CHAT_CARD_CSS } from "../components/ChatProductCards";
 import { InboxThread } from "../components/InboxThread";
 import { FILTERS, displayName } from "../components/InboxShared";
 import type { FilterKey, InboxRow } from "../components/InboxShared";
@@ -95,15 +97,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     loadWidgetSettings(shopId),
     loadShopSettings(shopId),
   ]);
-  // Same rule as the storefront config and the chatbox preview: "Store
-  // branding" uses the Settings → General logo/name, anything else keeps the
-  // default chat mark. The inbox mirrors it so an agent sees the same identity
-  // on AI replies that the shopper does.
-  const storeName = shopSettings.storeInfo.name.trim() || shop?.name || "Store";
-  const botAvatar = {
-    url: widget.avatarMode === "store_branding" ? shopSettings.storeInfo.logoUrl : null,
-    name: storeName,
-  };
+  // Same resolver the storefront config and the chatbox preview use
+  // (chat-avatar.server.ts), so an agent sees the identity on AI replies that
+  // the shopper actually saw — store branding or the chosen team member.
+  const botAvatar = await resolveChatAvatar(
+    shopId,
+    widget,
+    shopSettings.storeInfo,
+    shop?.name || "Store",
+  );
 
   // Drives the upgrade prompt only. The cart data itself is withheld inside
   // getConversationDetail, so this flag being wrong cannot leak anything.
@@ -128,7 +130,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     active,
     recentOrders,
     cartViewEnabled,
+    // Tier that unlocks the live-cart panel (live matrix); null when allowed.
+    cartViewPlan: cartViewEnabled ? null : requiredPlanName("inbox_cart_view"),
     currency: shop?.currency ?? "USD",
+    // Product-card links in the thread point at the real storefront page.
+    shopDomain: access.shopDomain,
     // Assignable people: the owner + the team roster (spec 18 TeamMember table).
     assignees,
     // Identity shown on AI bubbles, mirroring the storefront widget.
@@ -456,6 +462,8 @@ export default function InboxPage() {
           busy={busy}
           botAvatar={data.botAvatar}
           team={data.assignees}
+          currency={data.currency}
+          shopDomain={data.shopDomain}
           onBack={() =>
             setSearchParams(
               (prev) => {
@@ -483,6 +491,7 @@ export default function InboxPage() {
           active={active}
           recentOrders={data.recentOrders}
           cartViewEnabled={data.cartViewEnabled}
+          cartViewPlan={data.cartViewPlan}
           currency={data.currency}
           assignees={data.assignees}
           onAssign={(assigneeId) =>
@@ -536,6 +545,7 @@ export default function InboxPage() {
                 active={active}
                 recentOrders={data.recentOrders}
                 cartViewEnabled={data.cartViewEnabled}
+                cartViewPlan={data.cartViewPlan}
                 currency={data.currency}
                 assignees={data.assignees}
                 onAssign={(assigneeId) =>
@@ -668,6 +678,7 @@ const WORKSPACE_CSS = `
 .cin-bubble.in{background:#fff;color:#2b2b30;box-shadow:0 1px 2px rgba(20,20,25,.05),inset 0 0 0 1px #e9e9ec;border-bottom-left-radius:5px;}
 .cin-bubble.out{background:${BRAND.gradient};color:#fff;border-bottom-right-radius:5px;}
 .cin-seen{align-self:flex-end;font-size:10.5px;color:#9a9aa2;margin-top:2px;}
+${CHAT_CARD_CSS}
 .cin-sys{align-self:center;font-size:11.5px;color:#9a9aa2;background:#fff;box-shadow:0 1px 2px rgba(20,20,25,.06);border-radius:20px;padding:5px 12px;margin:8px auto;display:table;}
 .cin-composer{flex:none;background:#fff;border:1px solid #dcdce1;border-radius:7px;margin:6px 6px 10px;padding:10px 12px;box-shadow:0 2px 10px rgba(20,20,25,.05);}
 .cin-comp-input{width:100%;min-height:38px;font-size:13px;color:#2b2b30;outline:none;border:none;resize:none;overflow-y:hidden;font-family:inherit;line-height:1.5;display:block;}
@@ -721,7 +732,6 @@ button.cin-send:disabled{opacity:.4;box-shadow:none;}
 .cin-order-m{font-size:11.5px;color:#6b6b73;}
 .cin-order-t{font-size:12px;font-weight:600;color:#2b2b30;justify-self:end;}
 .cin-cart-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;}
-.cin-upgrade{display:inline-flex;align-items:center;gap:5px;background:#fbe6a2;color:#8a5a00;font-size:11px;font-weight:750;border-radius:20px;padding:3px 9px;}
 .cin-cart-item{display:flex;align-items:center;gap:11px;padding:6px 0;}
 .cin-cart-info{flex:1;min-width:0;display:block;}
 .cin-cart-name{display:block;font-weight:650;color:#141417;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}

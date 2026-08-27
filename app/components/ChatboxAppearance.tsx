@@ -1,5 +1,6 @@
 import { Link } from "react-router";
 import type { WidgetSettingsData } from "../lib/settings/schemas";
+import { PlanBadge } from "./ui/PlanGate";
 import { ChatboxUploadButton } from "./ChatboxUploadButton";
 import { TabPills } from "./ui/TabPills";
 
@@ -81,6 +82,8 @@ const CHAT_ICON = (
 export function ChatboxAppearance(props: {
   value: WidgetSettingsData;
   removeBrandingAllowed: boolean;
+  /** Tier that unlocks branding removal, or null when this plan has it. */
+  removeBrandingPlan: string | null;
   onChange: (next: WidgetSettingsData) => void;
 }) {
   const { value, onChange } = props;
@@ -439,9 +442,10 @@ export function ChatboxAppearance(props: {
         />
         {!props.removeBrandingAllowed ? (
           <s-stack direction="inline" gap="small" alignItems="center">
-            <s-badge tone="info">Basic+</s-badge>
+            <PlanBadge plan={props.removeBrandingPlan} />
             <s-text tone="neutral">
-              Available on the Basic plan and above — <Link to="/app/plan-usage">upgrade</Link>
+              Available on the {props.removeBrandingPlan ?? "next"} plan and above —{" "}
+              <Link to="/app/plan-usage">upgrade</Link>
             </s-text>
           </s-stack>
         ) : null}

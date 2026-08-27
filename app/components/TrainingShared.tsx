@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useFetcher, useNavigate, useRevalidator } from "react-router";
 import { useAppBridge } from "../lib/ui/surface";
 import type { TrainingActionResult } from "../routes/app.ai-agent.training";
+import { PlanBadge } from "./ui/PlanGate";
 import { TabPills } from "./ui/TabPills";
 import { useDateTime } from "../lib/format/context";
 
@@ -125,6 +126,8 @@ export function LearnCard(props: {
 export function AutoSyncControl(props: {
   type: "products" | "collections";
   available: boolean;
+  /** Tier that unlocks auto sync (live matrix), null when available. */
+  availablePlan: string | null;
   enabled: boolean;
   busy: boolean;
   lastSyncedAt: string | null;
@@ -144,9 +147,10 @@ export function AutoSyncControl(props: {
       info={
         props.available
           ? `Re-syncs all ${props.type} from Shopify once a day.`
-          : `Available on Pro and Plus plans — re-syncs all ${props.type} once a day. Individual changes still update instantly.`
+          : `Available on ${props.availablePlan ?? "higher"} plans — re-syncs all ${props.type} once a day. Individual changes still update instantly.`
       }
       locked={!props.available}
+      lockedPlan={props.availablePlan}
       lastSyncedAt={props.lastSyncedAt}
       running={props.running}
     />
@@ -162,6 +166,8 @@ export function SyncControlLayout(props: {
   toggle: React.ReactNode;
   info: string;
   locked?: boolean;
+  /** Tier that unlocks the control, from the live matrix. */
+  lockedPlan?: string | null;
   lastSyncedAt: string | null;
   running?: boolean;
 }) {
@@ -174,9 +180,9 @@ export function SyncControlLayout(props: {
         <s-text color="subdued">{props.info}</s-text>
         {props.locked ? (
           <>
-            <s-badge tone="info">Pro</s-badge>
+            <PlanBadge plan={props.lockedPlan ?? null} />
             <s-button variant="tertiary" onClick={() => navigate("/app/plan-usage")}>
-              Upgrade
+              {props.lockedPlan ? `Upgrade to ${props.lockedPlan}` : "Upgrade"}
             </s-button>
           </>
         ) : null}

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useFetcher } from "react-router";
 import type { TraceStep, TraceSummary } from "../lib/pipeline/trace-types";
 import type { ReviewSourceData, TestActionResult } from "../routes/app.ai-agent.test";
+import { CHAT_CARD_CSS, ChatProductCards } from "./ChatProductCards";
 import { TurnInspector } from "./TurnInspector";
 import { BRAND, INK, SCROLLBAR_CSS, SPACE } from "./ui/tokens";
 
@@ -87,6 +88,8 @@ export function TestAiConsole(props: {
   welcome: string;
   faqChips: { id: string; question: string }[];
   currency: string;
+  /** Storefront domain, so recommended-product cards link somewhere real. */
+  shopDomain: string;
 }) {
   const [sessionId, setSessionId] = useState(() => newSessionId());
   const [entries, setEntries] = useState<ChatEntry[]>(() => [
@@ -213,9 +216,6 @@ export function TestAiConsole(props: {
     );
   };
 
-  const formatPrice = (price: number) =>
-    new Intl.NumberFormat(undefined, { style: "currency", currency: props.currency }).format(price);
-
   const noUserMessages = !entries.some((e) => e.role === "user");
   const inspected = entries.find((e) => e.id === inspectId) ?? null;
 
@@ -233,7 +233,7 @@ export function TestAiConsole(props: {
       {/* Chat card */}
       <s-box borderWidth="base" borderRadius="base">
         {/* .cc-testchat shortens the card on phones (spec 19, app-mobile.css). */}
-        <style dangerouslySetInnerHTML={{ __html: SCROLLBAR_CSS }} />
+        <style dangerouslySetInnerHTML={{ __html: SCROLLBAR_CSS + CHAT_CARD_CSS }} />
         <div className="cc-testchat" style={{ display: "flex", flexDirection: "column", height: 560 }}>
           <div
             style={{
@@ -312,52 +312,14 @@ export function TestAiConsole(props: {
                   </div>
                 </div>
 
+                {/* Same card component the inbox thread renders, so the two
+                    merchant-side views of a recommendation cannot drift. */}
                 {entry.cards?.length ? (
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8 }}>
-                    {entry.cards.map((card) => (
-                      <div
-                        key={card.shopifyProductId}
-                        style={{
-                          width: 140,
-                          background: "#fff",
-                          border: `1px solid ${INK.borderSoft}`,
-                          borderRadius: 12,
-                          overflow: "hidden",
-                          boxShadow: "0 1px 2px rgba(20, 20, 25, 0.05)",
-                        }}
-                      >
-                        {card.imageUrl ? (
-                          <img
-                            src={card.imageUrl}
-                            alt={card.title}
-                            style={{ width: "100%", height: 90, objectFit: "cover" }}
-                          />
-                        ) : (
-                          <div
-                            style={{
-                              width: "100%",
-                              height: 90,
-                              background: "var(--s-color-bg-fill-secondary, #f1f1f1)",
-                            }}
-                          />
-                        )}
-                        <div style={{ padding: "6px 8px" }}>
-                          <div
-                            style={{
-                              fontSize: 12.5,
-                              fontWeight: 600,
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            {card.title}
-                          </div>
-                          <s-text tone="neutral">{formatPrice(card.price)}</s-text>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                  <ChatProductCards
+                    cards={entry.cards}
+                    currency={props.currency}
+                    shopDomain={props.shopDomain}
+                  />
                 ) : null}
 
                 {entry.role === "bot" && !entry.seeded && !entry.streaming && entry.text ? (

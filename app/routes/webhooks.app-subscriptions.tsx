@@ -8,6 +8,7 @@ import {
   planFromSubscriptionName,
 } from "../lib/billing/shopify-billing.server";
 import { logError, logWarn } from "../lib/log.server";
+import { trialAllowanceFor, trialLedgerAfterGrant } from "../lib/billing/trial.server";
 
 // app_subscriptions/update (spec 15): keep Shop.planStatus in sync with Shopify.
 // ACTIVE → active/trial; CANCELLED → free + cancelled; EXPIRED/DECLINED → free +
@@ -59,6 +60,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     let backfill: {
       billingInterval?: string | null;
       trialEndsAt?: Date | null;
+      trialStartedAt?: Date | null;
+      trialDeadlineAt?: Date | null;
       usageLineItemId?: string | null;
     } = {};
     if (shop.subscriptionId !== subscriptionId) {
@@ -81,9 +84,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             live.trialDays > 0
               ? new Date(created.getTime() + live.trialDays * 24 * 60 * 60 * 1000)
               : null;
+          // This webhook is the ONLY writer when the merchant closed the tab
+          // before the callback ran, so it has to record the trial entitlement
+          // too — otherwise that merchant's trial goes unbanked and their next
+          // plan switch mints a fresh one (trial.server.ts).
+          const ledger = trialLedgerAfterGrant({
+            ledger: shop,
+            allowanceDays: trialAllowanceFor(plan),
+            subscriptionCreatedAt: created,
+            trialEndsAt,
+          });
           backfill = {
             billingInterval: live.interval,
             trialEndsAt,
+            trialStartedAt: ledger.trialStartedAt,
+            trialDeadlineAt: ledger.trialDeadlineAt,
             usageLineItemId: live.usageLineItemId,
           };
         } else {
@@ -126,6 +141,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           planStatus: status === "CANCELLED" ? "cancelled" : "none",
           subscriptionId: null,
           billingInterval: null,
+          // Entitlement ledger survives a cancellation — see trial.server.ts.
           trialEndsAt: null,
           usageLineItemId: null,
         },

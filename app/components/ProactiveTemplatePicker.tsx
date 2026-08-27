@@ -1,4 +1,5 @@
 import { CAMPAIGN_TEMPLATES, type CampaignTemplate } from "../lib/campaigns/templates";
+import { PlanBadge } from "./ui/PlanGate";
 
 // Template picker view (spec 12, design proactive-chat.html #viewTemplates):
 // 10 cards — category / name / description / preview verbatim from the design.
@@ -7,6 +8,8 @@ import { CAMPAIGN_TEMPLATES, type CampaignTemplate } from "../lib/campaigns/temp
 
 export function ProactiveTemplatePicker(props: {
   premiumAllowed: boolean;
+  /** Tier that unlocks premium templates, or null when this plan has them. */
+  premiumPlan: string | null;
   onBack: () => void;
   onCreate: (template: CampaignTemplate) => void;
 }) {
@@ -46,21 +49,13 @@ export function ProactiveTemplatePicker(props: {
                 }}
               >
                 {tpl.premium ? (
-                  <span
-                    style={{
-                      position: "absolute",
-                      top: 10,
-                      right: 10,
-                      fontSize: 10,
-                      fontWeight: 800,
-                      borderRadius: 20,
-                      padding: "3px 9px",
-                      color: "#8a5a00",
-                      background: "#fde68a",
-                      zIndex: 2,
-                    }}
-                  >
-                    👑 {gated ? "Upgrade" : "Premium"}
+                  // Same chip as every other lock in the app; only the
+                  // positioning is local to the card.
+                  <span style={{ position: "absolute", top: 10, right: 10, zIndex: 2 }}>
+                    <PlanBadge
+                      plan={gated ? props.premiumPlan : "Premium"}
+                      label={gated && props.premiumPlan ? `👑 ${props.premiumPlan}` : "👑 Premium"}
+                    />
                   </span>
                 ) : null}
                 {tpl.isNew ? (
@@ -161,7 +156,11 @@ export function ProactiveTemplatePicker(props: {
                     >
                       Create
                     </s-button>
-                    {gated ? <s-link href="/app/plan-usage">Upgrade to unlock</s-link> : null}
+                    {gated ? (
+                      <s-link href="/app/plan-usage">
+                        {props.premiumPlan ? `Upgrade to ${props.premiumPlan}` : "Upgrade to unlock"}
+                      </s-link>
+                    ) : null}
                   </div>
                 </div>
               </div>

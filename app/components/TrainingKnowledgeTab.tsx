@@ -7,8 +7,8 @@ import type {
 } from "../routes/app.ai-agent.training";
 import { BrowseModalShell } from "./BrowseProductsModal";
 import { ChipInput } from "./ChipInput";
-import { QuotaMeter } from "./QuotaMeter";
 import { EmptyState } from "./ui/EmptyState";
+import { PlanBadge, PlanMeter } from "./ui/PlanGate";
 import {
   LearnCard,
   StatusBadge,
@@ -74,6 +74,17 @@ export function TrainingKnowledgeTab(props: {
   suggested: { id: string; question: string; answer: string; createdAt: string }[];
   chunkTotal: number;
   quotas: { crawlPages: Meter; manualQas: Meter; fileUploads: Meter; policyPages: Meter };
+  /** Plan gating for the add-data tiles (spec 15). Locked plan names are null
+   *  when the current plan already includes the source; the *Next names are
+   *  the plan that raises each quota, or null at the top tier. */
+  planSignals: {
+    csvImport: string | null;
+    fileUpload: string | null;
+    fileUploadsNext: string | null;
+    manualQasNext: string | null;
+    crawlPagesNext: string | null;
+    policyPagesNext: string | null;
+  };
   csvRowCap: number;
   prefillQuestion: string;
   prefillUnresolvedId: string;
@@ -416,10 +427,11 @@ export function TrainingKnowledgeTab(props: {
                 })
               }
             >
-              <QuotaMeter
+              <PlanMeter
                 used={props.quotas.crawlPages.used}
                 quota={props.quotas.crawlPages.quota}
-                label="pages used"
+                label="pages"
+                nextPlan={props.planSignals.crawlPagesNext}
               />
             </AddTile>
             <AddTile
@@ -429,15 +441,17 @@ export function TrainingKnowledgeTab(props: {
                 setQaDraft({ id: null, question: "", synonyms: [], answer: "", status: "active" })
               }
             >
-              <QuotaMeter
+              <PlanMeter
                 used={props.quotas.manualQas.used}
                 quota={props.quotas.manualQas.quota}
-                label="used"
+                label="Q&As"
+                nextPlan={props.planSignals.manualQasNext}
               />
             </AddTile>
             <AddTile
               title="Import CSV"
               description="Bulk add Q&As"
+              lockedPlan={props.planSignals.csvImport}
               onClick={() => setCsvDraft({ id: null, csvText: "", fileName: "" })}
             >
               <s-text color="subdued">Up to {props.csvRowCap} Q&A rows per file</s-text>
@@ -445,16 +459,18 @@ export function TrainingKnowledgeTab(props: {
             <AddTile
               title="Upload file"
               description="TXT, JSON — guides, catalogs, FAQs (PDF/DOCX coming soon)"
+              lockedPlan={props.planSignals.fileUpload}
               onClick={() => {
                 setFilePick(null);
                 setFileError("");
                 setFileOpen(true);
               }}
             >
-              <QuotaMeter
+              <PlanMeter
                 used={props.quotas.fileUploads.used}
                 quota={props.quotas.fileUploads.quota}
-                label="used"
+                label="uploads"
+                nextPlan={props.planSignals.fileUploadsNext}
               />
             </AddTile>
           </s-grid>
@@ -464,10 +480,11 @@ export function TrainingKnowledgeTab(props: {
             description="Shipping, returns, FAQ pages etc."
             onClick={openPolicies}
           >
-            <QuotaMeter
+            <PlanMeter
               used={props.quotas.policyPages.used}
               quota={props.quotas.policyPages.quota}
-              label="pages used"
+              label="pages"
+              nextPlan={props.planSignals.policyPagesNext}
             />
           </AddTile>
         </s-stack>
@@ -897,20 +914,29 @@ function AddTile(props: {
   description: string;
   wide?: boolean;
   onClick: () => void;
+  /** Plan required to use this source; non-null renders it locked. */
+  lockedPlan?: string | null;
   children?: React.ReactNode;
 }) {
+  const locked = Boolean(props.lockedPlan);
   return (
     <s-clickable
-      onClick={props.onClick}
+      // Locked tiles still render — a source the merchant can't see is a
+      // source they can never decide to pay for. The click is what's gated.
+      onClick={locked ? () => {} : props.onClick}
+      disabled={locked}
       padding="base"
       borderWidth="base"
       borderRadius="base"
       background="subdued"
-      accessibilityLabel={`${props.title} — ${props.description}`}
+      accessibilityLabel={`${props.title} — ${props.description}${locked ? ` (requires the ${props.lockedPlan} plan)` : ""}`}
     >
       <s-stack gap="small-200" alignItems={props.wide ? "center" : "start"}>
         <s-stack gap="small-500" alignItems={props.wide ? "center" : "start"}>
-          <s-text type="strong">{props.title}</s-text>
+          <s-stack direction="inline" gap="small-200" alignItems="center">
+            <s-text type="strong">{props.title}</s-text>
+            <PlanBadge plan={props.lockedPlan ?? null} />
+          </s-stack>
           <s-text color="subdued">{props.description}</s-text>
         </s-stack>
         {props.children ? <s-box inlineSize="100%">{props.children}</s-box> : null}
