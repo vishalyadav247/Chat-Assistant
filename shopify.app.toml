@@ -1,11 +1,19 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-# 🚨 SUBMISSION GATE — application_url / redirect_urls / app_proxy.url below are a
-# DEV TUNNEL. `automatically_update_urls_on_dev = true` rewrites them on every
-# `npm run dev`, so running dev and then `npm run deploy` would publish a dead
-# tunnel host. Before submitting: point every URL at the production host (valid
-# TLS, App Store req 3.1.1), set automatically_update_urls_on_dev = false, and
-# deploy from a clean checkout.
+# 🚨 PRODUCTION URLS — application_url / redirect_urls / app_proxy.url below all
+# point at https://chatconvert.progryss.com (droplet 159.89.173.131, port 3003
+# behind nginx, valid TLS — App Store req 3.1.1). They were a trycloudflare dev
+# tunnel until 2026-08-27.
+#
+# `automatically_update_urls_on_dev = false` is what keeps them that way: with it
+# true, a single `npm run dev` silently rewrites all three to whatever tunnel the
+# CLI just minted, and the next `npm run deploy` publishes that dead host as the
+# live app. Do not set it back to true.
+#
+# Running `npm run dev` against THIS app now also rotates the dev store's access
+# token, which is what produced 21 × 401 `embed_status_error` in production
+# app_logs on 2026-08-27. If you need a dev loop, create a separate Shopify app
+# for it rather than sharing this one.
 client_id = "d8b180fa8bf4edbda15692d2652516d7"
 # Display name shown to merchants: the admin sidebar, the app list, the
 # "Uninstall …?" dialog and the review prompt all render this verbatim. It was
@@ -13,11 +21,11 @@ client_id = "d8b180fa8bf4edbda15692d2652516d7"
 # raw handle while the whole product says "ChatConvert". The URL handle is
 # derived separately and stays `chat-convert` — renaming here is display-only.
 name = "ChatConvert"
-application_url = "https://stop-connecting-magical-gospel.trycloudflare.com"
+application_url = "https://chatconvert.progryss.com"
 embedded = true
 
 [build]
-automatically_update_urls_on_dev = true
+automatically_update_urls_on_dev = false
 
 [webhooks]
 api_version = "2026-07"
@@ -102,7 +110,7 @@ scopes = "read_content,read_customers,write_customers,read_discounts,read_legal_
 
 [auth]
 redirect_urls = [
-  "https://stop-connecting-magical-gospel.trycloudflare.com/auth/callback"
+  "https://chatconvert.progryss.com/auth/callback"
 ]
 
 [app_proxy]
@@ -118,7 +126,7 @@ redirect_urls = [
 # The host must match the LIVE tunnel — run dev via:
 #   npm run dev -- --tunnel-url https://<host>.trycloudflare.com:3000
 # subpath must stay in sync with data-proxy-base in chat-widget.liquid.
-url = "https://stop-connecting-magical-gospel.trycloudflare.com/proxy"
+url = "https://chatconvert.progryss.com/proxy"
 subpath = "ccwidget"
 prefix = "apps"
 
