@@ -119,6 +119,11 @@
     /* Clear the home indicator / gesture bar so the composer stays tappable. */
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
+  /* A min-height on a flex child wins over `flex: 1` shrinking. With the
+     keyboard up the visible area drops to ~250-300px, and a 240px floor plus
+     the header and composer no longer fit — the column stops compressing and
+     the layout overflows. The panel is already the scroll container here. */
+  .cw-body { min-height: 0; }
 }
 
 .cw-head {
