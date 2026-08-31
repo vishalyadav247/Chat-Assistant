@@ -1,0 +1,108 @@
+ChatConvert ("the App") is an AI product-recommendation and support chat assistant for Shopify stores, built and operated by <strong>Progryss</strong> ("we", "us"). The App adds a chat widget to a merchant's storefront that helps shoppers find the right product from the store's real, in-stock catalog, answers questions from the store's own content, and can look up the status of an order the shopper placed. This policy explains what data the App collects, how we use it, who we share it with, and the choices merchants and shoppers have.
+
+By installing ChatConvert, you agree to the collection and use of information as described here. If you do not agree, please do not install or use the App.
+<h3>1. Who is responsible for what</h3>
+<ul>
+ 	<li><strong>The merchant is the data controller</strong> for their store's data and for the shoppers who chat with them. They decide what to collect, how long to keep it, and how to answer requests from their own customers.</li>
+ 	<li><strong>Progryss is the data processor.</strong> We store and process that data only to provide the App to that merchant, on their instructions.</li>
+ 	<li>Every record in our database is scoped to a single store. One merchant's data is never readable by another merchant.</li>
+</ul>
+If you are a <strong>shopper</strong> who chatted on a store using ChatConvert, the store you chatted with is your point of contact. We will pass any request you send us on to that merchant.
+<h3>2. What we collect from merchants</h3>
+<ul>
+ 	<li>Store profile — shop name, myshopify domain, store email, country, currency, timezone and plan, provided by Shopify at install.</li>
+ 	<li>Product catalog — products, variants, collections, prices, images and inventory status, synced from Shopify so the assistant only recommends real, in-stock items. We also read the store's published policies, online store pages, discount codes and metafield definitions as knowledge sources.</li>
+ 	<li>Theme status — we read only <code>config/settings_data.json</code>, to detect whether the chat widget is enabled on the live theme. We do not read theme code.</li>
+ 	<li>App configuration — curated answers, FAQs, recommendation rules, persona and voice settings, guardrails, business hours, handover rules, campaign content, widget appearance, and the knowledge sources you add (crawled pages from your own site, uploaded PDF/CSV files, manual Q&amp;A, and store policies).</li>
+ 	<li>Team members — for each colleague the merchant invites into the App: name, email address and a hashed password. We never store passwords in readable form.</li>
+ 	<li>Billing status — your plan tier, subscription state and trial dates. All charges are handled by the Shopify Billing API; we never see or store payment details.</li>
+ 	<li>Operational logs — errors and warnings only, never ordinary traffic. Each entry holds a timestamp, an event code, a short message and the store it belongs to. It never stores chat message bodies or contact details, and an automated test fails our build if an email address ever appears in one. We also keep per-store daily counts of AI calls and tokens for billing and capacity; these are aggregate numbers, not content.</li>
+</ul>
+<h3>3. What we collect from shoppers</h3>
+<ul>
+ 	<li>Chat messages — what the shopper types and the assistant's replies, stored as a conversation transcript for the merchant.</li>
+ 	<li>Contact details the shopper chooses to give — name, email and/or phone, through the optional pre-chat form or during the conversation. These are optional and configured by the merchant; we never require them.</li>
+ 	<li>A session identifier — a randomly generated ID kept in the shopper's browser so a conversation stays connected across messages. It rotates after 30 minutes of inactivity and is not tied to a Shopify account or an advertising ID.</li>
+ 	<li>Page context — which page the chat was opened on, so answers are relevant.</li>
+ 	<li>Coarse location and marketing opt-in status, where the shopper provides them, and a satisfaction rating if they answer the optional post-chat survey.</li>
+ 	<li>Usage events — first-party, aggregate widget analytics (opens, messages sent, product clicks) so merchants can see how the assistant performs.</li>
+</ul>
+We do not collect shopper payment details or precise location, and we use no third-party advertising trackers. Chat is free text, so a shopper may type personal information into a message; anything they type is stored as part of the transcript and is covered by the deletion rights in sections 9 and 10.
+<h3>4. Order lookup and protected customer data</h3>
+The App can tell a shopper where their order is. To do that the merchant grants <code>read_orders</code>, <code>read_customers</code> and <code>write_customers</code>, which places ChatConvert at Shopify's <strong>Protected Customer Data level 2</strong>. We apply Shopify's level 1 and level 2 requirements to those fields.
+<ul>
+ 	<li><strong>The lookup is deliberately narrow.</strong> A shopper proves ownership of an order by supplying the order number <em>plus</em> the email or phone already on that order. We compare, then return a minimal status subset — order number, status, fulfilment and tracking.</li>
+ 	<li>We never echo the order's stored email, phone or shipping address back into the chat, and we do not store them.</li>
+ 	<li><code>write_customers</code> is used only when the merchant explicitly converts a chat contact into a customer record on their own store.</li>
+</ul>
+<h3>5. Cookies, storage and consent</h3>
+<strong>ChatConvert sets no cookies on the storefront.</strong> The widget uses the browser's own <code>localStorage</code> (for the rotating session ID) and <code>sessionStorage</code> (per-tab interface state and a short-lived configuration cache). It does not track shoppers across sites, does not build advertising profiles, and carries no third-party analytics or advertising pixels.
+
+The widget integrates with the <strong>Shopify Customer Privacy API</strong>. Where the storefront exposes it, analytics events are held until the shopper's consent state is resolved and are not sent if analytics consent is withheld. Answering the shopper's question is never blocked by this. Merchants can also enable a disclaimer in the chat window so shoppers know they are talking to an AI assistant and that the conversation is stored.
+<h3>6. How we use it</h3>
+<ul>
+ 	<li>To run the chat assistant — understand the shopper's question and recommend matching in-stock products, or answer from the store's own knowledge content.</li>
+ 	<li>To look up order status when a shopper asks, as described in section 4.</li>
+ 	<li>To show merchants their conversation transcripts, unanswered questions and analytics in the App's dashboard.</li>
+ 	<li>To route conversations to a human agent, and to send handover notifications and team invitations by email.</li>
+ 	<li>To manage plans and billing through Shopify, provide support, diagnose errors, and keep the App secure and compliant.</li>
+</ul>
+We do not sell or rent any merchant or shopper data, we do not share it with advertisers or data brokers, we do not use it for our own marketing, and we never use one merchant's data to serve another merchant.
+
+<strong>Automated decision-making.</strong> The assistant generates suggestions and answers. It does not make decisions with legal or similarly significant effects about any individual.
+<h3>7. AI processing (OpenAI)</h3>
+ChatConvert uses <strong>OpenAI</strong> as its AI sub-processor. To generate a reply, we send the conversation messages together with relevant snippets of the store's catalog and knowledge content to OpenAI's API. The default models are <em>gpt-4o-mini</em> for chat and <em>text-embedding-3-small</em> for content matching; a merchant may select another OpenAI model from the gpt-4o or gpt-4.1 families in the App's settings. This data is used solely to produce the assistant's response. Under OpenAI's API data-usage policy, data submitted via the API is not used to train OpenAI's models. We do not send Shopify account credentials to OpenAI, and AI provider keys are held server-side only — they are never exposed to the storefront widget.
+<h3>8. Sharing &amp; sub-processors</h3>
+We share data only with the services required to run the App:
+<ul>
+ 	<li><strong>Shopify</strong> — the platform the App runs on (install, authentication, catalog, orders, billing, and the storefront where the widget appears).</li>
+ 	<li><strong>OpenAI</strong> — AI processing as described in section 7.</li>
+ 	<li><strong>DigitalOcean</strong> — our hosting provider, where the App's backend and its PostgreSQL database run and where all stored data lives.</li>
+ 	<li><strong>Resend</strong> — our email delivery provider, used for handover notifications and team invitations. It receives the recipient address and the notification content only.</li>
+</ul>
+Beyond these, we disclose data only if required by law. Merchants are notified of any material change to our sub-processors via an update to this policy.
+<h3>9. Retention &amp; deletion</h3>
+<ul>
+ 	<li><strong>Chat transcripts and contacts</strong> — the retention window is <strong>set by the merchant</strong> in Settings → Privacy &amp; Data Requests: 7, 30, 60 or 90 days, or <em>Keep forever</em>. The default is <em>Keep forever</em>, so a merchant who wants a shorter window must choose one. A nightly job deletes anything past the chosen window.</li>
+ 	<li><strong>Operational logs</strong> — 14 days, then deleted.</li>
+ 	<li><strong>Store configuration, catalog mirror and knowledge sources</strong> — kept for as long as the App is installed.</li>
+ 	<li><strong>After uninstall</strong> — billing stops immediately, and there is a <strong>7-day grace period</strong> so an accidental uninstall or a quick reinstall does not lose the merchant's setup. After 7 days, <strong>every record belonging to that store is permanently deleted</strong> — conversations, messages, contacts, analytics, knowledge content and configuration. This is well inside the 30-day deadline Shopify sets for its <code>shop/redact</code> request.</li>
+ 	<li><strong>GDPR data-request exports</strong> — never stored. An export is computed at the moment the merchant downloads it and exists only for the lifetime of that response; no file is written to disk.</li>
+ 	<li>Individual shoppers' data can be deleted earlier at any time via the redaction process in section 10.</li>
+</ul>
+<h3>10. Shopify compliance webhooks (GDPR)</h3>
+ChatConvert implements all three of Shopify's mandatory privacy webhooks:
+<ul>
+ 	<li><code>customers/data_request</code> — we create a request the merchant can fulfil from the App's Privacy page within Shopify's 30-day deadline, producing an export of every contact record, conversation, full message transcript and unresolved question tied to that customer's email.</li>
+ 	<li><code>customers/redact</code> — we permanently delete that shopper's conversations, messages, contact record and any captured email for the requesting store.</li>
+ 	<li><code>shop/redact</code> — we permanently delete all of the store's data, as described in section 9.</li>
+</ul>
+<h3>11. Security &amp; data transfers</h3>
+<ul>
+ 	<li>All data is transmitted over HTTPS/TLS and stored on DigitalOcean's managed cloud infrastructure.</li>
+ 	<li>Every database query is scoped to a single store; cross-store access is structurally prevented and covered by an automated tenancy audit.</li>
+ 	<li>API keys and provider secrets are encrypted at rest, never returned to the browser, and never written to logs.</li>
+ 	<li>The App authenticates with Shopify session tokens; we never collect or store Shopify login credentials. Admin sessions use HttpOnly cookies, team passwords are stored only as hashes, and repeated failed logins lock the account.</li>
+ 	<li>Storefront requests are verified through Shopify's signed app-proxy mechanism, and every Shopify webhook is HMAC-verified before any processing.</li>
+ 	<li>Data may be processed on servers outside your country (including the United States). Where required, transfers rely on recognised safeguards such as Standard Contractual Clauses.</li>
+</ul>
+No system is perfectly secure. If we become aware of a breach affecting personal data, we will notify affected merchants without undue delay and cooperate with them as the controller.
+<h3>12. Your rights</h3>
+Depending on where you live (including under the <strong>GDPR</strong> and <strong>CCPA/CPRA</strong>), you may have the right to access, correct, delete, or receive a copy of your personal data, and to object to or restrict its processing.
+<ul>
+ 	<li><strong>Shoppers:</strong> the store you chatted with is the data controller for your conversation. Contact that store directly — they can fulfil access and deletion requests through Shopify, and we honour those requests automatically via the webhooks in section 10.</li>
+ 	<li><strong>Merchants:</strong> contact us at the address below for any data request about your store and we will assist within the statutory deadline.</li>
+</ul>
+You may also lodge a complaint with your local supervisory authority.
+<h3>13. Children</h3>
+ChatConvert is a business tool for merchants and is not directed at children. We do not knowingly collect personal data from children. If you believe a child's data has reached us through a chat transcript, contact us and we will delete it.
+<h3>14. Changes to this policy</h3>
+We may update this policy from time to time; the "Last updated" date at the top will change when we do. If we make a material change — a new sub-processor, a new category of data, or a different retention window — we will notify installed merchants before the change takes effect.
+<h3>15. Contact</h3>
+<div class="detail-repeater-flex">
+
+Email: progryss@gmail.com
+Business: Progryss Media Private Limited, First Floor, Workspace By Innova, H-54, H Block, Sector 63, Noida, Uttar Pradesh 201301
+Governing law: India
+
+</div>
