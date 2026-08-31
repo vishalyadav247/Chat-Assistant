@@ -73,64 +73,67 @@ const PLAN_DESCRIPTIONS: Record<string, string> = {
 };
 
 const n = (value: number) => value.toLocaleString("en-US");
+const amount = (value: number) => (isUnlimitedQuota(value) ? "Unlimited" : n(value));
 
-/** One line per quota dimension, rendered only when the plan actually grants
- *  some of it — a `0` means "not included", and a pricing card lists what you
- *  get. Returning null drops the line entirely. */
-const QUOTA_BULLET: Record<QuotaDimension, (value: number) => string | null> = {
-  conversations: (v) =>
-    isUnlimitedQuota(v) ? "Unlimited conversations / month" : `${n(v)} conversations / month`,
-  products_synced: (v) =>
-    isUnlimitedQuota(v) ? "Unlimited products synced" : `Up to ${n(v)} products synced`,
-  curated_answers: (v) =>
-    isUnlimitedQuota(v) ? "Unlimited curated answers" : `${n(v)} curated answers`,
-  manual_qas: (v) => (isUnlimitedQuota(v) ? "Unlimited manual Q&As" : `${n(v)} manual Q&As`),
-  policy_pages: (v) =>
-    isUnlimitedQuota(v) ? "Unlimited policy pages" : `${n(v)} policy pages`,
-  // A bare page count reads as meaningless here — the number IS the crawl depth.
-  crawl_pages: (v) =>
-    isUnlimitedQuota(v)
+/** One line per quota dimension, taking the whole definition so a bullet can
+ *  read more than one quota. `null` = deliberately NOT a card line: the card
+ *  carries the headline limits only, not every dimension the matrix enforces.
+ *  A `0` is skipped by the caller — a pricing card lists what you get. */
+const QUOTA_BULLET: Record<QuotaDimension, (def: PlanDefinition) => string | null> = {
+  conversations: (d) => `${amount(d.quotas.conversations)} conversations / month`,
+  products_synced: (d) =>
+    isUnlimitedQuota(d.quotas.products_synced)
+      ? "Unlimited products synced"
+      : `Up to ${n(d.quotas.products_synced)} products synced`,
+  // The same idea to a merchant — kept on one line rather than split in two.
+  curated_answers: (d) => {
+    const curated = `${amount(d.quotas.curated_answers)} curated answers`;
+    return d.quotas.manual_qas
+      ? `${curated} · ${amount(d.quotas.manual_qas)} manual Q&As`
+      : curated;
+  },
+  manual_qas: () => null, // merged into the curated_answers line above
+  policy_pages: (d) => `${amount(d.quotas.policy_pages)} policy pages`,
+  crawl_pages: (d) =>
+    isUnlimitedQuota(d.quotas.crawl_pages)
       ? "Full-site website crawl"
-      : v <= 1
-        ? "Website source: this page only"
-        : `Website crawl: this page + linked pages (${n(v)})`,
+      : d.quotas.crawl_pages <= 1
+        ? "Website crawl: 1 page"
+        : `Website crawl: ${n(d.quotas.crawl_pages)} pages`,
   // Covers the csv_import / file_upload FEATURES too — the count says more than
   // a bare "CSV import" line, so those two features render nothing (see below).
-  file_uploads: (v) => `CSV import + PDF upload (${n(v)} files)`,
-  metafields_enabled: (v) =>
-    isUnlimitedQuota(v)
-      ? "Unlimited product metafields for AI training"
-      : `${n(v)} product metafields for AI training`,
-  team_seats: (v) =>
-    isUnlimitedQuota(v)
-      ? "Unlimited team seats"
-      : v <= 1
-        ? "1 team seat (owner only)"
-        : `${n(v)} team seats`,
-  active_campaigns: (v) =>
-    isUnlimitedQuota(v)
-      ? "Unlimited active proactive campaigns"
-      : `${n(v)} active proactive campaigns`,
-  analytics_range_days: (v) =>
-    isUnlimitedQuota(v) ? "Full analytics history" : `${n(v)} days of analytics history`,
+  file_uploads: (d) => `CSV import + PDF upload (${amount(d.quotas.file_uploads)} files)`,
+  metafields_enabled: () => null,
+  team_seats: (d) =>
+    d.quotas.team_seats <= 1
+      ? "1 team seat (owner only)"
+      : `${amount(d.quotas.team_seats)} team seats`,
+  active_campaigns: (d) => `${amount(d.quotas.active_campaigns)} active proactive campaigns`,
+  analytics_range_days: (d) =>
+    isUnlimitedQuota(d.quotas.analytics_range_days)
+      ? "Full analytics history"
+      : `${n(d.quotas.analytics_range_days)} days of analytics history`,
 };
 
-/** One line per gated feature. null = deliberately not its own bullet because
- *  a quota line above already states it with a number. */
+/** One line per gated feature. `null` = not card copy — either a quota line
+ *  above already states it with a number, or it is a detail rather than a
+ *  headline reason to choose a tier. The gate itself is unaffected either way;
+ *  every one of these is still enforced and still surfaced in-product by the
+ *  PlanBadge / PlanBanner on the screen that owns the feature. */
 const FEATURE_BULLET: Record<GatedFeature, string | null> = {
-  remove_branding: "Remove ChatConvert branding",
-  unanswered_analytics: "Unanswered-questions analytics",
-  discount_realtime_sync: "Real-time discount sync",
-  catalog_auto_sync: "Automatic catalog sync",
-  premium_campaign_templates: "Premium proactive templates",
-  inbox_cart_view: "Live cart view in the inbox",
-  exports: "Analytics CSV + conversation exports",
+  remove_branding: null,
+  unanswered_analytics: null,
+  discount_realtime_sync: null,
+  catalog_auto_sync: null,
+  premium_campaign_templates: null,
+  inbox_cart_view: null,
+  exports: null,
   csv_import: null, // stated by the file_uploads quota line
   file_upload: null, // stated by the file_uploads quota line
-  survey: "Post-chat satisfaction survey",
+  survey: null,
   push_notifications: "Browser push notifications",
   custom_recommendations: "Custom recommendations + cross-sell pairs",
-  multi_language: "Multi-language + auto language detection",
+  multi_language: null,
 };
 
 /** GENERATED from the live plan matrix, never hand-written per plan id.
@@ -141,9 +144,8 @@ const FEATURE_BULLET: Record<GatedFeature, string | null> = {
 function bulletsFor(def: PlanDefinition): string[] {
   const bullets: string[] = [];
   for (const dimension of QUOTA_DIMENSIONS) {
-    const value = def.quotas[dimension];
-    if (!value) continue; // 0 = not included on this plan
-    const line = QUOTA_BULLET[dimension](value);
+    if (!def.quotas[dimension]) continue; // 0 = not included on this plan
+    const line = QUOTA_BULLET[dimension](def);
     if (line) bullets.push(line);
   }
   for (const feature of GATED_FEATURES) {
