@@ -377,7 +377,7 @@
     if (!data || data.active === false || !data.widget) return;
     config = data;
     initPrivacy(); // resolve consent state before any beacon can fire
-    ensureCss().then(mountLauncher).then(initCampaigns).then(maybeRestoreOpen);
+    ensureCss().then(mountLauncher).then(initCampaigns).then(maybeRestoreOpen).then(initDeepLinks);
   });
 
   /** Reopen the panel after a page navigation when it was open on the last
@@ -623,6 +623,78 @@
 
   function onBack() {
     showScreen("home");
+  }
+
+  // ── deep links ───────────────────────────────────────────────────────────
+  /** Links that open the panel on a screen instead of navigating:
+   *    #cc-track  → order tracking      #cc-chat → chat      #cc-open → home
+   *  They work from merchant-authored HTML INSIDE the panel (FAQ answers,
+   *  campaign messages — sanitize.server.ts allow-lists the `#cc-` href) and
+   *  from anywhere on the storefront: a theme menu item pointing at
+   *  `/#cc-track` lands on the home page with tracking already open. */
+  var DEEP_LINKS = {
+    "cc-track": "tracking",
+    "cc-tracking": "tracking",
+    "cc-chat": "chat",
+    "cc-open": "home",
+  };
+
+  function deepLinkScreen(hash) {
+    var key = String(hash || "").replace(/^#/, "").toLowerCase();
+    return Object.prototype.hasOwnProperty.call(DEEP_LINKS, key) ? DEEP_LINKS[key] : null;
+  }
+
+  /** Tracking and live chat are merchant toggles — a link left in an FAQ after
+   *  one is turned off must not open a screen the store no longer offers. */
+  function availableScreen(screen) {
+    var w = (config && config.widget) || {};
+    if (screen === "tracking" && !w.orderTracking) return "home";
+    if (screen === "chat" && !w.liveChat) return "home";
+    return screen;
+  }
+
+  function openPanelOn(screen) {
+    var target = availableScreen(screen);
+    removeCampaignBubble();
+    ensureModules()
+      .then(function () {
+        if (!state.open) {
+          state.screen = target;
+          openPanel();
+        }
+        showScreen(target);
+      })
+      .catch(function () { /* modules failed — nothing to open */ });
+  }
+
+  function initDeepLinks() {
+    // Delegated, so it also catches links rendered later (FAQ answers, campaign
+    // bodies) without every renderer having to wire them up.
+    document.addEventListener("click", function (e) {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+      if (!a) return;
+      var href = a.getAttribute("href") || "";
+      var bare = href.charAt(0) === "#"; // fragment-only: always this page
+      var screen = deepLinkScreen(bare ? href : a.hash);
+      if (!screen) return;
+      // A `/#cc-track` link pointing at another page (or another site) must
+      // still navigate; only swallow the click when it targets this page.
+      if (!bare && (a.host !== location.host || a.pathname !== location.pathname)) return;
+      e.preventDefault();
+      openPanelOn(screen);
+    });
+
+    // Landing with the hash already set (cross-page link, shared URL), then
+    // clearing it so the same link works again later in the session.
+    var onHash = function () {
+      var screen = deepLinkScreen(location.hash);
+      if (!screen) return;
+      history.replaceState(null, "", location.pathname + location.search);
+      openPanelOn(screen);
+    };
+    window.addEventListener("hashchange", onHash);
+    onHash();
   }
 
   // ── chat flow ────────────────────────────────────────────────────────────
