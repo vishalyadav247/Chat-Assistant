@@ -27,6 +27,7 @@ import { DashboardChecklist } from "../components/DashboardChecklist";
 import { DashboardLiveFeed } from "../components/DashboardLiveFeed";
 import { StripBanner } from "../components/ui/StripBanner";
 import { SPACE } from "../components/ui/tokens";
+import { allowedRanges } from "../lib/analytics/reports.server";
 import { currentUsage } from "../lib/billing/usage.server";
 import { getQuota, nextPlanNameForQuota } from "../lib/billing/plans.server";
 import { requireShopAccess } from "../lib/access.server";
@@ -121,16 +122,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const [metrics, checklist, feed, pendingQuestions, atcThisMonth, usage] = await Promise.all([
-    dashboardMetrics(shopId, range),
-    setupChecklist(shopId, shopDomain),
-    liveFeed(shopId),
-    db.unresolvedQuestion.count({ where: { shopId, status: "pending" } }),
-    db.analyticsEvent.count({
-      where: { shopId, type: "added_to_cart", occurredAt: { gte: monthAgo } },
-    }),
-    currentUsage(shopId),
-  ]);
+  const [metrics, checklist, ranges, feed, pendingQuestions, atcThisMonth, usage] =
+    await Promise.all([
+      dashboardMetrics(shopId, range),
+      setupChecklist(shopId, shopDomain),
+      allowedRanges(shopId),
+      liveFeed(shopId),
+      db.unresolvedQuestion.count({ where: { shopId, status: "pending" } }),
+      db.analyticsEvent.count({
+        where: { shopId, type: "added_to_cart", occurredAt: { gte: monthAgo } },
+      }),
+      currentUsage(shopId),
+    ]);
 
   // Conversation quota for the near-cap banner. In "open" enforcement mode
   // getQuota returns effectively-unlimited, so the banner stays hidden until
@@ -154,6 +157,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     // Tier that raises the monthly conversation cap — named in the near-cap
     // banner so "upgrade" points somewhere specific.
     quotaNextPlan: nextPlanNameForQuota(shop?.plan ?? "free", "conversations"),
+    // Same treatment as /app/analytics: ranges past the plan's history window
+    // are shown DISABLED with the tier that unlocks them, because clampRange
+    // narrows them silently and a shorter window looks like a quiet quarter.
+    allowedRanges: ranges,
+    rangeNextPlan: nextPlanNameForQuota(shop?.plan ?? "free", "analytics_range_days"),
   };
 };
 
@@ -273,7 +281,9 @@ export default function DashboardPage() {
 
         <DashboardOverview
           metrics={data.metrics}
-          range={data.range}
+          range={data.metrics.range}
+          allowedRanges={data.allowedRanges}
+          rangeNextPlan={data.rangeNextPlan}
           reloading={revalidator.state !== "idle"}
           onRangeChange={(range) =>
             setSearchParams((params) => {

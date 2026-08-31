@@ -15,10 +15,15 @@ import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
 import { resolveShopId } from "../lib/tenancy.server";
 import {
+  GATED_FEATURES,
   PLANS,
+  QUOTA_DIMENSIONS,
   displayQuota,
+  isUnlimitedQuota,
   overageRate,
+  type GatedFeature,
   type PlanDefinition,
+  type QuotaDimension,
 } from "../lib/billing/plans.server";
 import { currentUsage, overageBillable } from "../lib/billing/usage.server";
 import {
@@ -67,41 +72,84 @@ const PLAN_DESCRIPTIONS: Record<string, string> = {
   plus: "For large stores with high-volume conversations and unlimited AI capabilities.",
 };
 
-/** Design bullet copy with all numbers taken from the plan matrix. */
+const n = (value: number) => value.toLocaleString("en-US");
+
+/** One line per quota dimension, rendered only when the plan actually grants
+ *  some of it — a `0` means "not included", and a pricing card lists what you
+ *  get. Returning null drops the line entirely. */
+const QUOTA_BULLET: Record<QuotaDimension, (value: number) => string | null> = {
+  conversations: (v) =>
+    isUnlimitedQuota(v) ? "Unlimited conversations / month" : `${n(v)} conversations / month`,
+  products_synced: (v) =>
+    isUnlimitedQuota(v) ? "Unlimited products synced" : `Up to ${n(v)} products synced`,
+  curated_answers: (v) =>
+    isUnlimitedQuota(v) ? "Unlimited curated answers" : `${n(v)} curated answers`,
+  manual_qas: (v) => (isUnlimitedQuota(v) ? "Unlimited manual Q&As" : `${n(v)} manual Q&As`),
+  policy_pages: (v) =>
+    isUnlimitedQuota(v) ? "Unlimited policy pages" : `${n(v)} policy pages`,
+  // A bare page count reads as meaningless here — the number IS the crawl depth.
+  crawl_pages: (v) =>
+    isUnlimitedQuota(v)
+      ? "Full-site website crawl"
+      : v <= 1
+        ? "Website source: this page only"
+        : `Website crawl: this page + linked pages (${n(v)})`,
+  // Covers the csv_import / file_upload FEATURES too — the count says more than
+  // a bare "CSV import" line, so those two features render nothing (see below).
+  file_uploads: (v) => `CSV import + PDF upload (${n(v)} files)`,
+  metafields_enabled: (v) =>
+    isUnlimitedQuota(v)
+      ? "Unlimited product metafields for AI training"
+      : `${n(v)} product metafields for AI training`,
+  team_seats: (v) =>
+    isUnlimitedQuota(v)
+      ? "Unlimited team seats"
+      : v <= 1
+        ? "1 team seat (owner only)"
+        : `${n(v)} team seats`,
+  active_campaigns: (v) =>
+    isUnlimitedQuota(v)
+      ? "Unlimited active proactive campaigns"
+      : `${n(v)} active proactive campaigns`,
+  analytics_range_days: (v) =>
+    isUnlimitedQuota(v) ? "Full analytics history" : `${n(v)} days of analytics history`,
+};
+
+/** One line per gated feature. null = deliberately not its own bullet because
+ *  a quota line above already states it with a number. */
+const FEATURE_BULLET: Record<GatedFeature, string | null> = {
+  remove_branding: "Remove ChatConvert branding",
+  unanswered_analytics: "Unanswered-questions analytics",
+  discount_realtime_sync: "Real-time discount sync",
+  catalog_auto_sync: "Automatic catalog sync",
+  premium_campaign_templates: "Premium proactive templates",
+  inbox_cart_view: "Live cart view in the inbox",
+  exports: "Analytics CSV + conversation exports",
+  csv_import: null, // stated by the file_uploads quota line
+  file_upload: null, // stated by the file_uploads quota line
+  survey: "Post-chat satisfaction survey",
+  push_notifications: "Browser push notifications",
+  custom_recommendations: "Custom recommendations + cross-sell pairs",
+  multi_language: "Multi-language + auto language detection",
+};
+
+/** GENERATED from the live plan matrix, never hand-written per plan id.
+ *  The matrix is operator-editable at /platform/plans, so hand-authored copy
+ *  silently stops matching what the app enforces the moment a limit or a
+ *  feature moves between tiers — which is exactly how every card came to
+ *  advertise "Multi-language", a feature only Plus has ever granted. */
 function bulletsFor(def: PlanDefinition): string[] {
-  const n = (value: number) => value.toLocaleString("en-US");
-  const bullets = [
-    `${n(def.quotas.conversations)} conversations / month`,
-    `Up to ${n(def.quotas.products_synced)} products synced`,
-    `${n(def.quotas.curated_answers)} curated answers · ${n(def.quotas.manual_qas)} manual Q&As`,
-    `${n(def.quotas.policy_pages)} policy pages`,
-    // Available on every plan (not gated) — listed on all cards so the
-    // comparison stays factual.
-    "Multi-language + auto language detection",
-  ];
-  switch (def.id) {
-    case "free":
-      bullets.push(
-        `${def.quotas.crawl_pages} website page source (this page only)`,
-      );
-      break;
-    case "basic":
-    case "pro":
-      bullets.push(
-        `Website crawl: this page + linked pages (${def.quotas.crawl_pages} pages)`,
-        "Unanswered-questions analytics",
-        "Remove ChatConvert branding",
-      );
-      break;
-    case "plus":
-      bullets.push(
-        `Full-site website crawl (${def.quotas.crawl_pages} pages)`,
-        // No csv-row quota dimension exists in the plan matrix — don't invent
-        // one in the copy (QA D10); file_uploads covers the PDF side.
-        `CSV import + PDF upload (${def.quotas.file_uploads} files)`,
-        "Analytics CSV + conversation exports",
-      );
-      break;
+  const bullets: string[] = [];
+  for (const dimension of QUOTA_DIMENSIONS) {
+    const value = def.quotas[dimension];
+    if (!value) continue; // 0 = not included on this plan
+    const line = QUOTA_BULLET[dimension](value);
+    if (line) bullets.push(line);
+  }
+  for (const feature of GATED_FEATURES) {
+    if (!def.features.includes(feature)) continue;
+    const line = FEATURE_BULLET[feature];
+    if (line) bullets.push(line);
   }
   return bullets;
 }

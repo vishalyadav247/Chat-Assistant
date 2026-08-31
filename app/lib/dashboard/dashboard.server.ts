@@ -2,6 +2,8 @@ import { Prisma } from "@prisma/client";
 import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
 import { getEmbedStatus, type EmbedStatus } from "../embed-status.server";
+import { clampRange } from "../analytics/reports.server";
+import { ANALYTICS_RANGES, type AnalyticsRange } from "../analytics/shared";
 
 // Dashboard aggregates (spec 13). Every query is shop-scoped and excludes
 // isTest conversations (Test AI console traffic must never skew merchant KPIs).
@@ -12,11 +14,15 @@ import { getEmbedStatus, type EmbedStatus } from "../embed-status.server";
 // ("added_to_cart" analytics events, recorded only by the real storefront
 // widget, never by Test AI) as the assisted-revenue proxy.
 
-export type DashboardRange = "7d" | "30d" | "12m";
+// ONE range vocabulary across the app: the dashboard used to offer its own
+// narrower set (no "3m"), so Pro — whose analytics_range_days is exactly 90 —
+// had no option that matched its own allowance, and the two pages disagreed
+// about what a merchant could pick.
+export type DashboardRange = AnalyticsRange;
 
-export const DASHBOARD_RANGES: DashboardRange[] = ["7d", "30d", "12m"];
+export const DASHBOARD_RANGES: DashboardRange[] = ANALYTICS_RANGES;
 
-const RANGE_DAYS: Record<DashboardRange, number> = { "7d": 7, "30d": 30, "12m": 365 };
+const RANGE_DAYS: Record<DashboardRange, number> = { "7d": 7, "30d": 30, "3m": 90, "12m": 365 };
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const LIVE_WINDOW_MS = 5 * 60 * 1000; // "live" = activity within 5 minutes
 
@@ -105,6 +111,12 @@ export async function dashboardMetrics(
   range: DashboardRange,
 ): Promise<DashboardMetrics> {
   requireShopId(shopId);
+  // Plan gate: the dashboard reads the SAME conversation history the analytics
+  // reports do, but it never clamped — so a Free shop (7 days) asking for "12m"
+  // got a full year of KPIs, deltas and series here while /app/analytics
+  // correctly refused it. Enforced at the data source for the same reason
+  // clampRange itself is: a hand-crafted ?range=12m must not outrun the loader.
+  range = await clampRange(shopId, range);
   const now = new Date();
   const days = RANGE_DAYS[range];
   const from = new Date(now.getTime() - days * DAY_MS);
