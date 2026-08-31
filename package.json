@@ -25,6 +25,8 @@
     "migrate:new": "prisma migrate dev --create-only && tsx scripts/scrub-migration.ts && prisma migrate deploy && prisma generate",
     "dev:stop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-stop.ps1",
     "dev:tunnel": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-tunnel.ps1",
+    "release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1",
+    "release:sync": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1 -Sync",
     "eval:golden": "tsx scripts/eval-golden.ts",
     "trace": "tsx scripts/trace-turn.ts",
     "logs:check": "tsx scripts/logs-check.ts"

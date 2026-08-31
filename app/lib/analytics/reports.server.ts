@@ -7,7 +7,7 @@ import {
   utcDay,
   type DayCounters,
 } from "./rollup.server";
-import { ANALYTICS_RANGES } from "./shared";
+import { ANALYTICS_RANGES, ANALYTICS_RANGE_DAYS } from "./shared";
 import type {
   AnalyticsRange,
   CsatSummary,
@@ -26,7 +26,7 @@ import type {
 
 export * from "./shared";
 
-const RANGE_DAYS: Record<AnalyticsRange, number> = { "7d": 7, "30d": 30, "3m": 90, "12m": 365 };
+const RANGE_DAYS = ANALYTICS_RANGE_DAYS;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**

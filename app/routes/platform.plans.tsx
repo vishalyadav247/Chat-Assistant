@@ -5,6 +5,11 @@ import { ZodError } from "zod";
 import { PlatformShell } from "../components/platform/PlatformShell";
 import { TabPills } from "../components/ui/TabPills";
 import { SPACE } from "../components/ui/tokens";
+import {
+  ANALYTICS_RANGES,
+  ANALYTICS_RANGE_DAYS,
+  ANALYTICS_RANGE_LABELS,
+} from "../lib/analytics/shared";
 import { useAppBridge } from "../lib/ui/surface";
 import { requirePlatformAdmin } from "../lib/platform/platform-auth.server";
 import { sameOrigin } from "../lib/team/same-origin.server";
@@ -286,15 +291,38 @@ export default function PlatformPlans() {
                   gap: SPACE.md,
                 }}
               >
-                {QUOTA_DIMENSIONS.map((dim) => (
-                  <s-number-field
-                    key={dim}
-                    label={QUOTA_LABELS[dim]}
-                    min={0}
-                    value={draft.quotas[dim]}
-                    onInput={(e) => patchDraft({ quotas: { ...draft.quotas, [dim]: e.currentTarget.value } })}
-                  />
-                ))}
+                {QUOTA_DIMENSIONS.map((dim) =>
+                  // Analytics history is the one quota the merchant does not
+                  // spend down — it maps onto the four ranges the range picker
+                  // offers. A free number box let an operator set 45, which
+                  // clampRange rounds back to 30: the extra 15 days bought the
+                  // merchant nothing and nothing said so. Offer the same four
+                  // choices the app actually renders.
+                  dim === "analytics_range_days" ? (
+                    <s-select
+                      key={dim}
+                      label={QUOTA_LABELS[dim]}
+                      value={String(draft.quotas[dim])}
+                      onInput={(e) =>
+                        patchDraft({ quotas: { ...draft.quotas, [dim]: e.currentTarget.value } })
+                      }
+                    >
+                      {ANALYTICS_RANGES.map((range) => (
+                        <s-option key={range} value={String(ANALYTICS_RANGE_DAYS[range])}>
+                          {ANALYTICS_RANGE_LABELS[range]}
+                        </s-option>
+                      ))}
+                    </s-select>
+                  ) : (
+                    <s-number-field
+                      key={dim}
+                      label={QUOTA_LABELS[dim]}
+                      min={0}
+                      value={draft.quotas[dim]}
+                      onInput={(e) => patchDraft({ quotas: { ...draft.quotas, [dim]: e.currentTarget.value } })}
+                    />
+                  ),
+                )}
               </div>
 
               <s-divider />

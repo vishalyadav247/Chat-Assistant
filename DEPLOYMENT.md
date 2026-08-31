@@ -422,6 +422,49 @@ rm -rf /var/www/chatconvert.progryss.com/html-helloworld-backup
 dev  ──commit──►  push origin dev  ──►  PR  ──►  merge to main  ──►  pull on server
 ```
 
+### 0. The short version
+
+Two scripts do the whole loop. Everything under headings 1–4 is what they run,
+kept here because you need to recognise the steps when one of them stops.
+
+**On your laptop:**
+
+```powershell
+npm run release -- -Message "what changed and why"
+```
+
+Merges `origin/main` into `dev`, runs typecheck and lint, commits, pushes `dev`,
+and opens the PR compare view. It stops before merging — that review is the last
+place a stray secret or an unwanted migration gets caught. Nothing is committed
+or pushed if typecheck or lint fails.
+
+After you merge the PR on GitHub:
+
+```powershell
+npm run release:sync
+```
+
+**On the droplet:**
+
+```bash
+cd /var/www/chatconvert.progryss.com/html
+bash scripts/deploy.sh
+```
+
+Pulls `main`, works out what actually changed, runs only the steps that change
+needs, restarts pm2, and then **proves the app is answering on its port** before
+reporting success. It refuses to run on a dirty tree or a branch other than
+`main`, and prints the rollback command if the health check fails.
+
+| Changed files | `npm ci` | `npm run setup` | `npm run build` | restart |
+|---|---|---|---|---|
+| `package-lock.json` | yes | yes | yes | yes |
+| `prisma/**` | no | yes | yes | yes |
+| any other source | no | no | yes | yes |
+| only `docs/`, `.claude/`, `scripts/qa/`, `*.md` | no | no | no | **no** |
+
+`--force` rebuilds everything even when git reports nothing new.
+
 ### 1. Work on `dev`
 
 ```bash
@@ -471,13 +514,18 @@ this box.
 
 ```bash
 cd /var/www/chatconvert.progryss.com/html
-git pull origin main
+bash scripts/deploy.sh
+```
+
+That is the whole deploy. The sequence it runs, when every stage is needed, is:
+
+```bash
+git pull --ff-only origin main
 npm ci
-sed -i 's/\r//g' .env
-( set -a; . ./.env; set +a; npm run setup )   # prisma generate && migrate deploy
+sed -i 's/\r$//' .env                          # only when CRLF is present
+( set -a; . ./.env; set +a; npm run setup )    # prisma generate && migrate deploy
 npm run build
 pm2 restart chatconvert
-pm2 logs chatconvert --lines 40 --nostream
 ```
 
 > **Why `npm run setup` and not just `migrate deploy`.** `npm ci` deletes
@@ -491,7 +539,14 @@ pm2 logs chatconvert --lines 40 --nostream
 > Order matters too: generate **before** build, so the build compiles against the
 > client that will exist at runtime.
 
-Then confirm it actually came back:
+The script's last stage is the one worth understanding. It polls
+`http://127.0.0.1:$PORT/` for up to 45 seconds and treats **any** HTTP status as
+success — the failure it is looking for is `000`, a refused connection, which is
+precisely what a green `pm2 list` hides. That is how the 2026-08-27 outage went
+unnoticed: pm2 said `online` while nothing was listening.
+
+If it fails, the script dumps the last 40 error lines and prints the rollback
+command. To check by hand at any time:
 
 ```bash
 curl -I https://chatconvert.progryss.com/

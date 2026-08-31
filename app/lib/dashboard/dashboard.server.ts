@@ -3,7 +3,7 @@ import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
 import { getEmbedStatus, type EmbedStatus } from "../embed-status.server";
 import { clampRange } from "../analytics/reports.server";
-import { ANALYTICS_RANGES, type AnalyticsRange } from "../analytics/shared";
+import { ANALYTICS_RANGES, ANALYTICS_RANGE_DAYS, type AnalyticsRange } from "../analytics/shared";
 
 // Dashboard aggregates (spec 13). Every query is shop-scoped and excludes
 // isTest conversations (Test AI console traffic must never skew merchant KPIs).
@@ -22,7 +22,7 @@ export type DashboardRange = AnalyticsRange;
 
 export const DASHBOARD_RANGES: DashboardRange[] = ANALYTICS_RANGES;
 
-const RANGE_DAYS: Record<DashboardRange, number> = { "7d": 7, "30d": 30, "3m": 90, "12m": 365 };
+const RANGE_DAYS = ANALYTICS_RANGE_DAYS;
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const LIVE_WINDOW_MS = 5 * 60 * 1000; // "live" = activity within 5 minutes
 
