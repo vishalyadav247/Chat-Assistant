@@ -1,31 +1,12 @@
-# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-# 🚨 PRODUCTION URLS — application_url / redirect_urls / app_proxy.url below all
-# point at https://chatconvert.progryss.com (droplet 159.89.173.131, port 3003
-# behind nginx, valid TLS — App Store req 3.1.1). They were a trycloudflare dev
-# tunnel until 2026-08-27.
-#
-# `automatically_update_urls_on_dev = false` is what keeps them that way: with it
-# true, a single `npm run dev` silently rewrites all three to whatever tunnel the
-# CLI just minted, and the next `npm run deploy` publishes that dead host as the
-# live app. Do not set it back to true.
-#
-# Running `npm run dev` against THIS app now also rotates the dev store's access
-# token, which is what produced 21 × 401 `embed_status_error` in production
-# app_logs on 2026-08-27. If you need a dev loop, create a separate Shopify app
-# for it rather than sharing this one.
-client_id = "d8b180fa8bf4edbda15692d2652516d7"
-# Display name shown to merchants: the admin sidebar, the app list, the
-# "Uninstall …?" dialog and the review prompt all render this verbatim. It was
-# "chat-convert" (the CLI-scaffolded slug), so every one of those read as the
-# raw handle while the whole product says "ChatConvert". The URL handle is
-# derived separately and stays `chat-convert` — renaming here is display-only.
-name = "ChatConvert"
+client_id = "6b2bcbe0ed1fc4b0600f96acc4f0eb72"
+name = "ChatConvert - AI Sales ChatBot"
+handle = "chatconvert-app"
 application_url = "https://chatconvert.progryss.com"
 embedded = true
 
 [build]
-automatically_update_urls_on_dev = false
+automatically_update_urls_on_dev = true
 
 [webhooks]
 api_version = "2026-07"
@@ -72,40 +53,6 @@ api_version = "2026-07"
   topics = [ "app_subscriptions/update" ]
 
 [access_scopes]
-# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-#
-# 🚨 SUBMISSION GATE — PROTECTED CUSTOMER DATA (LEVEL 2).
-# read_customers / write_customers / read_orders put this app at PCD **level 2**
-# (it reads order email/phone/shipping-address in app/routes/proxy.order-track.tsx
-# and creates customer records in app/lib/contacts/contacts.server.ts). Before
-# submitting a PUBLIC app you MUST request protected-customer-data access AND the
-# specific fields in the Partner Dashboard, implement the level 1 + level 2
-# requirements, and take part in data-protection reviews.
-# https://shopify.dev/docs/apps/launch/protected-customer-data
-#
-# Per-scope justification (copy into the App Store listing form):
-#   read_products            catalog mirror that grounds every AI recommendation
-#   read_content             required by the metafield_definitions/* webhooks that
-#                            keep the Manage-metafields catalog live
-#   read_discounts           discount sync (training data + realtime webhooks)
-#   read_legal_policies      policy knowledge connector (merchant content)
-#   read_online_store_pages  pages knowledge connector (merchant content)
-#   read_orders              PCD-2 · in-widget order-status lookup for shoppers
-#   read_customers           PCD-2 · match chat contacts to existing customers
-#   write_customers          PCD-2 · merchant-initiated "convert contact to customer"
-#   write_app_proxy          storefront widget transport (/apps/ccwidget)
-#   write_files              merchant logo/icon uploads (Shopify Files staged uploads)
-#   read_themes              READ-ONLY theme-embed detection: reads only
-#                            config/settings_data.json — on the published theme,
-#                            and (only when that one does not carry the embed)
-#                            on unpublished/development themes, since merchants
-#                            commonly set apps up on a draft theme first — to
-#                            tell the merchant whether the chat widget is
-#                            actually switched on. Never writes a theme, never
-#                            reads template or asset source. Added before launch
-#                            precisely because no merchant has installed yet — a
-#                            scope addition after launch forces every existing
-#                            merchant through re-auth.
 scopes = "read_content,read_customers,write_customers,read_discounts,read_legal_policies,read_online_store_pages,read_orders,read_products,read_themes,write_app_proxy,write_files"
 
 [auth]
@@ -114,42 +61,10 @@ redirect_urls = [
 ]
 
 [app_proxy]
-# 🚨 A STORE PINS THESE AT INSTALL TIME AND NEVER REFRESHES THEM.
-# Changing url / subpath / prefix requires `npm run deploy` AND a genuine
-# uninstall+reinstall on every store. Deploying alone, restarting `shopify app
-# dev`, or re-authorizing scopes will NOT update the store's record — the
-# storefront just 500s ("There was an error in the third-party application")
-# and the widget silently renders nothing. See README → Tunnels.
-#
-# url must be ABSOLUTE and end in /proxy (routes live at app/routes/proxy.*.tsx).
-# The relative form ("/proxy") is documented but did not resolve in practice.
-# The host must match the LIVE tunnel — run dev via:
-#   npm run dev -- --tunnel-url https://<host>.trycloudflare.com:3000
-# subpath must stay in sync with data-proxy-base in chat-widget.liquid.
 url = "https://chatconvert.progryss.com/proxy"
 subpath = "ccwidget"
 prefix = "apps"
 
-# ⚠️ CLI WORKAROUND (added 2026-08-24), NOT A FEATURE WE USE.
-# Since ~2026-08 the app-config module specs Shopify returns for this org list
-# `events` (the App Events / event-subscription module) as REQUIRED, so every
-# `shopify app dev` aborts before it starts with:
-#
-#   Validation error in shopify.app.toml:
-#   [events]: Required
-#
-# The requirement is SERVER-SIDE, not a CLI regression — CLI 4.6.1 and 4.7.0
-# (latest) both fail identically, and the CLI's own local schema has this module
-# optional. The only way through is to declare an empty module. api_version must
-# be exactly "unstable"; the dev session rejects a dated version. This mirrors
-# the `[definitions]: Required` outage of June 2026, which Shopify later fixed
-# server-side — recheck periodically and DELETE this block once `npm run dev`
-# works without it.
-#
-# 🚨 SUBMISSION GATE — untested on the deploy path. In the `[definitions]`
-# incident the equivalent stub passed dev validation but broke `shopify app
-# deploy`. Run a deploy from a throwaway app version before submitting, and
-# drop this block the moment the server stops demanding it.
 [events]
 api_version = "unstable"
 subscription = []

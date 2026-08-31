@@ -13,6 +13,25 @@ import { INK, RADIUS, SPACE } from "./tokens";
 
 type Cmd = "bold" | "italic" | "underline" | "insertUnorderedList" | "insertOrderedList";
 
+/** Widget deep links: the storefront widget intercepts the click and switches
+ *  screen inside the open panel (chat-widget.js), so they must NOT carry
+ *  target="_blank". Mirrors SAFE_URL in sanitize.server.ts.
+ *
+ *  Merchants pick these from the "Link to" list rather than typing the token —
+ *  `#cc-track` is our syntax, not something anyone should have to know. */
+const PANEL_ACTIONS = [
+  { value: "#cc-track", label: "Order tracking", hint: "Opens the order tracking form inside the chat." },
+  { value: "#cc-chat", label: "Chat with us", hint: "Takes the shopper straight to the chat screen." },
+] as const;
+
+const isPanelAction = (url: string) => /^#cc-[a-z-]+$/i.test(url);
+
+/** Which "Link to" option an existing href belongs to. An unrecognised `#cc-…`
+ *  (a renamed action) falls back to the web-address row so the merchant can
+ *  see and repair it rather than having it silently rewritten. */
+const linkKindOf = (href: string) =>
+  PANEL_ACTIONS.some((a) => a.value === href.toLowerCase()) ? href.toLowerCase() : "url";
+
 const BTN: React.CSSProperties = {
   width: 28,
   height: 28,
@@ -92,6 +111,7 @@ export function RichTextEditor(props: {
   const [active, setActive] = useState<Record<string, boolean>>({});
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkUrl, setLinkUrl] = useState("");
+  const [linkKind, setLinkKind] = useState("url");
   const [focused, setFocused] = useState(false);
 
   // Sync DOM ← value only when the value changed from outside.
@@ -177,19 +197,24 @@ export function RichTextEditor(props: {
       }
       node = node.parentNode;
     }
-    setLinkUrl(href);
+    const kind = linkKindOf(href);
+    setLinkKind(kind);
+    setLinkUrl(kind === "url" ? href : "");
     setLinkOpen(true);
   };
 
   const applyLink = () => {
     const el = editorRef.current;
     if (!el) return;
-    let url = linkUrl.trim();
+    let url = linkKind === "url" ? linkUrl.trim() : linkKind;
     if (!url) {
       setLinkOpen(false);
       return;
     }
-    if (!/^(https?:\/\/|mailto:|tel:|\/)/i.test(url)) url = `https://${url}`;
+    if (!/^(https?:\/\/|mailto:|tel:|\/|#)/i.test(url)) url = `https://${url}`;
+    // `#cc-…` links act INSIDE the chat panel (`#cc-track` opens order
+    // tracking) — a new tab would defeat them, so they alone keep target off.
+    const inPanel = isPanelAction(url);
     el.focus();
     restoreSelection();
     const sel = document.getSelection();
@@ -198,8 +223,13 @@ export function RichTextEditor(props: {
     while (node && node !== el) {
       if (node instanceof HTMLAnchorElement) {
         node.setAttribute("href", url);
-        node.setAttribute("target", "_blank");
-        node.setAttribute("rel", "noopener noreferrer");
+        if (inPanel) {
+          node.removeAttribute("target");
+          node.removeAttribute("rel");
+        } else {
+          node.setAttribute("target", "_blank");
+          node.setAttribute("rel", "noopener noreferrer");
+        }
         setLinkOpen(false);
         emit();
         refreshActive();
@@ -208,14 +238,21 @@ export function RichTextEditor(props: {
       node = node.parentNode;
     }
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
-      // Nothing selected → insert the URL itself as the link text.
-      const safe = url.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
-      document.execCommand("insertHTML", false, `<a href="${safe}" target="_blank" rel="noopener noreferrer">${safe}</a>`);
+      // Nothing selected → insert the URL as the link text, except for a panel
+      // action, where the raw `#cc-track` would be shown to the shopper.
+      const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+      const label = PANEL_ACTIONS.find((a) => a.value === url)?.label ?? url;
+      const attrs = inPanel ? "" : ` target="_blank" rel="noopener noreferrer"`;
+      document.execCommand("insertHTML", false, `<a href="${esc(url)}"${attrs}>${esc(label)}</a>`);
     } else {
       document.execCommand("createLink", false, url);
-      // Storefront links should leave the chat in a new tab.
+      // Storefront links should leave the chat in a new tab; panel actions stay.
       el.querySelectorAll("a").forEach((a) => {
-        if (a.getAttribute("href") === url) {
+        if (a.getAttribute("href") !== url) return;
+        if (inPanel) {
+          a.removeAttribute("target");
+          a.removeAttribute("rel");
+        } else {
           a.setAttribute("target", "_blank");
           a.setAttribute("rel", "noopener noreferrer");
         }
@@ -317,15 +354,41 @@ export function RichTextEditor(props: {
               flexWrap: "wrap",
             }}
           >
-            <div style={{ flex: "1 1 220px", minWidth: 0 }}>
-              <s-text-field
-                label="Link URL"
-                placeholder="https://example.com/page"
-                value={linkUrl}
-                onInput={(e) => setLinkUrl(e.currentTarget.value)}
-              />
+            {/* "Link to" comes first so the common in-chat actions are a pick,
+                not a URL the merchant has to know how to write. */}
+            <div style={{ flex: "0 1 200px", minWidth: 0 }}>
+              <s-select
+                label="Link to"
+                value={linkKind}
+                onInput={(e) => setLinkKind(e.currentTarget.value)}
+              >
+                <s-option value="url">Web address</s-option>
+                {PANEL_ACTIONS.map((a) => (
+                  <s-option key={a.value} value={a.value}>
+                    {a.label}
+                  </s-option>
+                ))}
+              </s-select>
             </div>
-            <s-button variant="primary" onClick={applyLink} disabled={!linkUrl.trim()}>
+            {linkKind === "url" ? (
+              <div style={{ flex: "1 1 220px", minWidth: 0 }}>
+                <s-text-field
+                  label="Link URL"
+                  placeholder="https://example.com/page"
+                  value={linkUrl}
+                  onInput={(e) => setLinkUrl(e.currentTarget.value)}
+                />
+              </div>
+            ) : (
+              <div style={{ flex: "1 1 220px", minWidth: 0, fontSize: 12, color: INK.muted, paddingBottom: 6 }}>
+                {PANEL_ACTIONS.find((a) => a.value === linkKind)?.hint}
+              </div>
+            )}
+            <s-button
+              variant="primary"
+              onClick={applyLink}
+              disabled={linkKind === "url" && !linkUrl.trim()}
+            >
               Apply
             </s-button>
             {active.link ? (
