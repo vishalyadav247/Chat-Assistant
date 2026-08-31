@@ -377,7 +377,10 @@
     if (!data || data.active === false || !data.widget) return;
     config = data;
     initPrivacy(); // resolve consent state before any beacon can fire
-    ensureCss().then(mountLauncher).then(initCampaigns).then(maybeRestoreOpen).then(initDeepLinks);
+    // Deep links go in right after the launcher — the only thing they need —
+    // rather than at the end of the chain, where a campaign failure would
+    // silently take them down with it.
+    ensureCss().then(mountLauncher).then(initDeepLinks).then(initCampaigns).then(maybeRestoreOpen);
   });
 
   /** Reopen the panel after a page navigation when it was open on the last
@@ -444,6 +447,70 @@
     ui.launcher = btn;
   }
 
+  // ── mobile viewport: the soft keyboard ───────────────────────────────────
+  /* `100dvh` tracks browser chrome (the URL bar), NOT the on-screen keyboard.
+   * When the keyboard opens, the VISUAL viewport shrinks but the LAYOUT
+   * viewport does not — so a `position: fixed` full-height panel keeps its
+   * full size, the composer sits behind the keyboard, and the browser scrolls
+   * the storefront page to try to reveal the focused field. That is the
+   * "nonsense height + scrolling". visualViewport is the only thing that
+   * reports the real visible box, so drive the panel from it, phones only. */
+  var vvUnbind = null;
+  var scrollUnlock = null;
+
+  function isPhone() {
+    return Boolean(window.matchMedia && window.matchMedia("(max-width: 480px)").matches);
+  }
+
+  function syncViewport() {
+    var vv = window.visualViewport;
+    if (!ui.panel) return;
+    if (!vv || !state.open || !isPhone()) {
+      // Desktop and the closed state must fall back to the stylesheet, or an
+      // inline pixel height would survive a rotate or a resize.
+      ui.panel.style.height = "";
+      ui.panel.style.top = "";
+      return;
+    }
+    // Shrinking the panel must not scroll the newest message out of sight —
+    // but only re-pin when the shopper was ALREADY at the bottom, or reading
+    // back through history would be yanked away every time the keyboard moves.
+    var atBottom =
+      ui.body && ui.body.scrollHeight - ui.body.scrollTop - ui.body.clientHeight < 40;
+    ui.panel.style.height = vv.height + "px";
+    // The page can still be scrolled under a fixed element while the keyboard
+    // is up; offsetTop re-pins the panel to what is actually visible.
+    ui.panel.style.top = (vv.offsetTop || 0) + "px";
+    if (atBottom && ui.body) ui.body.scrollTop = ui.body.scrollHeight;
+  }
+
+  function bindViewport() {
+    var vv = window.visualViewport;
+    if (!vv || vvUnbind) return;
+    vv.addEventListener("resize", syncViewport);
+    vv.addEventListener("scroll", syncViewport);
+    vvUnbind = function () {
+      vv.removeEventListener("resize", syncViewport);
+      vv.removeEventListener("scroll", syncViewport);
+      vvUnbind = null;
+    };
+  }
+
+  /** Stop the storefront scrolling behind a full-screen panel. Deliberately
+   *  only `overflow`, not `position: fixed` on the body: the latter is the
+   *  stronger iOS lock but it discards the merchant's scroll position and
+   *  reflows their theme, which is too invasive to do inside someone's store. */
+  function lockBodyScroll() {
+    if (scrollUnlock || !isPhone()) return;
+    var body = document.body;
+    var previous = body.style.overflow;
+    body.style.overflow = "hidden";
+    scrollUnlock = function () {
+      body.style.overflow = previous;
+      scrollUnlock = null;
+    };
+  }
+
   // ── panel lifecycle ──────────────────────────────────────────────────────
   function togglePanel() {
     if (state.open) return closePanel();
@@ -486,6 +553,9 @@
     refreshCartSnapshot(); // first message's pageContext carries the cart
     state.open = true;
     store(sessionStorage, OPEN_KEY, "1");
+    bindViewport();
+    lockBodyScroll();
+    syncViewport();
     var focusChat = config.widget.chatFocusMode && config.widget.liveChat;
     showScreen(focusChat ? "chat" : state.screen === "chat" ? "chat" : "home");
     if (state.pollTimer === null && state.conversationId) startPolling();
@@ -499,7 +569,13 @@
   }
 
   function closePanel() {
-    if (ui.panel) ui.panel.style.display = "none";
+    if (vvUnbind) vvUnbind();
+    if (scrollUnlock) scrollUnlock();
+    if (ui.panel) {
+      ui.panel.style.height = "";
+      ui.panel.style.top = "";
+      ui.panel.style.display = "none";
+    }
     ui.launcher.style.display = "";
     ui.launcher.setAttribute("aria-expanded", "false");
     state.open = false;
