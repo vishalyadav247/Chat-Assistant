@@ -211,7 +211,9 @@ export default function AnalyticsPage() {
         <s-heading>Analytics</s-heading>
         <DashboardOverview
           metrics={data.metrics}
-          range={data.range}
+          range={data.metrics.range}
+          allowedRanges={data.planSignals.ranges}
+          rangeNextPlan={data.planSignals.rangeNextPlan}
           reloading={revalidator.state !== "idle"}
           onRangeChange={(range) =>
             setSearchParams((params) => {
