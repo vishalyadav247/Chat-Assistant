@@ -1,10 +1,14 @@
 /* Generates scripts/qa/test-matrix.xlsx — the module/feature test matrix.
  * Run: npx tsx scripts/qa/make-test-matrix.ts
  *
- * Data lives in this file so the sheet is regenerable and diffable: edit a row,
- * re-run, commit. Uses the zero-dependency OOXML writer in ./xlsx.ts (no xlsx
- * library and no Python on this machine, and a QA artifact isn't worth a
- * production dependency).
+ * THIS FILE IS THE SOURCE OF TRUTH, not the sheet. Edit a row in ROWS or DEFECTS,
+ * re-run, and commit THIS FILE — test-matrix.xlsx is generated output and is
+ * gitignored, so anything typed into the spreadsheet is lost on the next run.
+ * Keeping the data here is what makes it diffable and reviewable in a PR.
+ *
+ * Uses the zero-dependency OOXML writer in ./xlsx.ts (no xlsx library and no
+ * Python on this machine, and a QA artifact isn't worth a production
+ * dependency).
  *
  * Column meanings
  *   Design tested — UI/layout/responsive/copy verified. "Manual" = needs a

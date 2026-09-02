@@ -21,7 +21,7 @@ export interface ChatModelOption {
 }
 
 export const CHAT_MODEL_OPTIONS: ChatModelOption[] = [
-  { id: "gpt-4o-mini", label: "gpt-4o-mini", note: "Current default. Cheapest, and the only model verified 16/16 on the golden set." },
+  { id: "gpt-4o-mini", label: "gpt-4o-mini", note: "Current default. Cheapest, and the only model verified 19/19 on the golden set." },
   { id: "gpt-4.1-nano", label: "gpt-4.1-nano", note: "Cheaper than 4o-mini on input; smallest of the 4.1 family." },
   { id: "gpt-4.1-mini", label: "gpt-4.1-mini", note: "~2.7x the cost of 4o-mini. Scored 15/16 — misroutes one follow-up (decisions log)." },
   { id: "gpt-4o", label: "gpt-4o", note: "Stronger, ~17x the output cost of 4o-mini." },

@@ -100,6 +100,7 @@ async function main(): Promise<void> {
     await catalogSync({ db, A, B, getQuota, setPlan });
     await curatedAnswers({ db, A, B, devShopId: devShop?.id ?? null });
     await search({ db, A, B });
+    await rankingGuards({ db, A });
     await campaigns({ db, A, B, getQuota, setPlan });
     await analytics({ db, A, B, getQuota, setPlan });
     await inbox({ db, A, B, setPlan });
@@ -1129,6 +1130,136 @@ async function search(ctx: { db: any; A: string; B: string }): Promise<void> {
     where: { shopId: A, shopifyProductId: "gid://shopify/Product/900100" },
     data: { stock: 3 },
   });
+}
+
+// ── Module 4b: ranking + buy-lane guards (2026-09-01) ───────────────────────
+
+async function rankingGuards(ctx: { db: any; A: string }): Promise<void> {
+  section("Search ranking: field-aware coverage / picks / router-block guards");
+  const { db, A } = ctx;
+  const { hybridProductSearch, selectRelevant, candidateSnippet, TIER_MARGIN } = await import(
+    "../../app/lib/search/product-search.server"
+  );
+  const { pseudoEmbedding } = await import("../../app/lib/embeddings/embedding.server");
+  const { upsertProductFromWebhook } = await import("../../app/lib/ingestion/catalog-sync.server");
+  const { parsePicksLine, splitPicksStream } = await import("../../app/lib/pipeline/picks.server");
+  const { configuredTopicNamedBy } = await import("../../app/lib/pipeline/index.server");
+
+  // Two bracelets: one IS black (title), the other only MENTIONS black in its
+  // styling tips — the real-store failure ("pairs with black outfits").
+  const onyxId = "gid://shopify/Product/900201";
+  const roseId = "gid://shopify/Product/900202";
+  await upsertProductFromWebhook(
+    SHOP_A,
+    productPayload({
+      id: 900201, admin_graphql_api_id: onyxId, title: `${TAG} Black Onyx Bracelet`,
+      body_html: "<p>Polished 8 mm onyx beads on a stretch cord.</p>", product_type: "Bracelet",
+      tags: "beads, grounding", handle: "qa-black-onyx-bracelet",
+      variants: [{ id: 5201, title: "One size", price: "32.00", inventory_quantity: 5, inventory_management: "shopify", inventory_policy: "deny" }],
+    }),
+  );
+  await upsertProductFromWebhook(
+    SHOP_A,
+    productPayload({
+      id: 900202, admin_graphql_api_id: roseId, title: `${TAG} Rose Quartz Bracelet`,
+      body_html: "<p>Soft pink rose quartz beads. Style tips: pairs beautifully with black, white or beige outfits. Care: keep it overnight on a selenite plate.</p>",
+      product_type: "Bracelet", tags: "beads, love", handle: "qa-rose-quartz-bracelet",
+      variants: [{ id: 5202, title: "One size", price: "30.00", inventory_quantity: 5, inventory_management: "shopify", inventory_policy: "deny" }],
+    }),
+  );
+  const noise = pseudoEmbedding("noise");
+  // "bracelets" is the router's "bracelet" in the plural — the shopper tier
+  // must not count it a second time (it did, once: cov 5 / 3.8).
+  const black = await hybridProductSearch({
+    shopId: A, queryEmbedding: noise, keywords: ["black", "bracelet"], message: "show me black bracelets",
+    minMeaningScore: 0.95, limit: 8,
+  });
+  const onyx = black.find((c) => c.shopifyProductId === onyxId);
+  const rose = black.find((c) => c.shopifyProductId === roseId);
+
+  // S12 — a word in the title outranks the same word in the prose
+  ok(
+    "S12 field-aware coverage: title match (2+2) beats description-only match (2+0.8)",
+    Boolean(onyx && rose) && black[0].shopifyProductId === onyxId && onyx!.coverage === 4 && rose!.coverage === 2.8,
+    black.map((c) => `${c.title.slice(12, 40)}(cov ${c.coverage})`).join(" | "),
+  );
+  ok(
+    "S13 headTerms report WHERE each word matched",
+    Boolean(onyx && rose) && onyx!.headTerms.includes("black") && !rose!.headTerms.includes("black") && rose!.matchedTerms.includes("black") && !rose!.matchedTerms.includes("bracelets"),
+    `onyx.head=${JSON.stringify(onyx?.headTerms)} rose.head=${JSON.stringify(rose?.headTerms)} rose.matched=${JSON.stringify(rose?.matchedTerms)}`,
+  );
+  const tier = selectRelevant(black, 4);
+  ok(
+    "S14 relevance tier (TIER_MARGIN) keeps the literal match and drops the prose mention",
+    tier.length === 1 && tier[0].shopifyProductId === onyxId && TIER_MARGIN === 0.5,
+    tier.map((c) => c.title.slice(12)).join(" | "),
+  );
+  ok(
+    "S15 snippet tells the model where the words matched",
+    Boolean(rose) && /in title\/type\/tags: bracelet/.test(candidateSnippet(rose!)) && /in description: black/.test(candidateSnippet(rose!)),
+    rose ? candidateSnippet(rose).slice(-80) : "no rose row",
+  );
+  await db.product.deleteMany({ where: { shopId: A, shopifyProductId: { in: [onyxId, roseId] } } });
+
+  // P1 — picks line parser
+  const parse = (s: string) => JSON.stringify(parsePicksLine(s));
+  ok(
+    "P1 parsePicksLine: ids, none, markdown noise, prose left alone",
+    parse("PICKS: 3, 1") === '{"kind":"ids","ids":[3,1]}' &&
+      parse("**Picks:** [2]") === '{"kind":"ids","ids":[2]}' &&
+      parse("PICKS: none") === '{"kind":"none"}' &&
+      parse("PICKS: 0") === '{"kind":"none"}' &&
+      parse("PICKS: Black Onyx") === "null" &&
+      parse("Pick 2 of our bracelets for a stack.") === "null" &&
+      parse("Great choice!") === "null",
+    [parse("PICKS: 3, 1"), parse("PICKS: none"), parse("Pick 2 of our bracelets for a stack.")].join(" "),
+  );
+
+  // P2 — the stream splitter strips the picks line, passes prose through
+  async function* tokens(parts: string[]): AsyncIterable<string> {
+    for (const p of parts) yield p;
+  }
+  async function collect(parts: string[]): Promise<{ text: string; picks: unknown; line: string | null }> {
+    const s = splitPicksStream(tokens(parts));
+    let text = "";
+    for await (const t of s.text) text += t;
+    return { text, ...s.result() };
+  }
+  const withPicks = await collect(["PI", "CKS: 2, ", "1\n", "\n", "These", " fit."]);
+  const prose = await collect(["Great", " choice!\n", "Both fit."]);
+  const onlyPicks = await collect(["PICKS: none"]);
+  const longFirst = await collect(["x".repeat(50), "y".repeat(50), "\nmore"]);
+  ok(
+    "P2 splitPicksStream: picks line consumed, blank lines skipped, prose intact",
+    withPicks.text === "These fit." && JSON.stringify(withPicks.picks) === '{"kind":"ids","ids":[2,1]}' && withPicks.line === "PICKS: 2, 1",
+    JSON.stringify(withPicks),
+  );
+  ok(
+    "P3 splitPicksStream: a reply without a picks line streams byte-for-byte",
+    prose.text === "Great choice!\nBoth fit." && prose.picks === null &&
+      longFirst.text === "x".repeat(50) + "y".repeat(50) + "\nmore" && longFirst.picks === null,
+    `${JSON.stringify(prose.text)} / ${longFirst.text.length} chars`,
+  );
+  ok(
+    "P4 splitPicksStream: a picks-only reply yields no text and reports the picks",
+    onlyPicks.text === "" && JSON.stringify(onlyPicks.picks) === '{"kind":"none"}',
+    JSON.stringify(onlyPicks),
+  );
+
+  // G1 — router block reason must name a configured topic
+  const topics = ["medical advice", "competitor pricing", "politics", "weapons"];
+  ok(
+    "G1 configuredTopicNamedBy: prefix-tolerant topic match, filler ignored, invented reasons rejected",
+    configuredTopicNamedBy("medical advice", topics) === "medical advice" &&
+      configuredTopicNamedBy("political opinions", topics) === "politics" &&
+      configuredTopicNamedBy("weapon", topics) === "weapons" &&
+      configuredTopicNamedBy("competitor prices", topics) === "competitor pricing" &&
+      configuredTopicNamedBy("BANNED TOPIC", topics) === null &&
+      configuredTopicNamedBy("security devices", topics) === null &&
+      configuredTopicNamedBy("advice", topics) === null &&
+      configuredTopicNamedBy("", topics) === null,
+    `political→${configuredTopicNamedBy("political opinions", topics)} banned→${configuredTopicNamedBy("BANNED TOPIC", topics)}`,
+  );
 }
 
 // ── Module 5: campaigns / proactive chat (spec 12) ──────────────────────────

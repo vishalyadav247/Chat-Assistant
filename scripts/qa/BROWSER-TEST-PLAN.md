@@ -125,8 +125,17 @@ Entry: the dev store's storefront with the app embed enabled.
 
 ## Recording
 
-Record every result back into `scripts/qa/test-matrix.xlsx` — the `Design tested` column is exactly
-what this document produces. Any FAIL becomes a numbered defect in the same sheet's `Defects` tab.
+Record every result in **`scripts/qa/make-test-matrix.ts`** — the `ROWS` array holds one
+entry per feature, and its `design` field is exactly what this document produces. Any FAIL
+becomes a numbered defect in the `DEFECTS` array in the same file.
+
+Edit the source, not the sheet. `test-matrix.xlsx` is generated from that file and is
+gitignored, so anything typed into the spreadsheet is destroyed by the next run and
+recorded nowhere. Regenerate when you want a readable copy:
+
+```bash
+npx tsx scripts/qa/make-test-matrix.ts
+```
 
 ---
 

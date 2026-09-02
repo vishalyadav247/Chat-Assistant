@@ -28,9 +28,23 @@ Implement the validated demo pipeline on production infrastructure. The LLM is t
    parse failure → DO NOT default to buy (demo bug): retry once, then fallback to chat lane with clarify
    blocked → fallbackMessage, DONE.  off_topic → persona.offTopicMessage (polite redirect, distinct from blocked), DONE.
    (greetings/small talk are explicitly NOT off_topic)
+   The router may only enforce what the MERCHANT configured (2026-08-17 / 2026-09-01):
+     · blocked is ignored when no banned topics are configured, when blocked_reason names none of them
+       (`configuredTopicNamedBy`, word-prefix match), or when a focused yes/no confirm call
+       (`blockConfirmUser`, temp 0, 3 tokens — same shape as the borderline-curated confirm) says the
+       message asks for a product rather than for advice about that topic. gpt-4o-mini blocked
+       "something that blocks rfid" citing "weapons"; embedding similarity cannot separate that (0.23)
+       from a real paraphrase ("will this cure my arthritis?" ↔ medical advice 0.28), the confirm can.
+     · off_topic is ignored when persona.scope is empty — with no STORE SCOPE line the model invented one
+       and redirected "which bracelet is good for money and wealth".
 5. LANES:
-   buy      → hybrid product search (below) → grounded recommend
-   question → RAG: knowledge-search top k=3; if answerOnlyFromKnowledge && (none || top < minMeaningScore 0.30) → fallbackMessage, no LLM
+   buy      → hybrid product search (below) → grounded recommend; the model's PICKS line decides the cards
+   question → RAG: knowledge-search top k=3; if nothing grounded (no hit ≥ minMeaningScore 0.30, no discount /
+              collection facts) → CATALOGUE RESCUE: hybridProductSearch over the shopper's own words; when the
+              best product contains a shopper word AND the vector lane agrees, the turn is handed to the buy
+              lane with those candidates (keywords = []); a `PICKS: none` there serves fallbackMessage and
+              logs the unresolved question exactly like the RAG miss. Otherwise, if answerOnlyFromKnowledge →
+              fallbackMessage, no LLM
    order    → live Shopify tool (LATER: requires read_orders + PCD approval; v1 returns handover-style "connect you with support")
    chat     → no retrieval; one short persona reply (temp 0.5, max_tokens 60)
 6. GENERATION (streamed): system = persona template (prompts.persona_template with role/brandVoice/guidelines/avoid)
@@ -46,14 +60,17 @@ One embedding call per turn (`embed(message)`), reused for guardrail(c), curated
 
 ## Hybrid product search (accuracy core)
 
-- Two queries in parallel (`Promise.all`, `$queryRaw`) — accuracy batch 2026-08-17:
-  - keyword: weighted generated tsvector `searchText` = title (A) ‖ productType + vendor + tags (B) ‖ **full** description (C) (migration `product_search_weighted`); query = **OR** of `plainto_tsquery` per router keyword (demo's ANY-keyword recall) plus a lower tier of the shopper's own significant words; `searchText @@ q`, ordered router-hit first then `ts_rank_cd`; `ts_headline` returns the matching description fragment; hard filters `shop_id = $shop AND learn_enabled AND purchasable AND (price <= $price_max OR $price_max IS NULL)`
-  - vector: same hard filters, `ORDER BY embedding <=> $q::vector LIMIT 8`; product embedding text = title. productType. vendor. tags. full description (`productEmbeddingText`)
-- Merge: **reciprocal rank fusion** (k=60; message-word-only keyword hits weighted 0.5; vector-only rows still gated by minMeaningScore 0.30) → sorted → `.slice(0, 8)` — the allow-list, in relevance order.
-- LLM payload per candidate: `{ title, price, snippet }` where snippet = type · tags · matching description fragment (headline) or description start (vector-only). Titles/prices still only from DB rows.
+- Two queries in parallel (`Promise.all`, `$queryRaw`) — accuracy batch 2026-08-17, field-aware 2026-09-01:
+  - keyword: weighted generated tsvector `searchText` = title (A) ‖ productType + vendor + tags (B) ‖ **full** description + enabled metafields (C) (migrations `product_search_weighted`, `product_metafields`); query = **OR** of `plainto_tsquery` per router keyword (demo's ANY-keyword recall) plus a lower tier of the shopper's own significant words; `searchText @@ q`; hard filters `shop_id = $shop AND learn_enabled AND active AND published AND purchasable AND (price <= $price_max OR $price_max IS NULL)`
+  - **coverage is field-aware**: per query word, weight (router ×2, shopper ×1, informative adjacent-word phrase ×2) × field factor — 1 when the word sits in title/type/vendor/tags (`ts_filter(searchText, '{a,b}')`, computed once per row behind an `OFFSET 0` fence), `DESC_WEIGHT` 0.4 when it appears only in the description/metafields. Real catalogues carry long SEO prose naming OTHER products' colours and stones ("pairs with black outfits", "recharge on a selenite plate"); field-blind counting made every such bracelet a full match for "black bracelets". Order: coverage, router-hit, `ts_rank_cd(…, 1)` (length-normalised). `headTerms` records which words matched in the head; `ts_headline` over description+metafields for ALL query words returns the matching fragment.
+  - vector: same hard filters, `ORDER BY embedding <=> $q::vector LIMIT 8`; product embedding text = title. productType. vendor. tags. full description. enabled metafields (`productEmbeddingText`)
+- Merge: coverage first, then **reciprocal rank fusion** (k=60; message-word-only keyword hits weighted 0.5 and need ≥ 2 distinct words to keep a coverage tier; vector-only rows gated by minMeaningScore 0.30, coverage 0) → top 8 with **3 slots reserved for vector-lane rows** (`withVectorReserve`) so semantic asks reach the model when the keyword lane is crowded — the allow-list, in relevance order.
+- LLM payload per candidate: `{ id, title, price, snippet }` (1-based id) where snippet = type · tags · matching fragment (headline) or description start (vector-only) · enabled metafields · `in title/type/tags: …` · `in description: …`. Titles/prices still only from DB rows.
+- **Model picks** (`picks.server.ts`): the reply's FIRST line is `PICKS: <ids>` (best first) or `PICKS: none`; it is parsed off the stream before the prose reaches the widget (≈10 tokens of delay) and turned into cards — ids validated against the allow-list, ≤ 4, then cross-sell. No extra LLM call. Three lexical belts, because gpt-4o-mini pads towards four and occasionally says none against the evidence: when some candidate carries EVERY router keyword in its head (`lexicalComplete`), or when the top candidate satisfies every router keyword anywhere and nothing outside its tier does (`onlyTierSatisfiesAll` — "bracelet for february born", where the month is description data), the picks may only narrow/reorder the mechanical tier; a `none` stands only when NO candidate carries a router keyword in its head (`lexicalAnchor` false) — otherwise the tier is shown. Purpose asks where several products satisfy every word ("stress and anxiety") stay with the model's judgement. Missing/unparseable line → the mechanical tier. Browse and merchant hand-picked pools ignore picks (fit is not the question there).
+- Mechanical tier = `selectRelevant`: candidates within `TIER_MARGIN` 0.5 of the top coverage (title hit vs prose-only hit on one word = 1.2 apart; a stray shopper word in prose = 0.4, same tier); vector-only: within 0.04 cosine of the best; unscored pools: as-is. 1–4 cards, never padded (user decision 2026-08-17).
 - Fallbacks: empty + price_max present → "browse" cheapest in-budget in-stock top 4 (never "no match" when budget known); truly empty → fixed clarifying question, **no LLM call**.
 - Upgrade path (backlog): per-chunk product vectors for very long descriptions, cross-encoder reranker.
-- Cards shown capped at 4 = the top-4 fused candidates.
+- Cards shown capped at 4 (+ cross-sell to 6).
 
 ## Chat history / session memory
 
@@ -64,7 +81,7 @@ One embedding call per turn (`embed(message)`), reused for guardrail(c), curated
 
 ## Prompts
 
-Ported **verbatim** from `.claude/resources/demo/prompts.json` into `app/lib/pipeline/prompts.ts` (typed, versioned; single file = the tuning surface): router, summary_system, chat_reply, question_answer, product_recommend, curated_confirm_system/user, persona_template. Few-shot examples from `LLM-Training-Guide.md` §3 available as optional inserts.
+Ported **verbatim** from `.claude/resources/demo/prompts.json` into `app/lib/pipeline/prompts.ts` (typed, versioned; single file = the tuning surface): router, summary_system, chat_reply, question_answer, product_recommend, curated_confirm_system/user, persona_template. Few-shot examples from `LLM-Training-Guide.md` §3 available as optional inserts. Tuning events (each with a golden re-run): 2026-08-18 compact product replies; 2026-09-01 router — product asks for a need/purpose are `buy` and never a banned topic; product_recommend — PICKS line + fit test (identity words must describe THIS product; features/purposes may match by meaning); new `blockConfirmUser`.
 
 ## Streaming
 
@@ -88,7 +105,7 @@ Ported **verbatim** from `.claude/resources/demo/prompts.json` into `app/lib/pip
 
 ## Acceptance criteria
 
-1. Golden set passes end-to-end against seeded demo shop: each input takes its expected path (verifiable via logged `sourceLayer`/intent).
+1. Golden set passes end-to-end against seeded demo shop: each input takes its expected path (verifiable via logged `sourceLayer`/intent) — including the precision cases (a product that only MENTIONS the shopper's word in its prose is never carded).
 2. Curated hit produces zero chat-completion calls (provider call log).
 3. Guardrail: "can you give me medical advice?" blocked pre-router; moderation outage does not break replies (fails open + metric).
 4. Off-topic returns persona.offTopicMessage, logged path=chat/off_topic, ≠ blocked fallback.

@@ -138,7 +138,7 @@ export default function PlatformAiSettings() {
               <s-banner tone="info">
                 Every model listed here is request-compatible and priced, so switching is safe to apply — the app adapts
                 the request per model family automatically. Quality still varies: the prompts were tuned on gpt-4o-mini
-                (16/16 on the golden set) and gpt-4.1-mini scored 15/16, so after switching it is worth running{" "}
+                (19/19 on the golden set) and gpt-4.1-mini scored 15/16 on the earlier 16-case set, so after switching it is worth running{" "}
                 <code>npm run eval:golden</code> to confirm nothing regressed.
               </s-banner>
             </s-stack>

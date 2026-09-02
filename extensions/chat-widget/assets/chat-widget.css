@@ -342,7 +342,9 @@
   align-items: flex-end;
   align-self: stretch;
 }
-.cw-chip {
+/* .cw-root scope for the same reason as .cw-send — without it the reset won
+   and starter chips rendered transparent with inherited text colour. */
+.cw-root .cw-chip {
   background: var(--cw-surface);
   box-shadow: inset 0 0 0 1px var(--cw-border-strong);
   border-radius: 10px;
@@ -451,7 +453,11 @@
 .cw-input .cw-composer:hover::-webkit-scrollbar-thumb,
 .cw-input .cw-composer:focus::-webkit-scrollbar-thumb { background: #c9c9d2; }
 .cw-input .cw-composer::-webkit-scrollbar-thumb:hover { background: #adadb8; }
-.cw-send {
+/* .cw-root scope beats the `.cw-root button { background: none; color: inherit }`
+   reset (0,1,1) — a bare `.cw-send` is (0,1,0) and LOSES, so the brand gradient
+   never applied and the send button rendered as a bare icon. Same trap already
+   documented on .cw-launcher and .cw-track. */
+.cw-root .cw-send {
   width: 34px;
   height: 34px;
   border-radius: 8px;

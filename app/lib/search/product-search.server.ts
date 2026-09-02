@@ -15,6 +15,15 @@ import { logError } from "../log.server";
 // tier so attributes the router paraphrased away ("rfid", "touchscreen") still
 // reach the candidate list. `ts_headline` returns the matching fragment of a
 // long description so the LLM sees WHY a product matched (index.server.ts).
+//
+// Coverage is FIELD-AWARE (2026-09-01): a query word found in the title, type,
+// vendor or tags counts in full; a word found only in the description counts
+// DESC_WEIGHT of that. Real catalogues carry long SEO descriptions that name
+// other products' colours and stones ("pairs with black outfits", "keep it on
+// a selenite plate"), and field-blind counting made every such bracelet a
+// full match for "black bracelets" / "selenite bracelets". Vector-lane rows
+// keep a reserved share of the candidate list so semantic asks reach the
+// model even when the keyword lane is crowded.
 
 export interface ProductVariantInfo {
   id: string; // gid://shopify/ProductVariant/...
@@ -42,7 +51,13 @@ export interface ProductCandidate {
   headline: string | null;
   /** Shopper/router words this product's text actually contains (keyword lane). */
   matchedTerms: string[];
-  /** Weighted count of distinct query words matched (router ×2, shopper ×1); 0 for vector-only rows. */
+  /** The subset of matchedTerms found in the title / type / vendor / tags (not only the description). */
+  headTerms: string[];
+  /**
+   * Field-aware relevance: Σ over matched query words of weight (router ×2,
+   * shopper ×1) × field factor (1 in title/type/vendor/tags, DESC_WEIGHT when
+   * the word appears only in the description/metafields). 0 for vector-only rows.
+   */
   coverage: number;
   /** Reciprocal-rank-fusion score — candidates are returned sorted by it. */
   fused: number;
@@ -102,10 +117,26 @@ export function isPurchasable(product: {
 
 const BASE_COLUMNS = Prisma.sql`"id", "shopifyProductId", "title", "price"::float8 AS price, "stock",
            "imageUrl", "handle", "variants", "productType", "tags", "description", "metafieldText"`;
+/** The same columns re-selected from a subquery that already cast the price. */
+const BASE_COLUMN_NAMES = Prisma.sql`"id", "shopifyProductId", "title", "price", "stock",
+           "imageUrl", "handle", "variants", "productType", "tags", "description", "metafieldText"`;
 
 const RRF_K = 60;
 /** Message-word-only keyword hits count half as much as router-keyword hits. */
 const MESSAGE_TIER_WEIGHT = 0.5;
+/** A query word found ONLY in the description/metafields is worth this share of
+ *  a title/type/vendor/tag hit: a router word in the prose scores 0.8, below a
+ *  shopper's own word sitting in the product's name or tags (1). A detail
+ *  buried in prose is weaker evidence than a word in what the product is called. */
+export const DESC_WEIGHT = 0.4;
+/** Candidate slots kept for rows the vector lane found, so semantic matches
+ *  reach the model even when the keyword lane fills the list on its own. */
+const VECTOR_RESERVE = 3;
+/** Candidates within this much of the top coverage are the same relevance
+ *  tier (selectRelevant). 0.5 separates a title hit from a description-only
+ *  hit on the same word (2 vs 0.8) but not two products that differ only by
+ *  a stray shopper word in the prose (0.4). */
+export const TIER_MARGIN = 0.5;
 
 export async function hybridProductSearch(args: ProductSearchArgs): Promise<ProductCandidate[]> {
   const shopId = requireShopId(args.shopId);
@@ -118,13 +149,14 @@ export async function hybridProductSearch(args: ProductSearchArgs): Promise<Prod
     vectorSearch(shopId, args.queryEmbedding, priceMax, limit, excludeOutOfStock),
   ]);
 
-  // Coverage first (a product containing MORE of the shopper's distinct words
-  // — "birthstone" + "bracelet" + "february" — beats one matching fewer, no
-  // matter how it scores elsewhere), then reciprocal rank fusion as the
-  // tiebreak: products found by both lanes rise within a coverage tier;
-  // vector-only rows (coverage 0) still need the meaning gate. This mirrors
-  // the validated demo (keyword hits first, vector fills in) with a sharper
-  // order inside the keyword tier.
+  // Coverage first (a product whose NAME or tags carry the shopper's words —
+  // "Black Obsidian Bracelet" for "black bracelets" — beats one that only
+  // mentions them in its prose, and one matching more distinct words beats one
+  // matching fewer), then reciprocal rank fusion as the tiebreak: products
+  // found by both lanes rise within a coverage tier; vector-only rows
+  // (coverage 0) still need the meaning gate. This mirrors the validated demo
+  // (keyword hits first, vector fills in) with a sharper order inside the
+  // keyword tier.
   // A message-only hit on a SINGLE shopper word ("hand" in "hand-poured") is
   // too weak to outrank strong vector matches — it keeps its RRF share but no
   // coverage tier. Router-keyword hits and multi-word message hits do.
@@ -132,7 +164,8 @@ export async function hybridProductSearch(args: ProductSearchArgs): Promise<Prod
   keywordRows.forEach((row, rank) => {
     const weight = row.kwHit ? 1 : MESSAGE_TIER_WEIGHT;
     const candidate = toCandidate(row);
-    if (!row.kwHit && candidate.coverage < 2) candidate.coverage = 0;
+    const distinctWords = candidate.matchedTerms.filter((t) => !t.includes(" ")).length;
+    if (!row.kwHit && distinctWords < 2) candidate.coverage = 0;
     merged.set(row.id, { ...candidate, fused: weight / (RRF_K + rank) });
   });
   vectorRows.forEach((row, rank) => {
@@ -146,9 +179,42 @@ export async function hybridProductSearch(args: ProductSearchArgs): Promise<Prod
     if ((row.score ?? 0) < args.minMeaningScore) return;
     merged.set(row.id, { ...toCandidate(row), fused: contribution });
   });
-  return [...merged.values()]
-    .sort((a, b) => b.coverage - a.coverage || b.fused - a.fused)
-    .slice(0, limit);
+  const ranked = [...merged.values()].sort(byRelevance);
+  return withVectorReserve(ranked, limit);
+}
+
+function byRelevance(a: ProductCandidate, b: ProductCandidate): number {
+  return b.coverage - a.coverage || b.fused - a.fused;
+}
+
+/**
+ * The top `limit` by relevance, but never a list the vector lane has no say
+ * in: when fewer than VECTOR_RESERVE of the kept rows were found by the vector
+ * lane, the weakest keyword-only rows make room for the best vector rows that
+ * cleared the meaning gate. Vector-only rows keep coverage 0, so the
+ * mechanical fallback tier (selectRelevant) is unchanged — this widens what
+ * the MODEL gets to choose from ("something to help me sleep" reaches the
+ * calming bracelets, not only the ones whose prose contains "sleep").
+ */
+function withVectorReserve(ranked: ProductCandidate[], limit: number): ProductCandidate[] {
+  const kept = ranked.slice(0, limit);
+  let vectorSeen = kept.filter((c) => c.score !== null).length;
+  for (const row of ranked.slice(limit)) {
+    if (vectorSeen >= VECTOR_RESERVE) break;
+    if (row.score === null) continue;
+    let weakest = -1;
+    for (let i = kept.length - 1; i >= 0; i--) {
+      if (kept[i].score === null) {
+        weakest = i;
+        break;
+      }
+    }
+    if (weakest < 0) break;
+    kept.splice(weakest, 1);
+    kept.push(row);
+    vectorSeen++;
+  }
+  return kept.sort(byRelevance);
 }
 
 /** Fallback when nothing matched but a budget exists: cheapest in-stock, in-budget items. */
@@ -161,7 +227,7 @@ export async function browseCheapestInBudget(
   requireShopId(shopId);
   const rows = await db.$queryRaw<RawRow[]>(Prisma.sql`
     SELECT ${BASE_COLUMNS}, NULL::float8 AS score, NULL::text AS headline, FALSE AS "kwHit",
-           NULL::text[] AS matched, 0::int AS coverage
+           NULL::text[] AS matched, NULL::text[] AS "headMatched", 0::float8 AS coverage
     FROM "products"
     WHERE "shopId" = ${shopId}
       AND "learnEnabled" = true AND "status" = 'active' AND "publishedOnline" = true
@@ -189,6 +255,7 @@ interface RawRow {
   headline: string | null;
   kwHit: boolean | null;
   matched: string[] | null;
+  headMatched: string[] | null;
   coverage: number | null;
 }
 
@@ -212,6 +279,9 @@ function messageTerms(message: string, exclude: Set<string>, priceMax: number | 
   const priceToken = priceMax !== null ? String(Math.round(priceMax)) : "";
   for (const word of message.toLowerCase().split(/[^a-z0-9]+/)) {
     if (word.length === 0 || FILLER.has(word) || exclude.has(word)) continue;
+    // "bracelets" when the router already said "bracelet": the same concept
+    // would otherwise be counted twice (once per tier) for every product.
+    if (exclude.has(word.replace(/s$/, "")) || exclude.has(`${word}s`)) continue;
     // Numbers matter ("ruling number 8", "size 7", "750ml") — keep 1–4 digit
     // tokens except the budget the router already extracted ("under 30").
     if (/^\d+$/.test(word)) {
@@ -363,8 +433,11 @@ async function keywordSearch(
   const anyQuery =
     kwQuery && msgQuery ? Prisma.sql`(${kwQuery} || ${msgQuery})` : (kwQuery ?? msgQuery!);
   const kwHit = kwQuery ? Prisma.sql`("searchText" @@ ${kwQuery})` : Prisma.sql`FALSE`;
-  const kwRank = kwQuery ? Prisma.sql`ts_rank_cd("searchText", ${kwQuery})` : Prisma.sql`0::float4`;
-  const msgRank = msgQuery ? Prisma.sql`ts_rank_cd("searchText", ${msgQuery})` : Prisma.sql`0::float4`;
+  // Normalisation 1 divides by 1 + log(document length): without it a word
+  // repeated through 8,000 characters of prose outranks the same word in a
+  // short product's title on the tiebreak.
+  const kwRank = kwQuery ? Prisma.sql`ts_rank_cd("searchText", ${kwQuery}, 1)` : Prisma.sql`0::float4`;
+  const msgRank = msgQuery ? Prisma.sql`ts_rank_cd("searchText", ${msgQuery}, 1)` : Prisma.sql`0::float4`;
 
   // Coverage: how many DISTINCT shopper/router words this product's text
   // contains. A product that matches "birthstone" + "bracelet" + "february"
@@ -414,37 +487,53 @@ async function keywordSearch(
       });
     }
   }
-  const hitExprs = allTerms.map(
-    (term) => Prisma.sql`("searchText" @@ ${tsq(term)})::int * ${term.w}`,
+  // Field-aware per-term score: full weight when the word sits in the title /
+  // type / vendor / tags (tsvector weights A+B, isolated with ts_filter as
+  // `head`), DESC_WEIGHT of it when it appears only in the description or
+  // metafields (weight C). Uninformative phrases carry w = 0 and add nothing.
+  const scoreExprs = allTerms.map(
+    (term) => Prisma.sql`(CASE WHEN head @@ ${tsq(term)} THEN ${term.w}::float8
+                               WHEN "searchText" @@ ${tsq(term)} THEN ${term.w * DESC_WEIGHT}::float8
+                               ELSE 0::float8 END)`,
   );
-  const coverage = hitExprs.length > 0 ? Prisma.join(hitExprs, " + ") : Prisma.sql`0`;
+  const coverage = scoreExprs.length > 0 ? Prisma.join(scoreExprs, " + ") : Prisma.sql`0::float8`;
   const matchedExprs = allTerms.map(
     (term) => Prisma.sql`CASE WHEN "searchText" @@ ${tsq(term)} THEN ${term.t} END`,
   );
-  const matched =
-    matchedExprs.length > 0
-      ? Prisma.sql`array_remove(ARRAY[${Prisma.join(matchedExprs, ", ")}]::text[], NULL)`
+  const headExprs = allTerms.map(
+    (term) => Prisma.sql`CASE WHEN head @@ ${tsq(term)} THEN ${term.t} END`,
+  );
+  const textArray = (exprs: Prisma.Sql[]): Prisma.Sql =>
+    exprs.length > 0
+      ? Prisma.sql`array_remove(ARRAY[${Prisma.join(exprs, ", ")}]::text[], NULL)`
       : Prisma.sql`ARRAY[]::text[]`;
 
   // Order: coverage first, then router-keyword hit, then weighted ts_rank_cd
-  // (title > type/tags > description). Headline is computed only for the
-  // LIMITed rows (outer query), never the whole catalog — over the description
-  // AND the enabled metafield text, so a metafield-only match still shows the
-  // model the fragment that matched.
+  // (title > type/tags > description). `head` is the stored tsvector
+  // restricted to weights A+B, computed ONCE per matching row in the fenced
+  // base subquery (OFFSET 0 stops the planner inlining it into every per-term
+  // test). Headline is computed only for the LIMITed rows (outer query), never
+  // the whole catalog — over the description AND the enabled metafield text,
+  // for every query word (router and shopper), so a metafield-only match still
+  // shows the model the fragment that matched.
   const rows = await db.$queryRaw<RawRow[]>(Prisma.sql`
     SELECT p.*,
-           ts_headline('english', coalesce(p."description", '') || ' ' || coalesce(p."metafieldText", ''), ${msgQuery ?? kwQuery!},
+           ts_headline('english', coalesce(p."description", '') || ' ' || coalesce(p."metafieldText", ''), ${anyQuery},
              'MaxFragments=2, MaxWords=35, MinWords=12, FragmentDelimiter=" … "') AS headline
     FROM (
-      SELECT ${BASE_COLUMNS}, NULL::float8 AS score, ${kwHit} AS "kwHit",
+      SELECT ${BASE_COLUMN_NAMES}, NULL::float8 AS score, ${kwHit} AS "kwHit",
              (${coverage}) AS coverage, ${kwRank} AS kw_rank, ${msgRank} AS msg_rank,
-             ${matched} AS matched
-      FROM "products"
-      WHERE "shopId" = ${shopId}
-        AND "learnEnabled" = true AND "status" = 'active' AND "publishedOnline" = true
-        AND ${stockCondition(excludeOutOfStock)}
-        AND (${priceMax}::float8 IS NULL OR "price" <= ${priceMax}::float8)
-        AND "searchText" @@ ${anyQuery}
+             ${textArray(matchedExprs)} AS matched, ${textArray(headExprs)} AS "headMatched"
+      FROM (
+        SELECT ${BASE_COLUMNS}, "searchText", ts_filter("searchText", '{a,b}') AS head
+        FROM "products"
+        WHERE "shopId" = ${shopId}
+          AND "learnEnabled" = true AND "status" = 'active' AND "publishedOnline" = true
+          AND ${stockCondition(excludeOutOfStock)}
+          AND (${priceMax}::float8 IS NULL OR "price" <= ${priceMax}::float8)
+          AND "searchText" @@ ${anyQuery}
+        OFFSET 0
+      ) base
       ORDER BY coverage DESC, "kwHit" DESC, kw_rank DESC, msg_rank DESC, "title" ASC
       LIMIT ${limit}
     ) p
@@ -464,7 +553,8 @@ async function vectorSearch(
   return db.$queryRaw<RawRow[]>(Prisma.sql`
     SELECT ${BASE_COLUMNS},
            (1 - ("embedding" <=> ${vec}::vector))::float8 AS score,
-           NULL::text AS headline, FALSE AS "kwHit", NULL::text[] AS matched, 0::int AS coverage
+           NULL::text AS headline, FALSE AS "kwHit", NULL::text[] AS matched,
+           NULL::text[] AS "headMatched", 0::float8 AS coverage
     FROM "products"
     WHERE "shopId" = ${shopId}
       AND "learnEnabled" = true AND "status" = 'active' AND "publishedOnline" = true
@@ -493,7 +583,9 @@ function toCandidate(row: RawRow): ProductCandidate {
     score: row.score === null || row.score === undefined ? null : Number(row.score),
     headline: cleanHeadline(row.headline),
     matchedTerms: row.matched ?? [],
-    coverage: Number(row.coverage ?? 0),
+    headTerms: row.headMatched ?? [],
+    // Two decimals: sums of 0.4-weighted terms otherwise print as 3.5999999….
+    coverage: Math.round(Number(row.coverage ?? 0) * 100) / 100,
     fused: 0,
   };
 }
@@ -509,20 +601,23 @@ function cleanHeadline(headline: string | null | undefined): string | null {
  * Relevance cut (user decision 2026-08-17: "don't show 4 items just to fill
  * the count"). Candidates arrive sorted (coverage, then fused). Keep only the
  * top relevance tier:
- *  - keyword tier present (top coverage > 0): every candidate with that same
- *    coverage — one black bracelet or four, whatever actually matched all the
- *    shopper's words; lower-coverage rows are dropped;
+ *  - keyword tier present (top coverage > 0): every candidate within
+ *    TIER_MARGIN of the top coverage — one black bracelet or four, whatever
+ *    carries the shopper's words in its name/tags the way the best one does;
+ *    products that only mention the words in their prose fall outside it;
  *  - vector-only results: rows within 0.04 cosine of the best score (flat
  *    scores → several; one clear winner → one);
  *  - browse / hand-picked pools (no scores): unchanged.
- * Always at least one, at most `max`.
+ * Always at least one, at most `max`. In the buy lane this is the FALLBACK
+ * card set — the model's own picks over the allow-list come first
+ * (index.server.ts, picks.server.ts).
  */
 export function selectRelevant(candidates: ProductCandidate[], max = 4): ProductCandidate[] {
   if (candidates.length === 0) return [];
   const top = candidates[0];
   let kept: ProductCandidate[];
   if (top.coverage > 0) {
-    kept = candidates.filter((c) => c.coverage === top.coverage);
+    kept = candidates.filter((c) => c.coverage >= top.coverage - TIER_MARGIN);
   } else if (top.score !== null) {
     const floor = top.score - 0.04;
     kept = candidates.filter((c) => c.score !== null && c.score >= floor);
@@ -536,8 +631,9 @@ export function selectRelevant(candidates: ProductCandidate[], max = 4): Product
 /**
  * Short, relevant excerpt handed to the LLM per candidate: type · tags · the
  * matching description/metafield fragment (or the description's start for
- * vector-only rows) · the enabled metafields (bounded). Long descriptions
- * stay full-length in the index; only the payload is bounded.
+ * vector-only rows) · the enabled metafields (bounded) · where each query word
+ * matched. Long descriptions stay full-length in the index; only the payload
+ * is bounded.
  */
 export function candidateSnippet(candidate: ProductCandidate): string {
   const parts: string[] = [];
@@ -549,9 +645,14 @@ export function candidateSnippet(candidate: ProductCandidate): string {
   // shoppers ask about most — always present when set, bounded like the body.
   const meta = candidate.metafieldText.replace(/\s+/g, " ").trim();
   if (meta) parts.push(meta.length > 300 ? `${meta.slice(0, 300)}…` : meta);
-  // Tell the model WHICH of the shopper's words this product matched — the
-  // deciding detail is often deep in a long description ("Birthstone for
-  // Month: February") and may not survive the headline cut.
-  if (candidate.matchedTerms.length > 0) parts.push(`matches: ${candidate.matchedTerms.join(", ")}`);
+  // Tell the model WHICH of the shopper's words this product matched and WHERE.
+  // A word in the name/type/tags is what the product is; a word only in the
+  // prose is often about something else ("pairs with black outfits") — the
+  // deciding detail for the model's picks. The prose match still matters: the
+  // fact may be deep in a long description ("Birthstone for Month: February")
+  // and may not survive the headline cut.
+  const bodyOnly = candidate.matchedTerms.filter((t) => !candidate.headTerms.includes(t));
+  if (candidate.headTerms.length > 0) parts.push(`in title/type/tags: ${candidate.headTerms.join(", ")}`);
+  if (bodyOnly.length > 0) parts.push(`in description: ${bodyOnly.join(", ")}`);
   return parts.join(" · ");
 }

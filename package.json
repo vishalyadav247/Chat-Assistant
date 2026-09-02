@@ -6,11 +6,9 @@
     "dev": "shopify app dev",
     "config:link": "shopify app config link",
     "generate": "shopify app generate",
-    "deploy": "shopify app deploy",
+    "deploy": "node scripts/deploy-shopify.cjs --choose",
     "config:use": "shopify app config use",
     "env": "shopify app env",
-    "start": "react-router-serve ./build/server/index.js",
-    "docker-start": "npm run setup && npm run start",
     "setup": "prisma generate && prisma migrate deploy",
     "lint": "eslint --ignore-path .gitignore --cache --cache-location ./node_modules/.cache/eslint .",
     "shopify": "shopify",
@@ -25,11 +23,15 @@
     "migrate:new": "prisma migrate dev --create-only && tsx scripts/scrub-migration.ts && prisma migrate deploy && prisma generate",
     "dev:stop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-stop.ps1",
     "dev:tunnel": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-tunnel.ps1",
+    "dev:push-proxy": "node scripts/dev-push-proxy.cjs",
+    "config:diff": "node scripts/config-diff.cjs",
     "release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1",
     "release:sync": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1 -Sync",
     "eval:golden": "tsx scripts/eval-golden.ts",
     "trace": "tsx scripts/trace-turn.ts",
-    "logs:check": "tsx scripts/logs-check.ts"
+    "logs:check": "tsx scripts/logs-check.ts",
+    "config:which": "node scripts/deploy-shopify.cjs --which",
+    "deploy:prod": "node scripts/deploy-shopify.cjs"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

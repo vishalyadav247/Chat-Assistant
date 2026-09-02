@@ -470,28 +470,57 @@
       // inline pixel height would survive a rotate or a resize.
       ui.panel.style.height = "";
       ui.panel.style.top = "";
+      ui.panel.style.bottom = "";
+      ui.panel.style.paddingBottom = "";
       return;
     }
+    // Anchor the BOTTOM to the keyboard rather than setting height = vv.height.
+    // A fixed element is laid out against the LAYOUT viewport, while vv.height
+    // measures the VISUAL one; the two have different baselines depending on
+    // the browser's interactive-widget mode, and setting height from the wrong
+    // baseline left the panel ending short of the keyboard with the storefront
+    // showing through the gap. The difference between them IS the keyboard, so
+    // deriving it works in both modes: under resizes-content the layout
+    // viewport has already shrunk, the difference is 0, and bottom: 0 is right.
+    var keyboard = Math.max(0, window.innerHeight - vv.height - (vv.offsetTop || 0));
     // Shrinking the panel must not scroll the newest message out of sight —
     // but only re-pin when the shopper was ALREADY at the bottom, or reading
     // back through history would be yanked away every time the keyboard moves.
     var atBottom =
       ui.body && ui.body.scrollHeight - ui.body.scrollTop - ui.body.clientHeight < 40;
-    ui.panel.style.height = vv.height + "px";
-    // The page can still be scrolled under a fixed element while the keyboard
-    // is up; offsetTop re-pins the panel to what is actually visible.
-    ui.panel.style.top = (vv.offsetTop || 0) + "px";
+    ui.panel.style.height = "auto";
+    ui.panel.style.top = "0px";
+    ui.panel.style.bottom = keyboard + "px";
+    // env(safe-area-inset-bottom) clears the home indicator, but the keyboard
+    // already covers that strip — keeping the inset would park empty panel
+    // between the composer and the keys.
+    ui.panel.style.paddingBottom = keyboard > 0 ? "0px" : "";
     if (atBottom && ui.body) ui.body.scrollTop = ui.body.scrollHeight;
+  }
+
+  /** Android fires several resizes while the keyboard animates in, and the
+   *  last one we see is not always the settled size. Re-measure shortly after
+   *  the burst so a mid-animation value cannot be what sticks. */
+  var vvSettle = null;
+  function syncViewportSettling() {
+    syncViewport();
+    if (vvSettle) clearTimeout(vvSettle);
+    vvSettle = setTimeout(function () {
+      vvSettle = null;
+      syncViewport();
+    }, 300);
   }
 
   function bindViewport() {
     var vv = window.visualViewport;
     if (!vv || vvUnbind) return;
-    vv.addEventListener("resize", syncViewport);
+    vv.addEventListener("resize", syncViewportSettling);
     vv.addEventListener("scroll", syncViewport);
     vvUnbind = function () {
-      vv.removeEventListener("resize", syncViewport);
+      vv.removeEventListener("resize", syncViewportSettling);
       vv.removeEventListener("scroll", syncViewport);
+      if (vvSettle) clearTimeout(vvSettle);
+      vvSettle = null;
       vvUnbind = null;
     };
   }
@@ -574,6 +603,8 @@
     if (ui.panel) {
       ui.panel.style.height = "";
       ui.panel.style.top = "";
+      ui.panel.style.bottom = "";
+      ui.panel.style.paddingBottom = "";
       ui.panel.style.display = "none";
     }
     ui.launcher.style.display = "";

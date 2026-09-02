@@ -90,6 +90,13 @@ async function main() {
   // could not be re-saved from the admin (QA D5).
   interface DemoProduct { title: string; type: string; price: number; stock: number; description: string }
   const products = load<DemoProduct[]>("products.json");
+  // Rows seeded under the pre-QA-D5 id shape are not reachable by the upsert
+  // below and would double every title (and every curated answer that resolves
+  // products by title). Remove them first (2026-09-01).
+  const stale = await db.product.deleteMany({
+    where: { shopId, shopifyProductId: { startsWith: "gid://seed/Product/" } },
+  });
+  if (stale.count > 0) console.log(`removed ${stale.count} stale gid://seed products`);
   // Same text formula as catalog sync (productEmbeddingText) so seed == production.
   const { productEmbeddingText } = await import("../app/lib/embeddings/embedding.server");
   const productVectors = await embed(
@@ -201,8 +208,14 @@ async function main() {
 }
 
 main()
-  .catch((error) => {
-    console.error(error);
-    process.exit(1);
+  .then(async () => {
+    // The embedding client warms a keep-alive agent that a one-shot script has
+    // no reason to drain — exit explicitly rather than idle (like trace-turn.ts).
+    await db.$disconnect();
+    process.exit(0);
   })
-  .finally(() => db.$disconnect());
+  .catch(async (error) => {
+    console.error(error);
+    await db.$disconnect();
+    process.exit(1);
+  });
