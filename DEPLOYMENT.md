@@ -24,13 +24,20 @@ Part 3 is a one-time job. If the app is already running, you never open it.
 
 ## Cheat sheet
 
-**Every dev session**
+**Every dev session** — three terminals; the first two block.
 
 ```powershell
-npm run db:up            # Docker Postgres on 5433 — dev:tunnel does NOT start it
+# 1  stays open all day
 cloudflared tunnel --url http://localhost:3000 --metrics 127.0.0.1:20241
+
+# 2  db:up first — dev:tunnel does NOT start Postgres. Then this IS your dev server.
+npm run db:up
 npm run dev:tunnel
-npm run dev:push-proxy   # only if the cloudflared hostname changed
+
+# 3  once terminal 2 reaches step [4/4]. Needed after every cloudflared restart,
+#    so always on a fresh start; skip it if the hostname is unchanged.
+npm run dev:push-proxy
+
 npm run dev:stop         # when done
 ```
 
@@ -350,11 +357,17 @@ Vite hot-reloads on save. For anything involving the storefront widget, use the
 tunnel instead — leave cloudflared running all day in its own window:
 
 ```powershell
-cloudflared tunnel --url http://localhost:3000 --metrics 127.0.0.1:20241
-npm run dev:tunnel       # stops orphans, refreshes Prisma, points the dev toml at the tunnel
-npm run dev:push-proxy   # only if the hostname changed since last time
+cloudflared tunnel --url http://localhost:3000 --metrics 127.0.0.1:20241   # terminal 1
+npm run dev:tunnel       # terminal 2 — stops orphans, refreshes Prisma, points the
+                         #             dev toml at the tunnel, then BLOCKS as the server
+npm run dev:push-proxy   # terminal 3, after step [4/4]
 npm run dev:stop         # when done
 ```
+
+`dev:tunnel` writes the hostname into `shopify.app.dev.toml`; `dev:push-proxy`
+reads it back and pushes it to Shopify — so the order is forced, and running
+push-proxy first just tells you to run `dev:tunnel`. A fresh cloudflared start
+always means a new hostname, so push-proxy is always needed the first time.
 
 Skipping `db:up` fails late and confusingly — the app boots and only the first
 query reports `Can't reach database server at localhost:5433`.
