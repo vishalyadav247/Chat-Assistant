@@ -21,19 +21,22 @@
 
 ## SUBMISSION BLOCKERS (fix before you press Submit)
 
-> **Status re-verified against the tree on 2026-08-27.** B2 and B4 are **CLOSED in code**
+> **Status re-verified against the tree on 2026-09-01.** B2, B3, B4 and B5 are now **CLOSED**
 > — `app/routes/auth.login/` no longer exists and `shopify.login` is no longer exported;
-> `isBillingTestMode()` returns `false` whenever `NODE_ENV === "production"`. The three
-> that remain (**B1, B3, B5**) are all outside the codebase: a Partner Dashboard request,
-> a config edit at deploy time, and a hosted document. Nothing in the app blocks submission.
+> `shopify.app.toml` carries production URLs with `automatically_update_urls_on_dev = false`;
+> `isBillingTestMode()` returns `false` whenever `NODE_ENV === "production"`; and the privacy
+> policy is published. The one that remains (**B1**) is outside the codebase: a Partner
+> Dashboard request. Nothing in the app blocks submission — but note the production app
+> record **has not been deployed to yet**: run `npm run config:use` → `shopify.app.toml`,
+> then `npm run config:diff` and `npm run deploy`, before submitting.
 
 | # | Blocker | Status | File |
 |---|---|---|---|
 | B1 | **Protected Customer Data level 2 not requested.** `read_customers` / `write_customers` / `read_orders` read customer name/email/phone and order email/phone/shipping address. A public app must request PCD access **and the specific fields** in the Partner Dashboard, implement level 1 + level 2 requirements, and take part in data-protection reviews. Submitting without this is an automatic hold. | **OPEN — Partner Dashboard** | `shopify.app.toml` (justifications now inline), `app/routes/proxy.order-track.tsx`, `app/lib/contacts/contacts.server.ts` |
 | B2 | **`.myshopify.com` shop-domain login form still shipped** at `/auth/login` — violates req **2.3.1** ("must not request the manual entry of a myshopify.com URL"). It was deliberately removed from `_index` but the template route was never deleted, and `authPathPrefix = "/auth"` makes the library bounce to it. Delete `app/routes/auth.login/` and the now-unused `login` export. | **CLOSED 2026-08-21** — route directory deleted, `login` export removed. | `app/routes/auth.login/route.tsx:34-42`, `app/routes/auth.login/error.server.tsx:10,12`, `app/shopify.server.ts:44` |
-| B3 | **All app URLs are a `trycloudflare` dev tunnel** and `automatically_update_urls_on_dev = true`. `application_url`, `[auth].redirect_urls` and `[app_proxy].url` must point at the production host with valid TLS (req **3.1.1**) before `npm run deploy`. Note the app-proxy URL is pinned per store at install time. | **OPEN — deploy-time config** | `shopify.app.toml` (warning comment added) |
+| B3 | **All app URLs must point at the production host with valid TLS** (req **3.1.1**), never a `trycloudflare` dev tunnel, and `automatically_update_urls_on_dev` must be `false`. Note the app-proxy URL is pinned per store at install time. | **CLOSED 2026-09-01** — `application_url`, `[auth].redirect_urls` and `[app_proxy].url` are all `https://chatconvert.progryss.com`; TLS valid to 2026-11-24; flag is `false`. Dev moved to a gitignored `shopify.app.dev.toml`, diffed by `npm run config:diff`. **Takes effect only on `npm run deploy` with the production config selected.** | `shopify.app.toml`, `shopify.app.dev.toml`, `scripts/config-diff.cjs` |
 | B4 | **`billingTestMode` can hand a merchant a paid plan with no Shopify charge in production.** The mock provider makes no Shopify call and persists a fake subscription gid. Operator-only + banner-warned, but it should hard-fail when `NODE_ENV === "production"` — this is the only code path in the repo that bypasses the Billing API (req **1.2.1**). | **CLOSED** — `isBillingTestMode()` returns false when `NODE_ENV === "production"`. | `app/lib/billing/shopify-billing.server.ts:73-80,363-368` |
-| B5 | **Privacy policy document does not exist yet.** Must name OpenAI as processor, state the merchant-configurable transcript retention windows *and* the 7-day post-uninstall retention window, and give a GDPR contact. | **OPEN — hosted document** | listing + hosted policy URL |
+| B5 | **Privacy policy must be published**, naming OpenAI as processor, the merchant-configurable transcript retention windows *and* the 7-day post-uninstall retention window, plus a contact. | **CLOSED 2026-09-01** — live at `https://progryss.com/chatconvert-privacy-policy/` (HTTP 200). Verified to name OpenAI as processor, document the 7-day post-uninstall deletion inside Shopify's 30-day `shop/redact` deadline, and carry real contacts with no unfilled placeholders. Remaining: paste the URL into the App Submission form. | `docs/privacy-policy-page.html` → hosted |
 
 ---
 
@@ -261,12 +264,12 @@ inbox_cart_view | auto_detect_language | exports | csv_import | file_upload`.
 | 2 | Billing | **PASS** (B4 closed) / PENDING-MANUAL (test charges) |
 | 3 | Mandatory compliance webhooks | **PASS** (HMAC 401, <20 ms, real workflows — live-verified) |
 | 4 | Scopes | **GAP B1** (PCD level 2 not requested) / PENDING-MANUAL (listing text) |
-| 5 | Performance | PASS (15.30 KB gzip) / PENDING-MANUAL (Lighthouse) |
+| 5 | Performance | PASS (22.06 KB gzip, budget 30) / PENDING-MANUAL (Lighthouse) |
 | 6 | Theme extension | PASS |
 | 7 | UX / embedded correctness | PASS / MINOR (4 internal `s-link`, 4 resource-route boundaries) |
 | 8 | Listing | PENDING-MANUAL |
-| 9 | Privacy policy | **GAP B5** |
+| 9 | Privacy policy | **PASS** (B5 closed — policy live and verified) |
 | 10 | Install / uninstall lifecycle | **PASS** (104/104 live) — 3 defects found and fixed |
 | 11 | AI-specific | PASS |
 | 12 | Security & tenancy | PASS (tenancy) / MINOR (headers, `entry.server.tsx`) |
-| — | Production URLs | **GAP B3** (dev tunnel in `shopify.app.toml`) |
+| — | Production URLs | **PASS** (B3 closed — production URLs pinned; still needs `npm run deploy` against the production config) |

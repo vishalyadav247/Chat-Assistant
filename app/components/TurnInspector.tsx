@@ -27,8 +27,10 @@ const OPEN_BY_DEFAULT = new Set([
   "curated_match",
   "knowledge_search",
   "product_search",
+  "question_rescue",
   "allow_list",
   "generation",
+  "model_picks",
 ]);
 
 const LONG_VALUE = 90;

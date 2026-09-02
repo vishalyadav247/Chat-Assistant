@@ -1,8 +1,9 @@
 # ChatConvert — Pre-Submission Test Cases
 
 > Written 2026-08-21 for the manual-QA pass that gates production deploy + App Store submission.
-> Execution results live in `scripts/qa/test-matrix.xlsx` (regenerate with
-> `npx tsx scripts/qa/make-test-matrix.ts`). Defects are logged in the PROGRESS.md decisions log.
+> Execution results live in `scripts/qa/make-test-matrix.ts`, which renders them to
+> `test-matrix.xlsx` (`npx tsx scripts/qa/make-test-matrix.ts`; the sheet is generated and
+> gitignored — edit the `.ts`). Defects are logged in the PROGRESS.md decisions log.
 >
 > **Scenario legend** — every case is run in as many of these as apply:
 > `H` happy path · `B` boundary/limit · `A` adversarial (forged input, replay, injection) ·
@@ -114,7 +115,11 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 
 | ID | Case | Expected | Scenarios |
 |---|---|---|---|
-| D-01 | Golden set | `npm run eval:golden` passes 16/16 | H |
+| D-01 | Golden set | `npm run eval:golden` passes 19/19 (incl. the 3 precision cases — a product that only mentions the word in its prose is never carded) | H |
+| D-14 | Field-aware coverage (S12–S15, `features.test.ts`) | A word in the title scores 4, the same word only in the description 2.8; `headTerms` say where; `selectRelevant` keeps the literal match only; the snippet tells the model `in title/type/tags:` vs `in description:` | B |
+| D-15 | Picks protocol (P1–P4) | `PICKS: 3, 1` / `PICKS: none` parsed, markdown noise tolerated, prose never mistaken for picks; the stream splitter strips the line and blank lines, passes prose byte-for-byte, reports a picks-only reply | B |
+| D-16 | Router block guard (G1) | `configuredTopicNamedBy` matches configured topics prefix-tolerantly ("political opinions" → politics), rejects invented reasons ("BANNED TOPIC", "security devices") and bare filler | B |
+| D-17 | Question → catalogue rescue | A `question` with no knowledge hit but a product carrying a shopper word + vector agreement is answered from the catalogue; `PICKS: none` there serves fallbackMessage and feeds the unresolved queue (`npm run trace -- "how do I clean my bracelet" --shop …`) | H |
 | D-02 | gpt-4 family params unchanged | `samplingParams` returns exactly `{temperature, max_tokens}` for gpt-4o-mini/4o/4.1/4.1-mini/4.1-nano — byte-identical guarantee | B |
 | D-03 | Reasoning models | o1/o3-mini/o4-mini/gpt-5* → `max_completion_tokens`, no temperature/max_tokens | B |
 | D-04 | Switch chat model at runtime | Change `CHAT_MODEL` or the `/platform/ai` override → effective within the 30s cache, no code change, no redeploy | H |

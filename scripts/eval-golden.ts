@@ -18,6 +18,8 @@ interface GoldenCase {
   expectCards?: boolean;
   /** At least one returned card title must match (checks ranking, not just recall). */
   expectCardTitle?: RegExp;
+  /** No returned card title may match (checks precision — the wrong product must NOT be shown). */
+  rejectCardTitle?: RegExp;
 }
 
 const GOLDEN: GoldenCase[] = [
@@ -46,6 +48,14 @@ const GOLDEN: GoldenCase[] = [
   { input: "a bottle that keeps drinks hot", expectOutcome: ["buy"], expectCards: true, expectCardTitle: /Tumbler|Bottle/ },
   // Bare "customer service" is a question, not a hand-off (handover.server.ts patterns).
   { input: "what is your customer service email?", expectOutcome: ["question", "fell_back"] },
+  // ── Field-aware ranking + model picks (2026-09-01) — the real-store failure:
+  // long descriptions name OTHER products' colours and stones ("pairs with
+  // black outfits", "recharge on a selenite plate"). A word only in the prose
+  // must not make a product a match; the literal title match must win.
+  { input: "show me black bracelets", expectOutcome: ["buy"], expectCards: true, expectCardTitle: /Black Onyx/, rejectCardTitle: /Rose Quartz/ },
+  { input: "do you have selenite bracelets", expectOutcome: ["buy"], expectCards: true, expectCardTitle: /Selenite Crystal/, rejectCardTitle: /Rose Quartz/ },
+  // Question-shaped product ask: routed buy, or question → catalogue rescue.
+  { input: "which bracelet is good for love", expectOutcome: ["buy"], expectCards: true, expectCardTitle: /Rose Quartz/ },
 ];
 
 async function main() {
@@ -84,6 +94,9 @@ async function main() {
     }
     if (testCase.expectCardTitle && !cards.some((c) => testCase.expectCardTitle!.test(c.title))) {
       problems.push(`no card matched ${testCase.expectCardTitle}: [${cards.map((c) => c.title).join(" | ")}]`);
+    }
+    if (testCase.rejectCardTitle && cards.some((c) => testCase.rejectCardTitle!.test(c.title))) {
+      problems.push(`a card matched ${testCase.rejectCardTitle} and must not: [${cards.map((c) => c.title).join(" | ")}]`);
     }
 
     if (problems.length === 0) {

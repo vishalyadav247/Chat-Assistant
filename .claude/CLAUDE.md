@@ -27,7 +27,7 @@ Iron rules: every DB query shop-scoped (`shopId`); never `prisma db push`; webho
 - `npm run setup` — `prisma generate && prisma migrate deploy`
 - `npx prisma db seed` — seed the dev shop from `prisma/seed-data/` (works without OPENAI_API_KEY via pseudo-embeddings)
 - `npm run smoke` — foundation smoke test (pgvector, hybrid/keyword search, curated match, RAG)
-- `npm run deploy` — deploy app config and extensions to Shopify
+- `npm run deploy:prod` — publish an app version to Shopify (production; guarded — verifies the selected config and pins `--client-id`). `npm run dev:push-proxy` is the dev-app equivalent. Bare `npm run deploy` now stops and asks which one you mean.
 - `npm run graphql-codegen` — regenerate GraphQL types into `app/types/` (config in `.graphqlrc.ts`)
 
 There is no test suite configured.
@@ -42,7 +42,7 @@ Embedded Shopify Admin app built on **React Router v7** (framework mode, convert
 - `app/routes/auth.*` — OAuth/login flows.
 - `app/routes/webhooks.*.tsx` — webhook handlers using `authenticate.webhook(request)`. Webhook subscriptions are declared app-specific in `shopify.app.toml` (not via `afterAuth`/`registerWebhooks`), so they sync automatically on deploy.
 - `app/db.server.ts` — Prisma client singleton; schema in `prisma/schema.prisma` (Session table only).
-- `shopify.app.toml` — app config: access scopes, webhook subscriptions, and declarative custom data (product metafield + metaobject definitions). Changes here take effect on `npm run deploy`.
+- `shopify.app.toml` — app config: access scopes, webhook subscriptions, and declarative custom data (product metafield + metaobject definitions). Changes here take effect on `npm run deploy:prod`.
 - `extensions/` — Shopify app extensions workspace (npm workspaces); currently empty. Generate with `npm run generate`.
 
 ### Data access pattern
