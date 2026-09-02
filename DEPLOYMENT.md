@@ -22,6 +22,53 @@ following this on a different box.
 
 Part 3 is a one-time job. If the app is already running, you never open it.
 
+## Cheat sheet
+
+**Every dev session**
+
+```powershell
+npm run db:up            # Docker Postgres on 5433 — dev:tunnel does NOT start it
+cloudflared tunnel --url http://localhost:3000 --metrics 127.0.0.1:20241
+npm run dev:tunnel
+npm run dev:push-proxy   # only if the cloudflared hostname changed
+npm run dev:stop         # when done
+```
+
+**Promoting to production**
+
+```powershell
+npm run release -- "what changed"
+#   merge the PR on GitHub
+npm run release:sync
+```
+```bash
+bash scripts/deploy.sh                      # on the droplet — SERVER FIRST
+```
+```powershell
+npm run config:use -- shopify.app.toml      # then the widget
+npm run config:which                        # must say PRODUCTION
+npm run deploy:prod -- "what changed"
+npm run config:use -- dev                   # switch back, always
+```
+
+**Server before widget.** A new widget calling an endpoint the server does not
+have yet breaks for shoppers immediately; a new server with the old widget is
+almost always fine, because endpoint changes are additive.
+
+**Switch back to dev.** Left on the production config, the next `npm run dev`
+runs against the live app and rotates the real store's access token — the cause
+of 21x 401 `embed_status_error` on 2026-08-27.
+
+**Neither deploy is always needed:**
+
+| Changed | `deploy.sh` | `deploy:prod` |
+|---|---|---|
+| `app/**`, `prisma/**` only | yes | no |
+| `extensions/**` | no | yes |
+| `shopify.app.toml` | no | yes — run `npm run config:diff` first |
+| docs only | no | no |
+
+
 ---
 
 # Part 1 — Routine release
@@ -34,124 +81,54 @@ dev  ──commit──►  push origin dev  ──►  PR  ──►  merge to 
 
 ## Three destinations, three commands
 
-This is the part that catches people. A release is not one action, and a file
-only reaches production through **its own** path:
+A file only reaches production through **its own** path:
 
 | What changed | Ends up on | Gets there via | Run from |
 |---|---|---|---|
 | `app/**`, `prisma/**` | your droplet | `bash scripts/deploy.sh` | the server |
 | `extensions/**` | Shopify's CDN | `npm run deploy:prod` | your laptop |
-| `shopify.app.toml` (scopes, webhooks, URLs, proxy) | the Shopify app record | `npm run deploy:prod` | your laptop |
+| `shopify.app.toml` | the Shopify app record | `npm run deploy:prod` | your laptop |
 
-Pulling on the droplet does nothing for the storefront widget — it is hosted by
-Shopify, not by you. A release touching both needs **both** commands, and the
-usual failure is running only `deploy.sh` and wondering why the widget never
-changed.
+Pulling on the droplet does nothing for the widget — Shopify hosts it.
+`shopify app deploy` never touches your server. Server first, then widget: a new
+widget calling a missing endpoint breaks shoppers immediately; the reverse is
+safe.
 
-Conversely, `shopify app deploy` never touches your server. It means exactly one
-thing: *publish to Shopify*.
-
-### Check which app you are pointed at — every time
+### Which app are you pointed at?
 
 ```powershell
-npm run config:which
+npm run config:which        # then: npm run config:use -- shopify.app.toml | dev
 ```
 
-```
-active config file : shopify.app.toml
-app name           : ChatConvert - AI Sales ChatBot
-client id          : 6b2bcbe0ed1fc4b0600f96acc4f0eb72  <- PRODUCTION
-```
+**The selection is machine-local CLI state, absent from git**, so it never shows
+in a diff and stays on the **dev** app after every dev session. An unguarded
+`npm run deploy` then publishes *chatConvert2* — no error, no warning, merchants
+get nothing.
 
-**The selection is machine-local CLI state, not something in this repo.**
-`.shopify/project.json` holds only dev-store URLs; nothing in git records which
-app the CLI has active. So it never appears in a diff, it survives across
-sessions, and it is left pointing at the **dev** app every time you finish a day
-of `npm run dev`. Checked 2026-09-02: it was on `shopify.app.dev.toml`.
-
-That is the hazard an unguarded `npm run deploy` walks into — it publishes a
-version of *chatConvert2* instead of production. Nothing errors, nothing warns,
-and merchants simply never receive the change.
-
-To switch:
-
-```powershell
-npm run config:use -- shopify.app.toml     # production
-npm run config:use -- dev                  # back to dev
-```
-
-### Use `deploy:prod`, not `deploy`
-
-```powershell
-npm run deploy:prod -- "what this version contains"
-```
-
-It re-reads the active config, pins `--client-id` to the production app so the
-CLI itself rejects a mismatch, and refuses outright if `shopify.app.toml` has
-picked up a `trycloudflare` / `ngrok` / `localhost` URL from a stray dev session.
-Plain `npm run deploy` has none of those guards — it deploys wherever the CLI
-happens to be pointed.
-
-### Dev deploys are a different job
+`npm run deploy:prod` closes that: it re-checks the active config, pins
+`--client-id`, and refuses if a `trycloudflare`/`ngrok`/`localhost` URL has leaked
+into `shopify.app.toml`.
 
 | | Dev | Production |
 |---|---|---|
 | Command | `npm run dev:push-proxy` | `npm run deploy:prod` |
-| Run it when | the tunnel hostname changed (every cloudflared restart), or you are testing a widget change on the dev store | `extensions/**` changed, or `shopify.app.toml` changed |
+| When | tunnel hostname changed | `extensions/**` or `shopify.app.toml` changed |
 | Never for | — | changes confined to `app/**` |
-
-### Rebuilding on the server is decided for you
-
-Rebuilding is a droplet concern — `app/**` compiled by Vite, restarted under
-pm2 — and has nothing to do with `shopify app deploy`. You do not judge when it
-is needed: `deploy.sh` reads the diff and runs only the stages that diff
-requires. The table is under [The short version](#the-short-version).
 
 ## The short version
 
-Two scripts do the whole loop. Everything under [The long version](#the-long-version)
-is what they run, kept because you need to recognise the steps when one of them
-stops.
+Commands are in the [cheat sheet](#cheat-sheet). What they do:
 
-**On your laptop:**
+**`npm run release`** — merges `origin/main` into `dev`, runs typecheck and lint,
+commits, pushes `dev`, opens the PR compare view. It stops before merging: that
+review is the last place a stray secret or unwanted migration is caught. Nothing
+is pushed if a check fails. **`npm run release:sync`** afterwards levels local
+`main` and `dev` with the remote.
 
-```powershell
-npm run release -- "what changed and why"
-```
-
-Merges `origin/main` into `dev`, runs typecheck and lint, commits, pushes `dev`,
-and opens the PR compare view. It stops before merging — that review is the last
-place a stray secret or an unwanted migration gets caught. Nothing is committed
-or pushed if typecheck or lint fails.
-
-After you merge the PR on GitHub:
-
-```powershell
-npm run release:sync
-```
-
-**On the droplet:**
-
-```bash
-cd /var/www/chatconvert.progryss.com/html
-bash scripts/deploy.sh
-```
-
-Pulls `main`, works out what actually changed, runs only the steps that change
-needs, restarts pm2, and then **proves the app is answering on its port** before
-reporting success. It refuses to run on a dirty tree or a branch other than
-`main`, and prints the rollback command if the health check fails.
-
-**And, only if `extensions/**` or `shopify.app.toml` changed** — back on your
-laptop:
-
-```powershell
-npm run config:which                       # confirm PRODUCTION, not dev
-npm run deploy:prod -- "what changed"
-```
-
-That is a separate destination, not an extra step of the same one. See
-[Three destinations](#three-destinations-three-commands).
+**`scripts/deploy.sh`** — pulls `main`, runs only the stages the diff needs,
+restarts pm2, then **proves the app answers on its port** before reporting
+success. Refuses a dirty tree or a branch other than `main`; prints the rollback
+command if the health check fails. You never judge what to rebuild:
 
 | Changed files | `npm ci` | `npm run setup` | `npm run build` | restart |
 |---|---|---|---|---|
@@ -205,55 +182,44 @@ git push personal main
 
 ### Step 4 — deploy to the server
 
-Scope: everything below stays inside `/var/www/chatconvert.progryss.com/`.
-The only things this app owns outside that directory are its nginx site file
-(`/etc/nginx/sites-available/chatconvert.progryss.com`), its pm2 entry
-(`chatconvert`) and its database (`chatconvert`). Never touch the other apps on
-this box.
-
 ```bash
 cd /var/www/chatconvert.progryss.com/html
 bash scripts/deploy.sh
 ```
 
-That is the whole deploy. The sequence it runs, when every stage is needed, is:
+Scope: stay inside `/var/www/chatconvert.progryss.com/`. Outside it this app owns
+only its nginx site file, its pm2 entry (`chatconvert`) and its database. Never
+touch the other apps on this box.
+
+The sequence the script runs, when every stage is needed:
 
 ```bash
 git pull --ff-only origin main
 npm ci
-sed -i 's/\r$//' .env                          # only when CRLF is present
+sed -i 's/$//' .env                          # only when CRLF is present
 ( set -a; . ./.env; set +a; npm run setup )    # prisma generate && migrate deploy
 npm run build
 pm2 restart chatconvert
 ```
 
-> **Why `npm run setup` and not just `migrate deploy`.** `npm ci` deletes
-> `node_modules`, which takes the generated Prisma client with it, and this repo's
-> `.npmrc` environment does not reliably re-run Prisma's postinstall. Skipping the
-> generate step produced a live outage on 2026-08-27: the build succeeded, pm2
-> reported `online`, nothing listened on 3003, and the only clue was
-> `@prisma/client did not initialize yet` in the error log. `npm run setup` is the
-> repo's own script for exactly this pair — generate, then migrate.
->
-> Order matters too: generate **before** build, so the build compiles against the
-> client that will exist at runtime.
+> **`npm run setup`, not bare `migrate deploy`.** `npm ci` deletes `node_modules`
+> and the generated Prisma client with it, and this repo's `.npmrc` does not
+> reliably re-run Prisma's postinstall. Skipping generate caused the 2026-08-27
+> outage: build succeeded, pm2 said `online`, nothing listened on 3003, and the
+> only clue was `@prisma/client did not initialize yet`. Generate **before**
+> build, so the build compiles against the client that exists at runtime.
 
-The script's last stage is the one worth understanding. It polls
-`http://127.0.0.1:$PORT/` for up to 45 seconds and treats **any** HTTP status as
-success — the failure it is looking for is `000`, a refused connection, which is
-precisely what a green `pm2 list` hides. That is how the 2026-08-27 outage went
-unnoticed: pm2 said `online` while nothing was listening.
+The last stage matters: it polls `http://127.0.0.1:$PORT/` for 45s and accepts
+**any** HTTP status — the failure it hunts is `000`, a refused connection, which
+is exactly what a green `pm2 list` hides. On failure it dumps the last 40 error
+lines and prints the rollback command.
 
-If it fails, the script dumps the last 40 error lines and prints the rollback
-command. To check by hand at any time:
+By hand:
 
 ```bash
 curl -I https://chatconvert.progryss.com/
-pm2 list | grep chatconvert
+pm2 list | grep chatconvert          # a climbing restart counter = failed deploy
 ```
-
-Watch the restart counter. If it climbs, the deploy failed — check
-`pm2 logs chatconvert --err --lines 50` before doing anything else.
 
 ## What never goes in that loop
 
@@ -291,90 +257,66 @@ loop above is only for shipping something you have already tested.
 
 ## One-time setup
 
-**1. A separate Shopify app for development.** This is the important one.
-`shopify.app.toml` is the production app — it points at
-`chatconvert.progryss.com` and is installed on real stores. Running
-`shopify app dev` against it rewrites its URLs to a throwaway tunnel and rotates
-the live store's access token (that is what produced 21 x 401
-`embed_status_error` in production on 2026-08-27). Shopify's own guidance is to
-never develop against an app that is installed on a live store.
+**1. A separate Shopify app.** Never run `shopify app dev` against
+`shopify.app.toml` — it rewrites the production URLs to a throwaway tunnel and
+rotates the live store's access token (21 x 401 `embed_status_error` in
+production, 2026-08-27).
 
 ```powershell
 npm run config:link          # name it "dev" -> creates shopify.app.dev.toml
-npm run config:use -- dev    # make it the default for dev commands
+npm run config:use -- dev
 ```
 
-In `shopify.app.dev.toml` set `automatically_update_urls_on_dev = true` — the dev
-app *should* follow the tunnel. In `shopify.app.toml` it stays `false`, forever.
+Set `automatically_update_urls_on_dev = true` in `shopify.app.dev.toml` (the dev
+app *should* follow the tunnel); in `shopify.app.toml` it stays `false`, forever.
 `shopify.app.*.toml` is gitignored, so a dev config can never be mistaken for
-production.
+production. `npm run config:diff` compares scopes, webhooks and custom data
+between the two, ignoring the URLs and client id that are meant to differ — run
+it before promoting anything that touched `shopify.app.toml`.
 
-Keep the two configs honest with:
-
-```powershell
-npm run config:diff
-```
-
-It compares scopes, webhooks and custom data between dev and production, ignoring
-the URLs and client id that are *supposed* to differ. Run it before promoting a
-feature that touched `shopify.app.toml`.
-
-**2. The database.** Postgres with pgvector, in Docker, on port 5433 so it
-cannot collide with anything else:
+**2. The database.** Postgres + pgvector in Docker on port 5433:
 
 ```powershell
 npm run db:up
 npm run setup                # prisma generate && migrate deploy
-npx prisma db seed           # demo shop + catalog; works without an OpenAI key
+npx prisma db seed           # demo shop + catalog; no OpenAI key needed
 ```
 
-**3. `.env`.** Copy `.env.example` and point `DATABASE_URL` at
-`postgresql://chatconvert:chatconvert@localhost:5433/chatconvert`. This file is
-yours alone — it is never the server's `.env`.
+**3. `.env`.** Copy `.env.example`, point `DATABASE_URL` at
+`postgresql://chatconvert:chatconvert@localhost:5433/chatconvert`. Yours alone —
+never the server's `.env`.
 
 ## The app proxy — the expensive one to get wrong
 
-The storefront widget reaches the app **only** through the app proxy
-(`/apps/ccwidget`, hardcoded in `extensions/chat-widget/blocks/chat-widget.liquid`).
-Getting it wrong costs a whole session, because every symptom looks like a
-broken widget. It is not — it is a routing gap.
+The widget reaches the app **only** through `/apps/ccwidget` (hardcoded in
+`extensions/chat-widget/blocks/chat-widget.liquid`). Every symptom looks like a
+broken widget; it is a routing gap.
 
-**`shopify app dev` does not manage `[app_proxy].url`.** It rewrites
-`application_url` and `redirect_urls` on every run and leaves the proxy alone.
-`scripts/sync-dev-urls.cjs` (run automatically by `npm run dev:tunnel`) fixes the
-local file — but the local file is not what Shopify routes on.
+- **`shopify app dev` does not manage `[app_proxy].url`.** It rewrites
+  `application_url` and `redirect_urls` only. `sync-dev-urls.cjs` (run by
+  `dev:tunnel`) fixes the local file — but Shopify does not route on that file.
+- **A plain `shopify app deploy` does not push it either.** The CLI strips
+  `include_config_on_deploy` after every deploy; without that key a deploy ships
+  the *extension* and silently drops the app configuration. Two releases
+  (`chatconvert2-3`, `-4`) were burned discovering this.
 
-**A plain `shopify app deploy` does not push it either.** The CLI strips
-`include_config_on_deploy` from the config file after every deploy, and without
-that key a deploy releases the *extension* and silently leaves the app
-configuration behind. Two releases (`chatconvert2-3`, `-4`) were burned
-discovering that.
-
-So after the tunnel hostname changes — which with a cloudflared quick tunnel is
-**every restart** — run:
+So whenever the tunnel hostname changes — every cloudflared restart:
 
 ```powershell
 npm run dev:push-proxy
 ```
 
-It re-adds `include_config_on_deploy`, deploys `--config dev`, and refuses to run
-if `shopify.app.dev.toml` is carrying the production client id. The manual
-equivalent is Dev Dashboard → App setup → App proxy:
+It re-adds the key, deploys `--config dev`, and refuses if
+`shopify.app.dev.toml` carries the production client id. Manual equivalent: Dev
+Dashboard → App setup → App proxy, prefix `apps`, subpath `ccwidget`, URL
+`https://<current-tunnel-host>/proxy`.
 
-| Field | Value |
-|---|---|
-| Subpath prefix | `apps` |
-| Subpath | `ccwidget` |
-| Proxy URL | `https://<current-tunnel-host>/proxy` |
-
-> **ngrok would fix the churn, but cannot be used here.** A reserved ngrok domain
-> never changes, so the proxy URL would be a one-time setting. But ngrok's free
-> tier serves an interstitial page to anything with a browser User-Agent
-> (`ERR_NGROK_6024`), and Shopify forwards the shopper's real User-Agent through
-> the proxy — so every widget request gets the interstitial instead of your app.
-> Verified by hand: plain curl UA → 400 (the app), browser UA → `ERR_NGROK_6024`,
-> browser UA + `ngrok-skip-browser-warning` → still the interstitial. A paid plan
-> or a stable cloudflared named tunnel are the two real fixes.
+> **ngrok would end the churn but cannot be used.** A reserved domain never
+> changes, so the proxy URL would be set once — but ngrok's free tier serves an
+> interstitial to any browser User-Agent (`ERR_NGROK_6024`) and Shopify forwards
+> the shopper's real UA. Verified: curl UA → 400 (the app); browser UA →
+> `ERR_NGROK_6024`; browser UA + `ngrok-skip-browser-warning` → still the
+> interstitial. Fixes: a paid plan, or a stable cloudflared named tunnel.
 
 ### Telling the two 404s apart
 
@@ -400,35 +342,28 @@ part except Shopify's routing is correct.
 ## The daily loop
 
 ```powershell
-npm run db:up                # once per boot; Docker keeps it running after
-npm run dev                  # or: npm run dev:tunnel
+npm run db:up            # Docker Desktop must be running; dev:tunnel does NOT do this
+npm run dev              # admin-only work
 ```
 
-Vite hot-reloads on save, so most changes appear without restarting anything.
-
-`npm run dev:tunnel` is the alternative when the CLI's built-in tunnel is
-unreliable, and the one to use when you need the storefront widget. It stops
-orphaned servers, refreshes the Prisma client, points `shopify.app.dev.toml` at
-the tunnel (including `[app_proxy].url`), and starts the CLI against a
-cloudflared quick tunnel you leave running all day in its own window:
+Vite hot-reloads on save. For anything involving the storefront widget, use the
+tunnel instead — leave cloudflared running all day in its own window:
 
 ```powershell
 cloudflared tunnel --url http://localhost:3000 --metrics 127.0.0.1:20241
+npm run dev:tunnel       # stops orphans, refreshes Prisma, points the dev toml at the tunnel
+npm run dev:push-proxy   # only if the hostname changed since last time
+npm run dev:stop         # when done
 ```
 
-Then, if the hostname changed since last time, `npm run dev:push-proxy`.
+Skipping `db:up` fails late and confusingly — the app boots and only the first
+query reports `Can't reach database server at localhost:5433`.
 
-When you are done:
-
-```powershell
-npm run dev:stop
-```
-
-Use it. `shopify app dev` spawns a child Vite process that survives Ctrl-C on
-Windows, and each orphan holds a lock on the Prisma query engine — which is what
-makes a later `prisma generate` fail with EPERM. `dev-stop.ps1` deliberately does
-**not** kill other project node processes (`eval:golden`, a QA suite, prisma
-studio); it names them instead, because those also hold that lock.
+Always `dev:stop`: `shopify app dev` spawns a child Vite process that survives
+Ctrl-C on Windows, and each orphan locks the Prisma query engine, which is what
+makes a later `prisma generate` fail with EPERM. It deliberately does **not**
+kill other project node processes (`eval:golden`, a QA suite, prisma studio) —
+it names them instead, since those hold the same lock.
 
 ## Checking your work without a browser
 
@@ -719,15 +654,10 @@ EMAIL_FROM="ChatConvert <no-reply@progryss.com>"
 
 Save with `Ctrl+O`, `Enter`, then `Ctrl+X`.
 
-> **Keep the quotes on `EMAIL_FROM`.** Without them the `<` becomes a shell redirect in
-> command 21 and breaks it.
->
-> `SCOPES` must match `shopify.app.toml` exactly — copy it verbatim.
->
-> Everything else in `.env.example` is optional: the operator sets it at `/platform`
-> after login, and the dashboard value wins over the file.
->
-> No Resend account yet? Set `EMAIL_PROVIDER=log` and leave `RESEND_API_KEY` blank.
+> **Keep the quotes on `EMAIL_FROM`** — without them `<` is a shell redirect in
+> command 21. `SCOPES` must match `shopify.app.toml` verbatim. Everything else in
+> `.env.example` is optional: the operator sets it at `/platform`, and the dashboard
+> value wins. No Resend account yet? `EMAIL_PROVIDER=log`, blank `RESEND_API_KEY`.
 
 ### 15. Strip Windows line endings — do not skip
 
@@ -800,15 +730,10 @@ npm run build
 
 **Expect:** `✓ built in ~5s`, then `build/client` and `build/server` written.
 
-> **Memory.** This box has ~1.0 GB available and the Vite build is the biggest spike
-> the app ever produces. Watch it in a second SSH session with `free -h`. If the build
-> dies with no error message, that was the OOM killer — retry with a cap:
->
-> ```bash
-> NODE_OPTIONS=--max-old-space-size=1024 npm run build
-> ```
->
-> If it still fails, build on your laptop and `rsync` the `build/` directory up.
+> **Memory.** ~1.0 GB free, and this build is the app's biggest spike. A silent
+> death is the OOM killer — retry with
+> `NODE_OPTIONS=--max-old-space-size=1024 npm run build`, watching `free -h` in a
+> second session. Still failing: build on your laptop and `rsync` `build/` up.
 
 **Do not run `npx prisma db seed`.** That loads demo-shop fixtures; it is a
 development tool only.
@@ -853,22 +778,16 @@ pm2 start ecosystem.config.cjs
 
 **Expect:** a pm2 table with `chatconvert` · `online` · `fork` mode.
 
-> `ecosystem.config.cjs` ships in the repo, so there is nothing to type or mistype. It
-> derives every path from `__dirname`, so it works from any checkout location, and it
-> carries **no secrets** — `.env` is loaded by node's `--env-file`, which the file wires
-> up. This app has no `dotenv` dependency; without that wiring the process starts and
-> immediately dies with `Invalid environment: DATABASE_URL is required` while `.env`
-> sits right there.
+> `ecosystem.config.cjs` ships in the repo — nothing to mistype. Paths derive from
+> `__dirname`, it carries **no secrets**, and it wires `.env` through node's
+> `--env-file`. This app has no `dotenv`; without that wiring the process dies with
+> `Invalid environment: DATABASE_URL is required` while `.env` sits right there.
+> It mirrors `zipeta`'s registration, plus `instances: 1`, `watch: false` and
+> `max_memory_restart: 500M`.
 >
-> It mirrors how `zipeta` is registered (same script path, same
-> `./build/server/index.js` argument, same fork mode) and additionally pins
-> `instances: 1`, disables `watch`, and sets `max_memory_restart: 500M` as a leak
-> guard on this memory-constrained box.
->
-> **Exactly one instance. Never `pm2 start -i` / cluster mode.** The pg-boss job queue
-> starts *inside* the web process (`app/entry.server.tsx`) and owns the cron schedules
-> for GDPR erasure, retention purge, analytics rollup and auto-resolve. Two copies run
-> every job twice.
+> **Exactly one instance. Never cluster mode.** pg-boss starts *inside* the web
+> process (`app/entry.server.tsx`) and owns the GDPR-erasure, retention-purge,
+> rollup and auto-resolve schedules. Two copies run every job twice.
 
 ### 24. Persist across reboots
 
@@ -1048,12 +967,10 @@ prefix = "apps"
 ```
 
 > **The app-proxy URL is pinned per store at install time.** A store records `url`,
-> `subpath` and `prefix` when the app is installed and never refreshes them. Changing
-> any of the three later requires a real uninstall and reinstall on **every** store —
-> redeploying alone does nothing, and the storefront just returns "There was an error
-> in the third-party application" while the widget renders nothing.
->
-> With no merchants installed yet, this is the one moment it is free to get right.
+> `subpath` and `prefix` on install and never refreshes them. Changing any of the
+> three later needs a real uninstall + reinstall on **every** store; redeploying
+> alone does nothing and the storefront returns "There was an error in the
+> third-party application". With no merchants installed, this is the free moment.
 
 ### 38. Validate
 
