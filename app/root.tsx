@@ -53,7 +53,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <Scripts />
 
         {/* chatsupport widget */}
-        <script src="https://chat.progryss.com/widget/v1.js" data-app-id="chatconvert-live" async></script>
+       
       </body>
     </html>
   );
