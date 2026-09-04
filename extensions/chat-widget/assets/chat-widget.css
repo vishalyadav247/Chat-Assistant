@@ -160,7 +160,14 @@
 
 .cw-body {
   padding: 16px;
+  /* Ground behind the thread. On the old near-white #fbfbfc the white bubbles
+     read as a flat wall of text — only a 1px shadow told a reply from the page
+     behind it. A 4% wash of the merchant's own brand colour gives the messages
+     a surface to sit on, costs no image and no request, and stays in whatever
+     hue the merchant picked. The flat value is the fallback a browser without
+     color-mix keeps. */
   background: var(--cw-surface-2);
+  background: color-mix(in srgb, var(--cw1) 4%, #fcfcfd);
   flex: 1;
   min-height: 240px;
   overflow-y: auto;
@@ -357,6 +364,24 @@
   text-align: left;
 }
 .cw-chip:hover { box-shadow: inset 0 0 0 1px var(--cw1); }
+/* Action buttons under a reply ("Track my order"). Left-aligned and indented
+   past the avatar so they read as part of the agent's turn, unlike starter
+   chips which pin to the shopper's side. */
+.cw-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: -4px 0 0 34px;
+}
+.cw-root .cw-chip--action {
+  padding: 7px 11px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cw1);
+  background: var(--cw-surface);
+  box-shadow: inset 0 0 0 1px var(--cw1);
+}
+.cw-root .cw-chip--action:hover { background: color-mix(in srgb, var(--cw1) 8%, #fff); }
 .cw-typing { display: inline-flex; gap: 4px; padding: 12px; }
 .cw-typing span {
   width: 6px;
@@ -400,7 +425,7 @@
 .cw-card-p { font-size: 12.5px; font-weight: 700; color: var(--cw-ink-strong); }
 .cw-card-actions { display: flex; gap: 6px; margin-top: auto; padding-top: 6px; }
 .cw-btn {
-  flex: 1;
+  flex: auto;
   border-radius: 8px;
   padding: 7px 8px;
   font-size: 11.5px;
@@ -408,8 +433,25 @@
   text-align: center;
   text-decoration: none;
 }
-.cw-btn--primary { background: linear-gradient(135deg, var(--cw1), var(--cw2)); color: #fff; }
+.cw-btn--primary { background: linear-gradient(135deg, var(--cw1), var(--cw2)) !important; color: #fff !important; }
 .cw-btn--ghost { box-shadow: inset 0 0 0 1px var(--cw-border-strong); color: var(--cw-ink); background: var(--cw-surface); }
+/* Pending add-to-cart. `.cw-root` scope beats the `.cw-root button` reset, the
+   same trap already documented on .cw-launcher / .cw-send / .cw-track. */
+.cw-root .cw-btn[disabled] { opacity: 0.75; cursor: default; }
+.cw-root .cw-btn[aria-busy="true"] { display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+.cw-spin {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  border-top-color: #fff;
+  animation: cw-spin 0.6s linear infinite;
+}
+@keyframes cw-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .cw-spin { animation-duration: 2s; }
+}
 
 .cw-retry { align-self: center; color: var(--cw1); font-weight: 650; font-size: 12px; padding: 6px 10px; }
 
@@ -418,7 +460,7 @@
   /* flex-end so the send button stays on the bottom line as the composer
      grows (inputBar auto-grows it to 3 lines, then it scrolls). */
   align-items: flex-end;
-  gap: 10px;
+  gap: 5px;
   padding: 11px 12px;
   background: var(--cw-surface);
   box-shadow: inset 0 1px 0 var(--cw-border);
@@ -460,9 +502,9 @@
    never applied and the send button rendered as a bare icon. Same trap already
    documented on .cw-launcher and .cw-track. */
 .cw-root .cw-send {
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
+  width: 38px;
+  height: 38px;
+  border-radius: 5px;
   background: linear-gradient(135deg, var(--cw1), var(--cw2));
   color: #fff;
   display: flex;

@@ -29,6 +29,7 @@ type Frame =
   | { type: "token"; text: string }
   | { type: "message"; text: string }
   | { type: "cards"; cards: ProductCardData[] }
+  | { type: "actions"; actions: { key: string; label: string; screen: string }[] }
   | { type: "done"; outcome: string; conversationId: string }
   | { type: "trace"; steps: TraceStep[]; summary: TraceSummary }
   | { type: "error"; message: string };
@@ -39,6 +40,10 @@ interface ChatEntry {
   text: string;
   streaming?: boolean;
   cards?: ProductCardData[];
+  /** In-widget buttons this reply offers the shopper (order tracking, contact,
+   *  help). Shown here so the merchant sees what a shopper would see; they are
+   *  inert in the console, which has no widget panel to open. */
+  actions?: { key: string; label: string; screen: string }[];
   source?: ReviewSourceData | null;
   /** The shopper message this turn answered — the inspector's header. */
   question?: string;
@@ -159,6 +164,8 @@ export function TestAiConsole(props: {
           patchEntry(botId, (e) => ({ ...e, text: e.text ? `${e.text}\n${frame.text}` : frame.text }));
         } else if (frame.type === "cards") {
           patchEntry(botId, { cards: frame.cards });
+        } else if (frame.type === "actions") {
+          patchEntry(botId, { actions: frame.actions });
         } else if (frame.type === "done") {
           if (frame.conversationId) {
             conversationIdRef.current = frame.conversationId;
@@ -320,6 +327,19 @@ export function TestAiConsole(props: {
                     currency={props.currency}
                     shopDomain={props.shopDomain}
                   />
+                ) : null}
+
+                {/* What the shopper gets instead of the agent describing a
+                    storefront link that does not exist. Inert here — there is
+                    no widget panel in the console for them to open. */}
+                {entry.actions?.length ? (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                    {entry.actions.map((action) => (
+                      <s-badge key={action.key} tone="info">
+                        {`${action.label} → opens ${action.screen}`}
+                      </s-badge>
+                    ))}
+                  </div>
                 ) : null}
 
                 {entry.role === "bot" && !entry.seeded && !entry.streaming && entry.text ? (

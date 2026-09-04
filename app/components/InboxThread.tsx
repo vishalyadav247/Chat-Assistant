@@ -15,8 +15,40 @@ import type { InboxDetail, InboxMessage } from "./InboxShared";
 // Resolve/Reopen, kebab), messages (day dividers, in/out bubbles, sys rows,
 // Seen receipt) and the composer (Enter=send, Shift+Enter=newline, emoji
 // strip, Send disabled until text).
+//
+// The composer is one DOM shape rendered two ways. On a pointer it is the
+// design's chat bar: field on top, divider, emoji strip with Send at the right.
+// On a phone that costs two rows of a screen that has none to spare, so CSS
+// collapses it to the messaging-app shape — a rounded pill holding an emoji
+// button and the field, with a round Send alongside — and the emoji strip
+// moves into a popover above it. Same markup, no branch, no hydration flash.
 
+/** Quick strip under the desktop composer (design inbox.html) — unchanged. */
 const EMOJI = ["😀", "😅", "👍", "🙏", "❤️", "🎉"];
+
+/** Phone picker: a fuller set, laid out six per row. Six was enough for a
+ *  strip that sat permanently on screen; a picker you open on purpose should
+ *  be worth opening. */
+const EMOJI_PICKER = [
+  "😀", "😃", "😅", "😂", "🙂", "😉",
+  "😍", "🤩", "😊", "😎", "🤗", "🤔",
+  "🙏", "👍", "👏", "🙌", "🤝", "💪",
+  "🔥", "✨", "🎉", "❤️", "✅", "👀",
+];
+
+// A message that is nothing but emoji renders large and without a bubble —
+// every messaging app does this, and at body size a lone 👍 reads as a typo.
+// Emoji inside a sentence stay at text size; nothing else would be legible.
+// Emoji_Component would let digits through ("2025 \uD83C\uDF89" is not an emoji message).
+const EMOJI_ONLY =
+  /^[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}\uFE0F\u200D\s]+$/u;
+const HAS_EMOJI = /\p{Extended_Pictographic}/u;
+
+function isEmojiOnly(content: string): boolean {
+  const trimmed = content.trim();
+  // The cap keeps a wall of emoji from becoming a wall of 30px emoji.
+  return trimmed.length > 0 && trimmed.length <= 16 && EMOJI_ONLY.test(trimmed) && HAS_EMOJI.test(trimmed);
+}
 
 /** Composer stops growing here and scrolls instead. */
 const COMPOSER_MAX_ROWS = 3;
@@ -63,6 +95,8 @@ export function InboxThread({
   const [text, setText] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Phone composer only: the six-emoji strip as a popover above the pill.
+  const [emojiOpen, setEmojiOpen] = useState(false);
   const msgsRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const activeId = active?.id ?? null;
@@ -268,7 +302,11 @@ export function InboxThread({
                     )}{" "}
                     · {dt.time(m.createdAt)}
                   </span>
-                  <span className={`cin-bubble ${out ? "out" : "in"}`}>{m.content}</span>
+                  <span
+                    className={`cin-bubble ${out ? "out" : "in"}${isEmojiOnly(m.content) ? " emo" : ""}`}
+                  >
+                    {m.content}
+                  </span>
                   {/* The AI's recommendations, exactly as the shopper saw them
                       — an agent picking up the thread needs to know which
                       products were already put in front of them. */}
@@ -289,35 +327,76 @@ export function InboxThread({
       </div>
 
       <div className="cin-composer">
-        <textarea
-          ref={composerRef}
-          className="cin-comp-input"
-          aria-label="Type a reply"
-          placeholder="Type a reply…"
-          rows={isMobile ? 1 : 2}
-          maxLength={2000}
-          value={text}
-          disabled={active.blocked}
-          onFocus={() => {
-            if (!isMobile) return;
-            // Opening the keyboard makes the browser scroll the focused field
-            // into view, which drags the whole fixed-height workspace up and
-            // crops the thread header. Undo that once the keyboard has settled
-            // and keep the newest message in sight.
-            window.setTimeout(() => {
-              window.scrollTo(0, 0);
-              const node = msgsRef.current;
-              if (node) node.scrollTop = node.scrollHeight;
-            }, 300);
-          }}
-          onChange={(e) => setText(e.currentTarget.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              send();
-            }
-          }}
-        />
+        {emojiOpen ? (
+          <button
+            type="button"
+            className="cin-epop-scrim"
+            aria-label="Close emoji picker"
+            onClick={() => setEmojiOpen(false)}
+          />
+        ) : null}
+        {emojiOpen ? (
+          <div className="cin-epop" role="menu" aria-label="Insert an emoji">
+            {EMOJI_PICKER.map((emoji) => (
+              <button
+                key={emoji}
+                type="button"
+                className="cin-emoji"
+                aria-label={`Insert ${emoji}`}
+                onClick={() => {
+                  setText((t) => t + emoji);
+                  setEmojiOpen(false);
+                  composerRef.current?.focus();
+                }}
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        <div className="cin-comp-pill">
+          {/* Phone only (CSS-hidden on pointer devices): opens the strip above. */}
+          <button
+            type="button"
+            className="cin-emoji-btn"
+            aria-label="Insert an emoji"
+            aria-haspopup="menu"
+            aria-expanded={emojiOpen}
+            disabled={active.blocked}
+            onClick={() => setEmojiOpen((v) => !v)}
+          >
+            🙂
+          </button>
+          <textarea
+            ref={composerRef}
+            className="cin-comp-input"
+            aria-label="Type a reply"
+            placeholder="Type a reply…"
+            rows={isMobile ? 1 : 2}
+            maxLength={2000}
+            value={text}
+            disabled={active.blocked}
+            onFocus={() => {
+              if (!isMobile) return;
+              // Opening the keyboard makes the browser scroll the focused field
+              // into view, which drags the whole fixed-height workspace up and
+              // crops the thread header. Undo that once the keyboard has settled
+              // and keep the newest message in sight.
+              window.setTimeout(() => {
+                window.scrollTo(0, 0);
+                const node = msgsRef.current;
+                if (node) node.scrollTop = node.scrollHeight;
+              }, 300);
+            }}
+            onChange={(e) => setText(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+          />
+        </div>
         <div className="cin-comp-bar">
           {EMOJI.map((emoji) => (
             <button

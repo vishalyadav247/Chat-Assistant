@@ -274,10 +274,26 @@ const FILLER = new Set([
   "did", "will", "just", "also", "very", "much", "many", "more", "most", "than", "then",
 ]);
 
+/**
+ * "No. 5" / "no - 5" / "#5" / "num 5" → "number 5".
+ *
+ * The mirror of `immutable_normalize_number_ids` in the searchText migration —
+ * both sides must spell an identity number the same way or the index fix only
+ * works for shoppers who happen to type the word "number". A shopper writing
+ * "bracelet for ruling no 5" gets the same terms as one writing it out.
+ * Exported so the QA suite can hold the two definitions together.
+ */
+export function normalizeNumberIds(text: string): string {
+  return text.replace(
+    /(^|[^a-z0-9])(?:no|nos|num|nr|#|№)\.?\s*[-–—]?\s*(\d+)/gi,
+    (_match, before: string, digits: string) => `${before}number ${digits}`,
+  );
+}
+
 function messageTerms(message: string, exclude: Set<string>, priceMax: number | null): string[] {
   const out: string[] = [];
   const priceToken = priceMax !== null ? String(Math.round(priceMax)) : "";
-  for (const word of message.toLowerCase().split(/[^a-z0-9]+/)) {
+  for (const word of normalizeNumberIds(message).toLowerCase().split(/[^a-z0-9]+/)) {
     if (word.length === 0 || FILLER.has(word) || exclude.has(word)) continue;
     // "bracelets" when the router already said "bracelet": the same concept
     // would otherwise be counted twice (once per tier) for every product.
@@ -329,6 +345,15 @@ async function shopLexicon(shopId: string): Promise<{ words: Set<string>; list: 
   global.lexiconCache.set(shopId, entry);
   evictLexicon(global.lexiconCache);
   return entry;
+}
+
+/** Fill the typo-tolerance lexicon off the hot path (widget boot). Never throws. */
+export async function primeLexicon(shopId: string): Promise<void> {
+  try {
+    await shopLexicon(requireShopId(shopId));
+  } catch (error) {
+    logError("lexicon_prime_error", error, { shopId });
+  }
 }
 
 /** Hard cap on cached shop lexicons. The previous rule (`clear()` at 500) threw
@@ -413,7 +438,11 @@ async function keywordSearch(
   limit: number,
   excludeOutOfStock: boolean,
 ): Promise<RawRow[]> {
-  const routerTerms = keywords.map((k) => k.trim().toLowerCase()).filter((k) => k.length > 0);
+  // Router keywords get the same identity-number spelling as the index — the
+  // model is as likely to echo the shopper's "no 5" as to write "number 5".
+  const routerTerms = keywords
+    .map((k) => normalizeNumberIds(k).trim().toLowerCase())
+    .filter((k) => k.length > 0);
   const msgTerms = await correctTerms(
     shopId,
     messageTerms(message, new Set(routerTerms), priceMax),

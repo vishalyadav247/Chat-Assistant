@@ -95,6 +95,46 @@ export const FILTERS: Record<FilterKey, { label: string; test: (c: InboxRow) => 
   blocked: { label: "Blocked", test: (c) => c.blocked },
 };
 
+// Per-filter glyphs. A rail of seven text rows reads as a list of words; the
+// same rail with a coloured mark per tab reads as a control you can scan.
+const FILTER_ICON_PATHS: Record<FilterKey, string[]> = {
+  all: ["M3 12h5l1.6 2.6h4.8L16 12h5", "M5.6 4.6h12.8l2.6 7.4v5.4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V12z"],
+  open: [
+    "M20.5 11.6a7.9 7.9 0 0 1-8.5 7.9 9 9 0 0 1-3.4-.7L3.5 20.5l1.7-4.2a7.9 7.9 0 0 1-1.2-4.7A7.9 7.9 0 0 1 12 3.7a7.9 7.9 0 0 1 8.5 7.9z",
+  ],
+  resolved: ["M21.5 11.1V12a9.5 9.5 0 1 1-5.6-8.7", "M21.5 4.5 12 14l-2.8-2.8"],
+  unassigned: [
+    "M15.5 20.5v-1.8a4 4 0 0 0-4-4h-4a4 4 0 0 0-4 4v1.8",
+    "M9.5 4.2a3.6 3.6 0 1 0 0 7.2 3.6 3.6 0 0 0 0-7.2z",
+    "M18.5 8.2h4",
+    "M20.5 6.2v4",
+  ],
+  handover: ["M6.5 8.5h12l-3-3", "M17.5 15.5h-12l3 3"],
+  starred: ["M12 3.6l2.7 5.5 6 .9-4.35 4.25 1.03 6L12 17.4l-5.38 2.85 1.03-6L3.3 10l6-.9L12 3.6z"],
+  blocked: ["M12 3.2a8.8 8.8 0 1 0 0 17.6 8.8 8.8 0 0 0 0-17.6z", "M5.8 5.8l12.4 12.4"],
+};
+
+/** 15px stroke glyph for one filter tab; colour comes from CSS currentColor. */
+export function FilterIcon({ filter }: { filter: FilterKey }) {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {FILTER_ICON_PATHS[filter].map((d) => (
+        <path key={d} d={d} />
+      ))}
+    </svg>
+  );
+}
+
 /** Red badge on "All" = unread open conversations (design renderFilters). */
 export function unreadOpenCount(rows: InboxRow[]): number {
   return rows.filter((c) => c.unread && c.status === "open" && !c.blocked).length;

@@ -484,6 +484,12 @@ model Contact {
   id                String   @id @default(cuid())
   shopId            String
   sessionId         String?
+  // Stable per-browser id from the widget (localStorage, no expiry). sessionId
+  // rotates every 30 minutes of idle — that is the BILLING session rule (spec
+  // 15) and must not change — which meant a shopper returning an hour later
+  // became a brand-new anonymous contact and the agent lost everything it had
+  // learned. This is the identity that outlives the billing session.
+  visitorId         String?
   name              String?
   email             String?
   phone             String?
@@ -496,6 +502,7 @@ model Contact {
 
   @@index([shopId, email])
   @@index([shopId, type])
+  @@index([shopId, visitorId])
   @@map("contacts")
 }
 

@@ -127,6 +127,10 @@
   }
 
   var SESSION_KEY = "cc:session";
+  // Stable per-browser id, no expiry. SESSION_KEY rotates after 30 idle minutes
+  // because that is the billing session rule (spec 15) — which also made the
+  // agent forget the shopper. Identity gets its own key so it can outlive it.
+  var VISITOR_KEY = "cc:visitor";
   var CONVO_KEY = "cc:convo";
   var PRECHAT_KEY = "cc:prechat";
   var CONFIG_KEY = "cc:config";
@@ -137,7 +141,12 @@
   var OPEN_KEY = "cc:open"; // "1" = panel open — survives page navigation
   var SCREEN_KEY = "cc:screen";
   var DEFAULT_PLACEHOLDER = "Type your message…";
-  var HUMAN_PLACEHOLDER = "A team member will reply here…";
+  // A placeholder is an instruction to the person about to type, not a status
+  // line. "A team member will reply here…" read as the latter — it told the
+  // shopper what the BOX was for rather than what to do with it, and the same
+  // fact is already in the thread as the handover message
+  // (settings/schemas.ts afterHandoverMessage).
+  var HUMAN_PLACEHOLDER = "Message the team…";
   var BLOCKED_PLACEHOLDER = "This chat has been closed.";
   var CONFIG_TTL = 5 * 60 * 1000;
   var SESSION_IDLE = 30 * 60 * 1000; // billing session rule (spec 15)
@@ -230,6 +239,20 @@
     if (touch) s.at = now;
     store(localStorage, SESSION_KEY, JSON.stringify(s));
     return s.id;
+  }
+
+  /** The browser's long-lived visitor id, minted on first use. Never rotated:
+   *  it is what lets the agent recognise a shopper who comes back tomorrow.
+   *  Undefined when localStorage is unavailable (private mode, blocked
+   *  storage) — the server falls back to sessionId exactly as before. */
+  function visitorId() {
+    var stored = read(localStorage, VISITOR_KEY);
+    if (stored) return stored;
+    var minted = uuid();
+    store(localStorage, VISITOR_KEY, minted);
+    // A write that silently failed must not be sent as if it had stuck, or
+    // every page view would claim a different identity.
+    return read(localStorage, VISITOR_KEY) || undefined;
   }
 
   /** Read-only form used at boot: expires a stale record (a delete, not a
@@ -954,6 +977,10 @@
     appendEl(typing);
 
     var botBubble = null;
+    // Tokens stream in as plain text (formatting cannot be parsed half a word
+    // at a time); the accumulated reply is re-rendered once at the end so
+    // **bold** and links come out as bold and links instead of raw markdown.
+    var botText = "";
     function bot() {
       if (!botBubble) {
         if (typing.parentNode) typing.parentNode.removeChild(typing);
@@ -962,11 +989,15 @@
       }
       return botBubble.bubbleEl;
     }
+    function renderBotText() {
+      if (botBubble && botText) R.setRichText(botBubble.bubbleEl, botText);
+    }
 
     T.streamChat(
       base,
       {
         sessionId: sessionId(true),
+        visitorId: visitorId(),
         conversationId: state.conversationId || undefined,
         message: text,
         pageContext: {
@@ -976,13 +1007,20 @@
         },
       },
       {
-        onToken: function (t) { bot().appendChild(document.createTextNode(t)); scroll(); },
-        onMessage: function (m) { R.setText(bot(), m); scroll(); },
+        onToken: function (t) {
+          botText += t;
+          bot().appendChild(document.createTextNode(t));
+          scroll();
+        },
+        onMessage: function (m) { botText = m; R.setRichText(bot(), m); scroll(); },
         onCards: function (cards) {
           appendEl(R.productCards(cards, config.currency, { onAdd: onCardAdd }));
         },
+        onActions: function (actions) {
+          appendEl(R.actionChips(actions, { onAction: onChatAction }));
+        },
         onHandover: handleHandover,
-        onDone: function (frame) { finishTurn(typing, frame, echoDone); },
+        onDone: function (frame) { renderBotText(); finishTurn(typing, frame, echoDone); },
         onError: function () { failTurn(typing, botBubble); },
       },
     );
@@ -990,6 +1028,14 @@
 
   function scroll() {
     ui.body.scrollTop = ui.body.scrollHeight;
+  }
+
+  /** An action button under a reply. The agent only ever chose a KEY from the
+   *  screens this shop has switched on; where that key goes is decided here,
+   *  through the same guard the `#cc-track` deep links use. */
+  function onChatAction(action) {
+    beacon("chat_action_clicked", { key: action.key });
+    openPanelOn(action.screen || "home");
   }
 
   function finishTurn(typing, frame, maybePrechat) {
@@ -1144,6 +1190,65 @@
   }
 
   // ── product cards ────────────────────────────────────────────────────────
+  /** The card's variant as a GID. Cards replayed from history were stored
+   *  before variantGid existed, so derive it from the numeric id when absent. */
+  function variantGid(card) {
+    if (card.variantGid) return card.variantGid;
+    return card.variantId ? "gid://shopify/ProductVariant/" + card.variantId : null;
+  }
+
+  /** True when this storefront exposes the standard cart actions. They ship on
+   *  every Liquid storefront and are ready after DOMContentLoaded, so this is a
+   *  readiness check rather than a real capability question. */
+  function hasCartActions() {
+    return Boolean(
+      window.Shopify &&
+        window.Shopify.actions &&
+        typeof window.Shopify.actions.updateCart === "function",
+    );
+  }
+
+  /**
+   * Add via Shopify.actions — the theme decides how its cart renders, so this
+   * is the path that works on Horizon.
+   *
+   * The /cart/add.js route below it is Dawn-shaped: it re-renders a
+   * `<cart-drawer>` through `renderContents`, which Horizon does not have
+   * (it uses `<cart-drawer-component>` / `<cart-items-component>` / `<cart-icon>`).
+   * On Horizon that path found no drawer, dispatched an event nothing listens
+   * for, and navigated the shopper to /cart — straight out of the chat.
+   */
+  function addViaActions(card) {
+    return window.Shopify.actions
+      .updateCart({ lines: [{ merchandiseId: variantGid(card), quantity: 1 }] })
+      .then(function (result) {
+        // The cart can reject a line without the call failing (sold out, a
+        // limit) — that is a product-page problem, not a silent no-op.
+        if (result && result.userErrors && result.userErrors.length) {
+          throw new Error(result.userErrors[0].message || "cart rejected the line");
+        }
+        return refreshCartSnapshot().then(function (snapshot) {
+          beaconAdd(card, snapshot);
+          if (config.cartDrawer) {
+            closePanel();
+            return window.Shopify.actions.openCart();
+          }
+          appendSys("Added " + card.title + " to your cart ✓");
+        });
+      });
+  }
+
+  /** The analytics that ride every successful add, whichever path made it. */
+  function beaconAdd(card, snapshot) {
+    beacon("added_to_cart", { product: card.title, variantId: card.variantId }, snapshot);
+    // The add belongs to the campaign that opened this chat, if any — one
+    // credit per campaign, not one per item added.
+    if (attributedCampaignId) {
+      beacon("campaign_atc", { campaignId: attributedCampaignId, product: card.title });
+      attributedCampaignId = null;
+    }
+  }
+
   function onCardAdd(card) {
     // Cards carry a numeric variantId (first available variant) when the
     // catalog mirror has variant data; fall back to the product page when not
@@ -1152,7 +1257,13 @@
       window.location.href = "/products/" + card.handle;
       return;
     }
-    fetch("/cart/add.js", {
+    if (hasCartActions()) {
+      return addViaActions(card).catch(function () {
+        // Theme or cart rejected it — let the product page handle it.
+        window.location.href = "/products/" + card.handle;
+      });
+    }
+    return fetch("/cart/add.js", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
@@ -1169,13 +1280,7 @@
         // Fresh snapshot rides the beacon so the inbox cart card updates
         // immediately, and future messages carry it in pageContext.
         refreshCartSnapshot().then(function (snapshot) {
-          beacon("added_to_cart", { product: card.title, variantId: card.variantId }, snapshot);
-          // The add belongs to the campaign that opened this chat, if any —
-          // one credit per campaign, not one per item added.
-          if (attributedCampaignId) {
-            beacon("campaign_atc", { campaignId: attributedCampaignId, product: card.title });
-            attributedCampaignId = null;
-          }
+          beaconAdd(card, snapshot);
         });
         if (config.cartDrawer) {
           // Honor "open cart drawer after add to cart" (spec 16): minimize the
