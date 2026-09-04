@@ -18,6 +18,7 @@ import { knowledgeSearch } from "../search/knowledge-search.server";
 import { curatedMatch } from "../search/curated-match.server";
 import { recommendationMatch } from "../search/recommendation-match.server";
 import { ensureSessionContact } from "../contacts/contacts.server";
+import { formatMoney } from "../format/money";
 import { requireShopId } from "../tenancy.server";
 import { mergePageContext } from "../widget/page-context.server";
 import { notifyNewConversation, notifyShopperMessage } from "../notify.server";
@@ -32,6 +33,7 @@ import {
   CHAT_REPLY,
   CURATED_CONFIRM_SYSTEM,
   curatedConfirmUser,
+  languageInstruction,
   PRODUCT_RECOMMEND,
   QUESTION_ANSWER,
 } from "./prompts";
@@ -594,9 +596,18 @@ export async function* runPipeline(
     return;
   }
 
-  const personaPrompt = config.persona
-    ? buildPersonaPrompt(config.persona)
-    : "You are a helpful shop assistant.";
+  // Reply language (spec 08): appended to the persona prompt so EVERY
+  // generation lane (chat / buy / question) honours it — first message and
+  // mid-chat switches alike. Available on every plan (un-gated 2026-09-03).
+  const language = languageInstruction(config.persona);
+  trace.step("language", "Reply language policy", "info", {
+    autoDetectLanguage: config.persona?.autoDetectLanguage ?? false,
+    defaultLanguage: config.persona?.defaultLanguage ?? null,
+    instruction: language || "none (no persona row — model default)",
+  });
+  const personaPrompt = `${
+    config.persona ? buildPersonaPrompt(config.persona) : "You are a helpful shop assistant."
+  }${language ? `\n${language}` : ""}`;
 
   // ── Lanes ─────────────────────────────────────────────────────────────────
   trace.step("lane", `Lane selected: ${routed.intent}`, "info", {
@@ -801,10 +812,13 @@ async function* buyLane(args: {
   // is what lets the model tell a black bracelet from one that "pairs with
   // black outfits".
   const relevant = selectRelevant(candidates, 4);
+  // Price goes to the model PRE-FORMATTED in the shop's currency ("₹1,499",
+  // not 1499) — a bare number reads as dollars to the model, and an INR store's
+  // reply then quoted "$1499" next to cards the widget correctly rendered in ₹.
   const allowList = candidates.slice(0, MODEL_CANDIDATES).map((c, i) => ({
     id: i + 1,
     title: c.title,
-    price: c.price,
+    price: formatMoney(c.price, args.config.currency),
     snippet: candidateSnippet(c),
   }));
   const modelDecidesCards = !browse && !constrained;

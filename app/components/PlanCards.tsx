@@ -13,6 +13,8 @@ export interface PlanCardData {
   priceYearlyPerMonth: number;
   yearlyTotal: number;
   trialDays: number;
+  /** Per extra conversation. null = this plan never bills overage (Free).
+   *  Only shown on the card in MONTHLY mode — see the render. */
   overagePerConversation: number | null;
   bullets: string[];
   popular: boolean;
@@ -154,10 +156,14 @@ export function PlanCards(props: {
   onSelect: (planId: string) => void;
   subscribingPlan: string | null;
   promo?: PlanPromo | null;
+  /** false = annual billing withdrawn by the operator: no toggle, monthly only. */
+  yearlyEnabled?: boolean;
 }) {
   const savingsLabel = savingsBadgeLabel(props.plans);
+  const showToggle = props.yearlyEnabled !== false;
   return (
     <s-stack gap="base">
+      {showToggle ? (
       <div
         style={{
           padding: `${SPACE.xs}px 0`,
@@ -225,6 +231,7 @@ export function PlanCards(props: {
           })}
         </div>
       </div>
+      ) : null}
 
       <div
         className="cc-plan-carousel"
@@ -328,9 +335,16 @@ export function PlanCards(props: {
                 </s-text>
               ) : null}
               <s-text color="subdued">{termsFor(plan, props.interval)}</s-text>
-              {plan.overagePerConversation !== null ? (
+              {/* MONTHLY PAID PLANS ONLY — the only case that can actually be
+                  billed, so the only case a card may promise it (2026-09-03).
+                  Free has no subscription and Shopify rejects usage lines on
+                  ANNUAL ones, so both hard-cap at the quota instead: the card
+                  used to print this line from the matrix alone and advertised a
+                  charge the app would never make on two of its four tiers.
+                  Same predicate as overageBillable() on the server. */}
+              {props.interval === "monthly" && plan.overagePerConversation !== null ? (
                 <s-text color="subdued">
-                  ${plan.overagePerConversation} per additional AI conversation
+                  ${plan.overagePerConversation.toFixed(2)} per additional AI conversation
                 </s-text>
               ) : null}
               <s-button

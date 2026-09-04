@@ -19,6 +19,10 @@ const PROTECTED_INDEXES = [
   "recommendations_embedding_hnsw",
   "products_search_text_gin",
   "analytics_events_payload_gin",
+  // Hand-written in 20260826181000_product_published_online and deliberately NOT
+  // declared in schema.prisma (the recommendation candidate query needs it).
+  // Prisma proposes a DROP for it on every unrelated migration.
+  "products_shopId_publishedOnline_idx",
 ];
 
 function newestMigrationDir(): string | null {

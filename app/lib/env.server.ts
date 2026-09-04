@@ -3,8 +3,8 @@ import { z } from "zod";
 // Fail fast at boot on misconfiguration. Imported by shopify.server.ts.
 //
 // ⚠️ Most values below are now FALLBACKS. Since spec 19 the operator sets them
-// at /platform/settings (stored in app_secrets, secrets encrypted) and the
-// dashboard value WINS — see app/lib/platform/runtime-config.server.ts.
+// at /admin/settings (stored in app_secrets, secrets encrypted) and the
+// dashboard value WINS — see app/lib/admin/runtime-config.server.ts.
 // Env still matters for: first boot before anything is configured, and the
 // infrastructure values the app cannot start without (DATABASE_URL, the
 // SHOPIFY_* pair injected by the CLI/host).
@@ -41,12 +41,13 @@ const envSchema = z.object({
     .default("false")
     .transform((v) => v === "true"),
   EMAIL_FROM: z.string().optional().default("ChatConvert <no-reply@example.com>"),
-  // ── Platform admin panel (spec 19) ──
-  // First-run bootstrap ONLY: while zero platform admins exist, logging in at
-  // /platform/login with exactly these credentials creates the account.
-  // Canonical path: `npx tsx scripts/platform-admin.ts create <email> <name> <password>`.
-  PLATFORM_ADMIN_EMAIL: z.string().optional().default(""),
-  PLATFORM_ADMIN_PASSWORD: z.string().optional().default(""),
+  // ── Admin panel (spec 19) ──
+  // THE credentials for /admin — not a bootstrap. Whatever is in this file is
+  // what signs in; change it (and restart) and the old password stops working
+  // everywhere, immediately. Blank = /admin sign-in disabled on this server.
+  // See app/lib/admin/admin-auth.server.ts.
+  ADMIN_EMAIL: z.string().optional().default(""),
+  ADMIN_PASSWORD: z.string().optional().default(""),
   // Web Push (VAPID). Generate once: `npx web-push generate-vapid-keys`.
   // Push is silently disabled while the keys are blank.
   VAPID_PUBLIC_KEY: z.string().optional().default(""),

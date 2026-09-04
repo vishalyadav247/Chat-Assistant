@@ -1,7 +1,7 @@
 import db from "../db.server";
 
 // Operator error/warning log (spec 21). Every server-side failure funnels
-// through here and surfaces cross-tenant at /platform/logs.
+// through here and surfaces cross-tenant at /admin/logs.
 //
 // Two hard rules, copied from llm/usage.server.ts for the same reason — this
 // sits in the shopper chat hot path:

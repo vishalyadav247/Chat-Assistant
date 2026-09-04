@@ -6,7 +6,7 @@
  *   npx tsx scripts/qa/perf-seed.ts        # creates the perf-test shop it writes to
  *   npx tsx scripts/qa/cache.test.ts
  *
- * Only the throwaway perf-test.myshopify.com shop is written to; the platform
+ * Only the throwaway perf-test.myshopify.com shop is written to; the admin
  * caches (app_secrets rows) are restored to their prior value in a finally.
  * Exits non-zero on any FAIL and always disconnects the Prisma singleton.
  */
@@ -204,14 +204,14 @@ async function main(): Promise<void> {
     // ── 3. plans.server.ts (30s REFRESH_TTL_MS) — READ ONLY ────────────────
     section("billing/plans.server.ts — 30s REFRESH_TTL_MS (read-only check)");
     const plans = await import("../../app/lib/billing/plans.server");
-    const platformSettings = await import("../../app/lib/platform/platform-settings.server");
-    const priorPlanConfig = await platformSettings.getStoredPlanConfig();
+    const adminSettings = await import("../../app/lib/admin/admin-settings.server");
+    const priorPlanConfig = await adminSettings.getStoredPlanConfig();
     restore.push(async () => {
-      await platformSettings.savePlanConfig(priorPlanConfig);
+      await adminSettings.savePlanConfig(priorPlanConfig);
     });
 
     const priorMode = plans.planEnforcementMode();
-    await platformSettings.savePlanConfig({
+    await adminSettings.savePlanConfig({
       ...priorPlanConfig,
       enforcement: priorMode === "enforced" ? "open" : "enforced",
     });
@@ -220,7 +220,7 @@ async function main(): Promise<void> {
       plans.planEnforcementMode() !== priorMode,
       `${priorMode} -> ${plans.planEnforcementMode()}`,
     );
-    await platformSettings.savePlanConfig(priorPlanConfig);
+    await adminSettings.savePlanConfig(priorPlanConfig);
     ok("plan config restored", plans.planEnforcementMode() === priorMode);
     console.log(
       "  INFO plans cache state is module-level (not globalThis) and refreshed lazily:" +
@@ -229,24 +229,24 @@ async function main(): Promise<void> {
         " that trips the TTL still sees the old matrix).",
     );
 
-    // ── 4. platform-settings + runtime-config (30s) — READ ONLY ────────────
-    section("platform/platform-settings.server.ts + runtime-config.server.ts — 30s");
-    const priorAi = await platformSettings.getAiOverrides();
+    // ── 4. admin-settings + runtime-config (30s) — READ ONLY ────────────
+    section("admin/admin-settings.server.ts + runtime-config.server.ts — 30s");
+    const priorAi = await adminSettings.getAiOverrides();
     restore.push(async () => {
-      await platformSettings.saveAiOverrides(priorAi);
+      await adminSettings.saveAiOverrides(priorAi);
     });
-    await platformSettings.saveAiOverrides({ ...priorAi, maxTokens: 321 });
+    await adminSettings.saveAiOverrides({ ...priorAi, maxTokens: 321 });
     ok(
       "saveAiOverrides updates the cache synchronously (no stale read after write)",
-      (await platformSettings.getAiOverrides()).maxTokens === 321,
+      (await adminSettings.getAiOverrides()).maxTokens === 321,
     );
-    await platformSettings.saveAiOverrides(priorAi);
+    await adminSettings.saveAiOverrides(priorAi);
     ok(
       "AI overrides restored",
-      (await platformSettings.getAiOverrides()).maxTokens === priorAi.maxTokens,
+      (await adminSettings.getAiOverrides()).maxTokens === priorAi.maxTokens,
     );
 
-    const runtime = await import("../../app/lib/platform/runtime-config.server");
+    const runtime = await import("../../app/lib/admin/runtime-config.server");
     const priorHandle = runtime.storedRuntimeConfig().appStoreHandle;
     restore.push(async () => {
       await runtime.saveRuntimeConfig({ appStoreHandle: priorHandle });
@@ -261,7 +261,7 @@ async function main(): Promise<void> {
     console.log(
       "  INFO both caches are module-level singletons, NOT globalThis-keyed:" +
         " a dev hot reload resets them to defaults until the eager loader finishes." +
-        " Values are platform-wide, so there is no per-tenant key to leak.",
+        " Values are admin-wide, so there is no per-tenant key to leak.",
     );
 
     // ── 5. product-search lexicon cache (10 min) ───────────────────────────

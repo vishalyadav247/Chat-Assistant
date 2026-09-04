@@ -19,6 +19,7 @@ import { DateTimeProvider } from "../lib/format/context";
 import { NavigateBridge, SurfaceProvider } from "../lib/ui/surface";
 import { AppLoading } from "../components/AppLoading";
 import { ReviewPrompt } from "../components/ReviewPrompt";
+import { SupportChat } from "../components/SupportChat";
 import { WebShell } from "../components/web/WebShell";
 import { routeError } from "../lib/ui/route-error";
 import webShellStylesHref from "../components/web/web-shell.css?url";
@@ -177,6 +178,8 @@ export default function App() {
               ))}
             </s-app-nav>
             <ReviewPrompt eligible={data.reviewPromptEligible} />
+            {/* Support bubble: embedded surface only — see SupportChat. */}
+            <SupportChat />
             <Outlet />
           </DateTimeProvider>
         </SurfaceProvider>

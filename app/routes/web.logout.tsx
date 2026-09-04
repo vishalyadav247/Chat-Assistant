@@ -6,7 +6,7 @@ import { destroyWebSession, hasWebCookie } from "../lib/team/web-session.server"
 // Only POST destroys the session: a GET must never sign the user out, or any
 // cross-site link/image pointing at /web/logout becomes a logout CSRF. A
 // cross-site POST (auto-submitting form) is the same attack, so the same
-// sameOrigin guard the platform logout uses applies here too.
+// sameOrigin guard the admin logout uses applies here too.
 export const action = async ({ request }: ActionFunctionArgs) => {
   if (!sameOrigin(request)) throw redirect("/web/login");
   const headers = await destroyWebSession(request);

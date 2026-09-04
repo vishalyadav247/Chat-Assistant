@@ -463,7 +463,7 @@ refuse to boot with `Invalid environment: DATABASE_URL is required`.
 | `SHOPIFY_SECRET` | Partner Dashboard → your app → API credentials |
 | `OPENAI_KEY` | platform.openai.com |
 | `RESEND_KEY` | resend.com → API Keys (or skip — see command 14) |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Your choice — the `/platform` operator login |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Your choice — the `/admin` operator login |
 
 ---
 
@@ -669,7 +669,7 @@ Save with `Ctrl+O`, `Enter`, then `Ctrl+X`.
 
 > **Keep the quotes on `EMAIL_FROM`** — without them `<` is a shell redirect in
 > command 21. `SCOPES` must match `shopify.app.toml` verbatim. Everything else in
-> `.env.example` is optional: the operator sets it at `/platform`, and the dashboard
+> `.env.example` is optional: the operator sets it at `/admin`, and the dashboard
 > value wins. No Resend account yet? `EMAIL_PROVIDER=log`, blank `RESEND_API_KEY`.
 
 ### 15. Strip Windows line endings — do not skip
@@ -919,30 +919,46 @@ curl -I https://chatconvert.progryss.com/
 
 ## Part H — First login
 
-### 34. Create the operator account
+### 34. Set the operator credentials
 
-The login for `/platform`, where the OpenAI key, plans and operational flags are set
-without redeploying. Replace `ADMIN_EMAIL`, your name and `ADMIN_PASSWORD`. Subshell
-again, same reason as command 21.
+The root login for `/admin`, where the OpenAI key, plans and operational flags
+are set without redeploying. There is no account to create and no CLI step: this
+pair is the credential, and it lives in `.env`. Further operators are added
+inside the console at `/admin/access` once you are in.
 
 ```bash
 cd /var/www/chatconvert.progryss.com/html
-( set -a; . ./.env; set +a; npx tsx scripts/platform-admin.ts create ADMIN_EMAIL "Your Name" "ADMIN_PASSWORD" )
+nano .env     # ADMIN_EMAIL=you@example.com   ADMIN_PASSWORD=<a long one>
+pm2 restart chatconvert --update-env
 ```
 
-**Expect:** `created platform admin ADMIN_EMAIL (...)`.
+**Expect:** signing in at `https://<your-domain>/admin/login` with exactly those
+two values works, and nothing else does.
 
-> Prefer this over the `PLATFORM_ADMIN_EMAIL` / `PLATFORM_ADMIN_PASSWORD` env pair —
-> those stay armed for as long as the admin table is empty. Leave them out of `.env`
-> entirely.
+> **Changing them later is the same two steps** — edit `.env`, restart. The new
+> pair works immediately and every browser still signed in with the old one is
+> signed out on its next request. Accounts created at `/admin/access` have their
+> own passwords and are unaffected. Dev and production read their own `.env`, so
+> changing one never affects the other. Leaving either value blank disables the
+> ROOT login on that server (nothing is deleted; invited accounts still work).
+
+> **Changed 2026-09-03.** ① The console moved from `/platform` to `/admin` —
+> update bookmarks; `/platform` no longer resolves. The session cookie is now
+> `cc_admin`, so everyone signs in once more. ② Sign-in no longer uses accounts
+> in the database. Delete `PLATFORM_ADMIN_EMAIL` / `PLATFORM_ADMIN_PASSWORD` (and
+> `ADMIN_BOOTSTRAP_*` if present) from `.env` and set `ADMIN_EMAIL` /
+> `ADMIN_PASSWORD` instead. On the first request after the restart, every stale
+> env-managed row — including whichever one production had been accepting — is
+> deleted along with root's sessions.
 
 ### 35. Verify
 
 ```bash
-npx tsx scripts/platform-admin.ts list
+npx tsx scripts/admin-lockout-probe.ts
 ```
 
-**Expect:** one row with your email.
+**Expect:** `sign-in probe PASS` — a stale env-managed row is refused, five wrong
+passwords lock the root login, and the `.env` pair works once the lock expires.
 
 ### 36. Confirm the job queue started
 

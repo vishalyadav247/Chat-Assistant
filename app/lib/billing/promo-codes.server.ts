@@ -3,6 +3,7 @@ import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
 import { logWarn } from "../log.server";
 import { PLANS } from "./plans.server";
+import { runtimeConfig } from "../admin/runtime-config.server";
 import {
   isPaidPlan,
   yearlyTotal,
@@ -11,7 +12,7 @@ import {
 } from "./shopify-billing.server";
 
 // Promo codes (spec 15 · discount coupons). Operator creates codes in the
-// platform console (/platform/promo-codes) and hands them to merchants by mail
+// admin console (/admin/promo-codes) and hands them to merchants by mail
 // or chat; the merchant applies one on Plan & Usage. The discount is NOT
 // applied by us — it is passed to Shopify as the `discount` of the recurring
 // line in appSubscriptionCreate, so the approval page, invoices and proration
@@ -325,6 +326,11 @@ export async function validatePromoCode(args: {
     if (!consumePromoValidationToken(shopId)) return THROTTLED;
     return { ok: false, error };
   };
+
+  // Master switch (/admin/promo-codes). Enforced HERE, not just in the UI: a
+  // merchant who still has a code cannot redeem it once coupons are switched
+  // off, and neither can a replayed request.
+  if (!runtimeConfig().promoCodesEnabled) return fail("Discount codes aren't available right now.");
 
   const code = normalizePromoCode(args.code);
   const problem = promoCodeProblem(code);

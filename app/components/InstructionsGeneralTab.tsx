@@ -3,7 +3,6 @@ import { useFetcher } from "react-router";
 import { useAppBridge } from "../lib/ui/surface";
 import type { GeneralData, InstructionsActionResult } from "../routes/app.ai-agent.instructions";
 import { SaveBar } from "./SaveBar";
-import { PlanBadge } from "./ui/PlanGate";
 
 // Instructions → General tab (spec 08, design #viewInstructions persona panel):
 // Role / Communication style / Behaviours / Default language / Auto-detect
@@ -71,11 +70,7 @@ function toForm(data: GeneralData): FormState {
   };
 }
 
-export function InstructionsGeneralTab(props: {
-  initial: GeneralData;
-  /** Plan needed for `multi_language`, or null when this shop already has it. */
-  multiLanguagePlan: string | null;
-}) {
+export function InstructionsGeneralTab(props: { initial: GeneralData }) {
   const shopify = useAppBridge();
   const fetcher = useFetcher<InstructionsActionResult>();
   const [saved, setSaved] = useState<FormState>(() => toForm(props.initial));
@@ -221,24 +216,13 @@ export function InstructionsGeneralTab(props: {
               </s-option>
             ))}
           </s-select>
-          {/* Gated by `multi_language` and enforced on save
-              (instructions/save.server.ts) — but only when turning it ON, so a
-              shop that already has it keeps it after a downgrade. The switch
-              mirrors that: locked when off and unavailable, live otherwise. */}
-          <s-stack direction="inline" gap="small-200" alignItems="center">
-            <s-switch
-              label="Auto-detect shopper's language"
-              details={
-                props.multiLanguagePlan && !form.autoDetectLanguage
-                  ? `Answer in the shopper's own language — available on ${props.multiLanguagePlan} and above.`
-                  : "When enabled, the assistant answers in the shopper's detected language."
-              }
-              disabled={Boolean(props.multiLanguagePlan) && !form.autoDetectLanguage}
-              checked={form.autoDetectLanguage}
-              onInput={(e) => set("autoDetectLanguage", e.currentTarget.checked)}
-            />
-            {!form.autoDetectLanguage ? <PlanBadge plan={props.multiLanguagePlan} /> : null}
-          </s-stack>
+          {/* Available on every plan (un-gated 2026-09-03). */}
+          <s-switch
+            label="Auto-detect shopper's language"
+            details="When enabled, the assistant answers in the language of the shopper's latest message and switches with them mid-chat. When off, it always answers in the default language above."
+            checked={form.autoDetectLanguage}
+            onInput={(e) => set("autoDetectLanguage", e.currentTarget.checked)}
+          />
         </s-stack>
       </s-section>
 

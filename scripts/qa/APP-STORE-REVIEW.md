@@ -72,7 +72,7 @@
 - No merchant-triggerable path sets `Shop.plan` to a paid tier without a verified `subscriptionId`
   (every writer traced: billing callback verifies the live subscription name, the
   `app_subscriptions/update` webhook derives the plan from the subscription name only).
-  `platform.plans.tsx` edits the plan *matrix*, never `Shop.plan`, and is `requirePlatformAdmin` +
+  `admin.plans.tsx` edits the plan *matrix*, never `Shop.plan`, and is `requireAdminUser` +
   same-origin gated.
 - `test: true` is `NODE_ENV !== "production" || billingForceTestCharges` — correctly gated, not hardcoded.
 - **1.2.2 accept/decline + resubscribe after reinstall** — PASS (code): decline returns to
@@ -221,14 +221,14 @@ Run: `npx tsx scripts/qa/install-lifecycle.test.ts`.
   `authenticate.public.appProxy` first and derive `shopId` **only** from the verified
   `session.shop`; every caller-supplied `conversationId`/`contactId` is bound by
   `{ id, shopId, sessionId }`, so a leaked id is useless both cross-tenant and cross-shopper.
-  `api.test-chat.tsx` goes through `requireShopAccess`. `platform.*` is cross-tenant **by design**
-  and every loader *and* action is `requirePlatformAdmin` + same-origin gated.
+  `api.test-chat.tsx` goes through `requireShopAccess`. `admin.*` is cross-tenant **by design**
+  and every loader *and* action is `requireAdminUser` + same-origin gated.
 - **Header findings — outside this workstream's file territory, listed for the owner:**
-  - `entry.server.tsx` — `/platform/*` documents can have their `frame-ancestors 'none'`
+  - `entry.server.tsx` — `/admin/*` documents can have their `frame-ancestors 'none'`
     **clobbered** by `addDocumentResponseHeaders` when an attacker appends `?shop=evil.myshopify.com`
-    (`frame-ancestors` overrides the `X-Frame-Options: DENY` that `platform.tsx:24` sets). Fix: add
-    `pathname.startsWith("/platform")` to the deny condition, or run the deny block *after*
-    `addDocumentResponseHeaders`. Impact limited because the `cc_platform` cookie is `SameSite=Lax`.
+    (`frame-ancestors` overrides the `X-Frame-Options: DENY` that `admin.tsx:24` sets). Fix: add
+    `pathname.startsWith("/admin")` to the deny condition, or run the deny block *after*
+    `addDocumentResponseHeaders`. Impact limited because the `cc_admin` cookie is `SameSite=Lax`.
   - `X-Content-Type-Options: nosniff` is set **nowhere** in the repo.
   - Embedded `/app/*` documents render shopper PII with **no `Cache-Control: no-store`**.
   - No `Strict-Transport-Security` — confirm it is applied at the edge.

@@ -15,7 +15,7 @@ export interface ChatOptions {
   jsonObject?: boolean;
   /**
    * This call's `temperature`/`maxTokens` are deliberately tuned and MUST
-   * survive the platform-admin global override (/platform/ai). Set it on any
+   * survive the admin-admin global override (/admin/ai). Set it on any
    * call whose output is parsed by code rather than read by a shopper — an
    * operator dialling temperature to 1.2 must not be able to break JSON
    * routing for every tenant.

@@ -38,10 +38,10 @@ async function main() {
   const { getBillingProvider, completeBillingReturn, downgradeToFree, isBillingTestMode } =
     await import("../../app/lib/billing/shopify-billing.server");
   const { RUNTIME_SECRET_KEY, loadRuntimeConfig } = await import(
-    "../../app/lib/platform/runtime-config.server"
+    "../../app/lib/admin/runtime-config.server"
   );
 
-  // Same guard as test-billing-mock: a stored /platform/settings row outranks
+  // Same guard as test-billing-mock: a stored /admin/settings row outranks
   // the env fallback and would push this onto the real provider.
   const priorRuntime = await db.appSecret.findUnique({ where: { key: RUNTIME_SECRET_KEY } });
   const forced = { ...(priorRuntime ? JSON.parse(priorRuntime.value) : {}), billingTestMode: true };
@@ -143,7 +143,7 @@ async function main() {
       aged.grantDays === 7 && aged.reset === true,
     );
 
-    // Operator changes trialDays at /platform/plans mid-flight.
+    // Operator changes trialDays at /admin/plans mid-flight.
     check(
       "A11 raising the allowance extends the SAME trial, not a new one",
       trialEntitlement(first, 10, at(3)).grantDays === 7,

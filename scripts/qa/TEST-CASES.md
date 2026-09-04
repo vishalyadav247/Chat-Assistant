@@ -36,8 +36,11 @@
 | A-14 | Stale/out-of-order ACTIVE webhook | Webhook id ≠ live subscription id | Ignored + `app_subscription_stale_active_ignored` logged. A paying shop is never downgraded | A |
 | A-15 | CANCELLED/EXPIRED/DECLINED | Webhook for a **replaced** subscription | Ignored unless `shop.subscriptionId === subscriptionId` (a plan switch cancels the replaced sub) | A |
 | A-16 | FROZEN / PENDING status | Webhook with those statuses | **Known defect: ignored, so an unpaid frozen subscription keeps the paid plan** | A |
-| A-17 | Overage reporting | Exceed quota on a monthly paid plan | `PlanUsage.overageCount++`; `appUsageRecordCreate` at `overageRate(plan)`; errors logged, never thrown into chat | H, B |
+| A-17 | Overage reporting | Exceed quota on a monthly paid plan | `overageCount++`, one `appUsageRecordCreate` at `overageRate(plan)`, `overageReported++` on acceptance; errors logged, never thrown into chat | overage.test.ts |
 | A-18 | Conversation metering | One shopper session, many turns | Exactly one tick; `SESSION_INACTIVITY_MS`=30min creates a new billable session; `isTest` never ticks | H, B |
+| A-22 | Overage is never lost | A report fails (network/token/rate limit) | The debt survives as `overageCount - overageReported` and the hourly `overage-reconcile` job bills it; re-running never double-charges | overage.test.ts |
+| A-23 | Approved ceiling | Usage spend reaches `cappedAmount` | `aiAllowed()` returns false — the AI stops rather than serving unpaid conversations; Plan & Usage offers "Raise limit", which needs merchant approval | overage.test.ts |
+| A-24 | Merchant warnings | 80% of allowance / past allowance / ceiling reached | Three distinct banners on Plan & Usage, with the count, the rate and the spend — never a silent charge | overage.test.ts, B |
 | A-19 | Billing on the web surface | `intent=subscribe` from `/web` | 403 — `billing_manage` is admin-surface only for every role; a deep link to the admin is offered | S, A |
 | A-20 | Reinstall inside grace window | Uninstall then reinstall | Plan reset to free; a dead subscription is never resumed | B |
 
@@ -72,12 +75,12 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 | ID | Case | Steps | Expected | Scenarios |
 |---|---|---|---|---|
 | B-01 | Matrix matches published pricing | Compare `DEFAULT_PLANS` to the App Store listing pricing | Every price, trial, overage, quota and feature matches exactly | H |
-| B-02 | Operator edits a quota | `/platform/plans` → change `curated_answers` for Pro → save | `getQuota("pro","curated_answers")` returns the new value immediately in-process, and within `REFRESH_TTL_MS` (30s) in any other process | H |
+| B-02 | Operator edits a quota | `/admin/plans` → change `curated_answers` for Pro → save | `getQuota("pro","curated_answers")` returns the new value immediately in-process, and within `REFRESH_TTL_MS` (30s) in any other process | H |
 | B-03 | Propagation is app-wide | After B-02, check **every** installed shop on that tier | All shops on that plan see the new value — plans are global, only `Shop.plan` is per-shop | H, T |
 | B-04 | Operator toggles a feature | Uncheck `exports` for Plus → save | `hasFeature("plus","exports")` false; the export action returns a plan-gate error | H, P |
 | B-05 | Enforcement switch | Flip `open` ⇄ `enforced` | `open`: every gate passes, every quota `UNLIMITED`. `enforced`: real matrix values | H |
 | B-06 | Reset to defaults | "Reset all plans" | Row deleted; `PLANS` deep-equals `DEFAULT_PLANS` | H |
-| B-07 | Corrupt override row | Write invalid JSON to `platform:plans`, then save one plan | **Known defect: `getStoredPlanConfig()` returns `{}` on parse failure, so the save drops every other plan's overrides** | A |
+| B-07 | Corrupt override row | Write invalid JSON to `admin:plans`, then save one plan | **Known defect: `getStoredPlanConfig()` returns `{}` on parse failure, so the save drops every other plan's overrides** | A |
 | B-08 | Unknown feature name in a stored override | Override lists a since-removed feature | Tolerated on read and filtered against `GATED_FEATURES` — the whole config must not be invalidated | A |
 | B-09 | Unknown `Shop.plan` value | Set `plan="enterprise"` | All four accessors silently fall back to Free. Verify that is intentional and safe | A |
 | B-10 | Every quota gate bites | For each of the 11 dimensions, at each tier, create up to the limit then one more | The Nth+1 create is refused with a merchant-readable message and an upgrade path | B, P |
@@ -85,7 +88,7 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 | B-12 | Downgrade keeps over-quota data | Create 50 curated answers on Plus → downgrade to Free (quota 5) | All 50 rows survive; new creates blocked; banner explains. **No deletions** | B |
 | B-13 | Never-gated surfaces | On Free: inbox, human handover, GDPR flows, Test AI console | All fully functional — these must never be gated | P |
 | B-14 | Same LLM on every tier | Compare model used on free vs plus | Identical — plans differ on volume and tooling only | P |
-| B-15 | New seams enforce | `active_campaigns`, `analytics_range_days`, `survey`, `push_notifications`, `custom_recommendations`, `multi_language` | Each blocked at the right tier, server-side | B, P |
+| B-15 | New seams enforce | `active_campaigns`, `analytics_range_days`, `survey`, `push_notifications`, `custom_recommendations` | Each blocked at the right tier, server-side. `multi_language` un-gated 2026-09-03 — auto-detect language saves on every plan | B, P |
 | B-16 | Price change doesn't re-price existing subs | Change Pro price → check an existing Pro subscriber | Shopify keeps the agreed charge; only new subscriptions get the new price. UI copy must say so | B |
 
 ## C. Promo / coupon codes (spec 15)
@@ -122,10 +125,10 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 | D-17 | Question → catalogue rescue | A `question` with no knowledge hit but a product carrying a shopper word + vector agreement is answered from the catalogue; `PICKS: none` there serves fallbackMessage and feeds the unresolved queue (`npm run trace -- "how do I clean my bracelet" --shop …`) | H |
 | D-02 | gpt-4 family params unchanged | `samplingParams` returns exactly `{temperature, max_tokens}` for gpt-4o-mini/4o/4.1/4.1-mini/4.1-nano — byte-identical guarantee | B |
 | D-03 | Reasoning models | o1/o3-mini/o4-mini/gpt-5* → `max_completion_tokens`, no temperature/max_tokens | B |
-| D-04 | Switch chat model at runtime | Change `CHAT_MODEL` or the `/platform/ai` override → effective within the 30s cache, no code change, no redeploy | H |
-| D-05 | Platform temp/token override must not de-tune the router | Set temperature 1.2 globally → the router's strict-JSON call must keep its own tuning | A |
+| D-04 | Switch chat model at runtime | Change `CHAT_MODEL` or the `/admin/ai` override → effective within the 30s cache, no code change, no redeploy | H |
+| D-05 | Admin temp/token override must not de-tune the router | Set temperature 1.2 globally → the router's strict-JSON call must keep its own tuning | A |
 | D-06 | jsonObject + reasoning model | Router budget must not be consumed entirely by hidden reasoning tokens leaving empty content | B |
-| D-07 | Unpriced custom model | Free-text model at `/platform/ai` → warned, and `/platform/usage` doesn't silently show $0 | B |
+| D-07 | Unpriced custom model | Free-text model at `/admin/ai` → warned, and `/admin/usage` doesn't silently show $0 | B |
 | D-08 | Embedding model change | Different-dimension model must fail **loudly** at `toSqlVector`, never corrupt data; a re-embed path must exist for all four vector columns | A |
 | D-09 | Chat 429 backoff | A rate-limited chat call retries rather than surfacing instantly to the shopper | A |
 | D-10 | Router-first grounding | Every reply is grounded; no hallucinated products | H |
@@ -228,12 +231,12 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 |---|---|---|---|
 | J-01 | Embedded admin (21 routes) | Each resolves, authenticates first, exports `boundary.error`/`boundary.headers` where it has a loader/action | H, A |
 | J-02 | Web (8 routes) | Each resolves; signed-out lands on `/web/login`; signed-in `/web` → `/app/inbox` | H, A |
-| J-03 | Platform (12 routes) | Each resolves; unauthenticated → `/platform/login`; never embedded (`frame-ancestors 'none'`) | H, A |
+| J-03 | Admin (12 routes) | Each resolves; unauthenticated → `/admin/login`; never embedded (`frame-ancestors 'none'`) | H, A |
 | J-04 | Proxy (11 routes) | Reject requests without a valid Shopify proxy signature | A |
 | J-05 | Webhooks (8 routes) | Invalid HMAC → 401 before any handler code; valid → 200 within 5s; enqueue-only | A |
 | J-06 | Deep links survive auth | `/app/inbox?c=<id>`, `/app/settings?tab=...` preserved across the bounce | H |
 | J-07 | Wrong HTTP method | Resource routes reject cleanly, no 500 | A |
-| J-08 | Logout is POST-only | GET must not log out (CSRF) — both web and platform | A |
+| J-08 | Logout is POST-only | GET must not log out (CSRF) — both web and admin | A |
 | J-09 | Nav integrity | Every `NAV` entry resolves; role filtering matches `can()` | H, S |
 | J-10 | No shop-domain login form | App Store req 2.3.1 — `_index` must never ask for `.myshopify.com` | A |
 | J-11 | Embedded navigation | `Link`/`useSubmit`/`authenticate.admin`'s `redirect` — never raw `<a>` or react-router `redirect` | A |
@@ -245,7 +248,7 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 | K-01 | Shopify session storage | Row written on OAuth; deleted on uninstall | H |
 | K-02 | TeamSession TTL | 30-day sliding, renewed at most once/day; expired rejected | B |
 | K-03 | Stale session cleanup | Expired `team_sessions` / `platform_sessions` are actually pruned, not accumulated | B |
-| K-04 | PlatformSession TTL | 7-day sliding; `reset-password` revokes all | B |
+| K-04 | AdminSession TTL | 7-day sliding; `reset-password` revokes all | B |
 | K-05 | Role matrix | agent → inbox+contacts only; admin → all but billing; billing_manage → admin surface only. Enforced by **direct URL**, not just nav | A, S |
 | K-06 | Cross-tenant | A member of shop A cannot read or mutate shop B through any route | A, T |
 | K-07 | Login anti-enumeration | Constant generic error + dummy hash burn for unknown/locked accounts | A |
@@ -254,10 +257,10 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 | K-10 | Token single-use | invite (7d), reset (1h), handoff (2min) — replay must fail | A |
 | K-11 | Password reset revokes other sessions | Only the resetting session survives | A |
 | K-12 | Disable member | Sessions revoked + push subscriptions deleted | A |
-| K-13 | Cookie flags | `cc_web_session` HttpOnly+Secure+SameSite=Lax+Max-Age; `cc_surface` deliberately not HttpOnly; platform cookie likewise | A |
+| K-13 | Cookie flags | `cc_web_session` HttpOnly+Secure+SameSite=Lax+Max-Age; `cc_surface` deliberately not HttpOnly; admin cookie likewise | A |
 | K-14 | Logout clears cookie | `Max-Age=0` | H |
 | K-15 | Iframe isolation | `SameSite=Lax` keeps the web cookie out of the admin iframe | A |
-| K-16 | CSRF | `sameOrigin` enforced on every platform + web mutation | A |
+| K-16 | CSRF | `sameOrigin` enforced on every admin + web mutation | A |
 
 ## L. Database efficiency
 
@@ -278,7 +281,7 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 |---|---|---|---|
 | M-01 | Plan matrix cache | 30s TTL; immediate in-process after a save | H |
 | M-02 | Shop config cache | 60s TTL; `invalidateShopConfig` called on **every** write path that changes cached data | A |
-| M-03 | Platform settings / runtime config | 30s TTL; dashboard beats env; secrets never returned to the browser | A |
+| M-03 | Admin settings / runtime config | 30s TTL; dashboard beats env; secrets never returned to the browser | A |
 | M-04 | Search lexicon | 10min TTL | B |
 | M-05 | Per-shop keying | No cross-tenant leak through any cache | T |
 | M-06 | Memory bounds | Every cache has an eviction policy — no unbounded growth | B |
@@ -313,7 +316,7 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 | O-11 | PII minimisation | Logs redact PII; no transcript in emails; order tracking never echoes order PII | A |
 | O-12 | Privacy policy | Names OpenAI and Resend as processors *(manual, pre-submission)* | — |
 
-## P. Platform admin & observability (specs 19/21)
+## P. Admin & observability (specs 19/21)
 
 | ID | Case | Expected | Scenarios |
 |---|---|---|---|
@@ -399,7 +402,7 @@ route files exist, never that their loaders run or their pages paint.
 | S-11 | CSRF | Foreign Origin/Referer refused on login, logout, forgot, reset | A |
 | S-12 | Multi-shop member | Shop picker; no id tampering can reach the other shop | T, A |
 
-## T. Platform console — every form takes effect (`scripts/qa/ui-platform.test.ts`)
+## T. Admin console — every form takes effect (`scripts/qa/ui-admin.test.ts`)
 
 | ID | Case | Expected | Scenarios |
 |---|---|---|---|
@@ -411,13 +414,16 @@ route files exist, never that their loaders run or their pages paint.
 | T-06 | Plans — corrupt stored config | Detected and archived, not silently dropping every override | A |
 | T-07 | AI overrides | Cannot de-tune the strict-JSON router or the summariser | A |
 | T-08 | Promo codes | CRUD plus percent/fixed, dates, max redemptions, plan/interval restrictions | H, B |
-| T-09 | Admins | Add/change role/remove; cannot remove the last operator | H, B |
+| T-09 | Access | Root = ADMIN_EMAIL/ADMIN_PASSWORD from .env (undeletable, password not in the DB); invited accounts add/remove/change-password and are unaffected when the .env pair changes; a stale env-managed row cannot sign in; removing an account cascades its sessions; "sign out other sessions" spares the caller | H, B, A |
 | T-10 | Logs | Filter, level, search, pagination all return correct rows | H |
 | T-11 | Usage drill-down | Figures match that shop's own Plan and Usage page; bogus shopId 404s, never leaks | H, A, T |
 | T-12 | Auth | Unauthenticated / bogus / expired all 302 to login | A |
 | T-13 | Not framable | Frame-ancestors none, including with a shop query param | A |
-| T-14 | Cookie isolation | Web cookie cannot open `/platform`; platform cookie cannot open `/app` or `/web` | A, T |
+| T-14 | Cookie isolation | Web cookie cannot open `/admin`; admin cookie cannot open `/app` or `/web` | A, T |
 | T-15 | Restore | Every global setting changed during T-02 to T-08 restored and verified | — |
+| T-16 | Coupons master switch | Off hides the discount card on Plan & Usage AND validatePromoCode refuses; existing discounted subscriptions untouched | H, A |
+| T-17 | Plan visibility | A hidden plan leaves offeredPlans() and is never named by an upgrade prompt; a shop already on it keeps its quotas and still sees it as its current plan | H, A |
+| T-18 | Admin theme | light / dark / auto persists in cc_admin_theme and is applied server-side on first paint (no flash); an unknown value falls back to auto | H |
 
 ## U. Storefront — the full app-proxy contract (`scripts/qa/storefront.test.ts`)
 
@@ -480,7 +486,7 @@ failure. The HTTP suites additionally require `npm run dev` to be running on `:3
 | `scripts/qa/auth-sessions.test.ts` | K | **yes** |
 | `scripts/qa/ui-embedded.test.ts` | R | **yes** |
 | `scripts/qa/ui-web.test.ts` | S | **yes** |
-| `scripts/qa/ui-platform.test.ts` | T | **yes** |
+| `scripts/qa/ui-admin.test.ts` | T | **yes** |
 | `scripts/qa/storefront.test.ts` | U | **yes** |
 
 Seeding: `scripts/qa/seed-curated.ts` (curated fixtures), `scripts/qa/perf-seed.ts` (synthetic

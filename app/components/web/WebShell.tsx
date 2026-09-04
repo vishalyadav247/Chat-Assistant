@@ -55,7 +55,7 @@ export function WebShell(props: WebShellProps) {
 
   // Mobile drawer (spec 19): the same rail markup slides in ≤900px; CSS alone
   // decides rail vs drawer so desktop DOM is unchanged. Scroll lock, focus trap
-  // and Escape live in useNavDrawer (shared with the /platform console).
+  // and Escape live in useNavDrawer (shared with the /admin console).
   const { open: drawerOpen, setOpen: setDrawerOpen, navRef, railRef, menuBtnRef } = useNavDrawer();
 
   // Push: re-sync silently when already granted; otherwise offer once.

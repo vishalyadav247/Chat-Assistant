@@ -263,30 +263,20 @@ export default function AiAgentPage() {
           </s-stack>
         </s-section>
 
+        {/* We do NOT set the agent up for merchants — this card offers help
+            with THEIR setup, through the support bubble that SupportChat.tsx
+            mounts in the bottom-right corner of the embedded app. */}
         <s-section>
-          <s-grid gridTemplateColumns="1fr" gap="base" alignItems="center">
+          <s-stack direction="inline" gap="base" alignItems="center">
+            <IconChip icon="chat" tone="info" size="large" />
             <s-stack gap="small-200">
-              <s-heading>Want us to set up your AI agent?</s-heading>
+              <s-heading>Stuck setting up your AI agent?</s-heading>
               <s-paragraph color="subdued">
-                Our team trains it on your store, writes the instructions, and gets it ready — so
-                you can switch it on with confidence.
+                Chat with our support team — click the chat icon in the bottom-right corner
+                of the screen and we&rsquo;ll help you through it.
               </s-paragraph>
-              <s-box paddingBlockStart="small-200">
-                <s-button
-                  variant="primary"
-                  icon="email"
-                  onClick={() =>
-                    window.open(
-                      "mailto:support@chatconvert.app?subject=Set%20up%20my%20AI%20agent",
-                      "_blank",
-                    )
-                  }
-                >
-                  Set it up for me
-                </s-button>
-              </s-box>
             </s-stack>
-          </s-grid>
+          </s-stack>
         </s-section>
       </s-stack>
     </s-page>

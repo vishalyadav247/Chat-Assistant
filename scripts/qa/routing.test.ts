@@ -1,5 +1,5 @@
 /* QA: routing / guard-order sweep across all three surfaces (embedded admin,
- * web, platform) plus the app proxy and webhooks.
+ * web, admin) plus the app proxy and webhooks.
  *
  *   Run: npx tsx scripts/qa/routing.test.ts
  *   Needs: the dev server on http://localhost:3000 (BASE_URL to override) and
@@ -124,19 +124,19 @@ const WEB_ROUTES = [
   "web.logout.tsx",
   "web.reset.$token.tsx",
 ];
-const PLATFORM_ROUTES = [
-  "platform.tsx",
-  "platform._index.tsx",
-  "platform.admins.tsx",
-  "platform.ai.tsx",
-  "platform.login.tsx",
-  "platform.logout.tsx",
-  "platform.logs.tsx",
-  "platform.plans.tsx",
-  "platform.promo-codes.tsx",
-  "platform.settings.tsx",
-  "platform.usage._index.tsx",
-  "platform.usage.$shopId.tsx",
+const ADMIN_ROUTES = [
+  "admin.tsx",
+  "admin._index.tsx",
+  "admin.admins.tsx",
+  "admin.ai.tsx",
+  "admin.login.tsx",
+  "admin.logout.tsx",
+  "admin.logs.tsx",
+  "admin.plans.tsx",
+  "admin.promo-codes.tsx",
+  "admin.settings.tsx",
+  "admin.usage._index.tsx",
+  "admin.usage.$shopId.tsx",
 ];
 const PROXY_PATHS = [
   "/proxy/ping",
@@ -210,7 +210,7 @@ async function main(): Promise<void> {
   const groups: Array<[string, string[]]> = [
     ["app.*", APP_ROUTES],
     ["web.*", WEB_ROUTES],
-    ["platform.*", PLATFORM_ROUTES],
+    ["admin.*", ADMIN_ROUTES],
     ["proxy.*", PROXY_PATHS.map((p) => `proxy.${p.split("/")[2]}.tsx`)],
     ["webhooks.*", WEBHOOK_PATHS.map((p) => `webhooks.${p.replace("/webhooks/", "").replace(/\//g, ".")}.tsx`)],
   ];
@@ -319,7 +319,7 @@ async function main(): Promise<void> {
     ["/web/handoff", 200],
     ["/web/invite/not-a-real-token", 200],
     ["/web/reset/not-a-real-token", 200],
-    ["/platform/login", 200],
+    ["/admin/login", 200],
   ] as Array<[string, number]>) {
     const p = await probe(path);
     ok(`GET ${path} → ${expected}`, p.status === expected, String(p.status));
@@ -338,24 +338,24 @@ async function main(): Promise<void> {
     ok("/?shop=… → /app?shop=…", p.status === 302 && (p.location ?? "").startsWith("/app?shop="), `${p.status} ${p.location}`);
   }
   {
-    const p = await probe("/platform");
-    ok("/platform (signed out) → /platform/login", p.status === 302 && (p.location ?? "").includes("/platform/login"), `${p.status} ${p.location}`);
+    const p = await probe("/admin");
+    ok("/admin (signed out) → /admin/login", p.status === 302 && (p.location ?? "").includes("/admin/login"), `${p.status} ${p.location}`);
   }
-  for (const path of ["/platform/admins", "/platform/ai", "/platform/logs", "/platform/plans", "/platform/promo-codes", "/platform/settings", "/platform/usage", "/platform/usage/abc123"]) {
+  for (const path of ["/admin/access", "/admin/ai", "/admin/logs", "/admin/plans", "/admin/promo-codes", "/admin/settings", "/admin/usage", "/admin/usage/abc123"]) {
     const p = await probe(path);
     ok(
-      `${path} (signed out) → /platform/login?next=`,
-      p.status === 302 && (p.location ?? "").includes(`/platform/login?next=${encodeURIComponent(path)}`),
+      `${path} (signed out) → /admin/login?next=`,
+      p.status === 302 && (p.location ?? "").includes(`/admin/login?next=${encodeURIComponent(path)}`),
       `${p.status} ${p.location}`,
     );
   }
   {
-    // /platform?tab=… : the guard preserves the query string on the bounce.
-    const p = await probe("/platform/usage?range=90d");
+    // /admin?tab=… : the guard preserves the query string on the bounce.
+    const p = await probe("/admin/usage?range=90d");
     const loc = p.location ?? "";
     ok(
-      "/platform deep link keeps its query on the auth bounce",
-      loc.includes(encodeURIComponent("/platform/usage?range=90d")),
+      "/admin deep link keeps its query on the auth bounce",
+      loc.includes(encodeURIComponent("/admin/usage?range=90d")),
       loc,
     );
   }
@@ -394,9 +394,9 @@ async function main(): Promise<void> {
         entry.indexOf('X-Content-Type-Options') < entry.indexOf("frame-ancestors"),
     );
     ok(
-      "/platform is in the frame-ancestors 'none' branch (not just /web)",
-      /platformPage\s*=\s*pathname === "\/platform" \|\| pathname\.startsWith\("\/platform\/"\)/.test(entry) &&
-        /if \(webAuthPage \|\| platformPage/.test(entry),
+      "/admin is in the frame-ancestors 'none' branch (not just /web)",
+      /adminPage\s*=\s*pathname === "\/admin" \|\| pathname\.startsWith\("\/admin\/"\)/.test(entry) &&
+        /if \(webAuthPage \|\| adminPage/.test(entry),
       "a ?shop= param would otherwise let the operator console be framed",
     );
     ok("the deny branch also sets Cache-Control: no-store", /frame-ancestors 'none'[\s\S]{0,400}Cache-Control",\s*"no-store"/.test(entry));
@@ -409,13 +409,13 @@ async function main(): Promise<void> {
       ["/", "marketing"],
       ["/web/login", "web"],
       ["/web/forgot", "web"],
-      ["/platform/login", "platform"],
+      ["/admin/login", "admin"],
       ["/app/inbox", "app"],
     ];
     for (const [path, kind] of cases) {
       const p = await probe(path);
       ok(`${path}: X-Content-Type-Options: nosniff`, p.headers.get("x-content-type-options") === "nosniff", p.headers.get("x-content-type-options") ?? "(missing)");
-      if (kind === "web" || kind === "platform") {
+      if (kind === "web" || kind === "admin") {
         ok(`${path}: CSP frame-ancestors 'none'`, (p.headers.get("content-security-policy") ?? "").includes("frame-ancestors 'none'"), p.headers.get("content-security-policy") ?? "(missing)");
         ok(`${path}: X-Frame-Options: DENY`, p.headers.get("x-frame-options") === "DENY", p.headers.get("x-frame-options") ?? "(missing)");
         ok(`${path}: Cache-Control: no-store`, (p.headers.get("cache-control") ?? "").includes("no-store"), p.headers.get("cache-control") ?? "(missing)");
@@ -425,9 +425,9 @@ async function main(): Promise<void> {
         ok(`${path}: Cache-Control: no-store (shopper PII)`, (p.headers.get("cache-control") ?? "").includes("no-store"), p.headers.get("cache-control") ?? "(missing)");
       }
     }
-    // The regression the /platform branch fixes: a ?shop= param must NOT make
+    // The regression the /admin branch fixes: a ?shop= param must NOT make
     // the operator console framable by that shop.
-    for (const path of ["/platform/login?shop=dev-shop.myshopify.com", "/web/login?shop=dev-shop.myshopify.com"]) {
+    for (const path of ["/admin/login?shop=dev-shop.myshopify.com", "/web/login?shop=dev-shop.myshopify.com"]) {
       const p = await probe(path);
       const csp = p.headers.get("content-security-policy") ?? "";
       ok(`${path}: still frame-ancestors 'none' despite ?shop=`, csp.includes("frame-ancestors 'none'") && !csp.includes("myshopify.com"), csp || "(missing)");
@@ -483,11 +483,11 @@ async function main(): Promise<void> {
     ok("GET /web/logout without a cookie → /web/login", p.status === 302 && (p.location ?? "").endsWith("/web/login"), `${p.status} ${p.location}`);
   }
   {
-    const p = await probe("/platform/logout", { cookie: "cc_platform=some-token" });
+    const p = await probe("/admin/logout", { cookie: "cc_admin=some-token" });
     const setCookie = p.headers.get("set-cookie") ?? "";
     ok(
-      "GET /platform/logout does not clear the platform cookie",
-      p.status === 302 && !/cc_platform=;/.test(setCookie),
+      "GET /admin/logout does not clear the admin cookie",
+      p.status === 302 && !/cc_admin=;/.test(setCookie),
       `${p.status} | set-cookie: ${setCookie || "(none)"}`,
     );
   }
@@ -658,13 +658,13 @@ async function main(): Promise<void> {
     }
   }
 
-  // ── Section 10: authenticated platform routing ────────────────────────────
-  section("10. Authenticated platform surface");
+  // ── Section 10: authenticated admin routing ────────────────────────────
+  section("10. Authenticated admin surface");
   {
     const { createHash, randomBytes } = await import("node:crypto");
     const { hashPassword } = await import("../../app/lib/team/password.server");
     // A throwaway operator account — never touch the real one's sessions.
-    const admin = await db.platformAdmin.create({
+    const admin = await db.adminUser.create({
       data: {
         email: `${TAG}-operator-${Date.now()}@example.invalid`,
         name: "QA routing operator",
@@ -672,7 +672,7 @@ async function main(): Promise<void> {
       },
     });
     const raw = randomBytes(32).toString("base64url");
-    const row = await db.platformSession.create({
+    const row = await db.adminSession.create({
       data: {
         tokenHash: createHash("sha256").update(raw).digest("hex"),
         adminId: admin.id,
@@ -681,45 +681,45 @@ async function main(): Promise<void> {
       },
     });
     try {
-      const cookie = `cc_platform=${raw}`;
-      for (const path of ["/platform", "/platform/admins", "/platform/ai", "/platform/logs", "/platform/plans", "/platform/promo-codes", "/platform/settings", "/platform/usage"]) {
+      const cookie = `cc_admin=${raw}`;
+      for (const path of ["/admin", "/admin/access", "/admin/ai", "/admin/logs", "/admin/plans", "/admin/promo-codes", "/admin/settings", "/admin/usage"]) {
         const p = await probe(path, { cookie });
         ok(`signed-in GET ${path} → 200`, p.status === 200, String(p.status));
       }
       {
-        const p = await probe("/platform/login", { cookie });
-        ok("/platform/login (signed in) → /platform", p.status === 302 && (p.location ?? "") === "/platform", `${p.status} ${p.location}`);
+        const p = await probe("/admin/login", { cookie });
+        ok("/admin/login (signed in) → /admin", p.status === 302 && (p.location ?? "") === "/admin", `${p.status} ${p.location}`);
       }
       {
-        const p = await probe("/platform/login?next=https%3A%2F%2Fevil.example", { cookie });
-        ok("/platform/login?next=<external> falls back to /platform", p.status === 302 && (p.location ?? "") === "/platform", `${p.status} ${p.location}`);
+        const p = await probe("/admin/login?next=https%3A%2F%2Fevil.example", { cookie });
+        ok("/admin/login?next=<external> falls back to /admin", p.status === 302 && (p.location ?? "") === "/admin", `${p.status} ${p.location}`);
       }
-      // A platform cookie must not unlock a merchant surface.
+      // A admin cookie must not unlock a merchant surface.
       {
         const p = await probe("/app/inbox", { cookie });
-        ok("platform cookie does NOT open /app/inbox", isBlocked(p), String(p.status));
+        ok("admin cookie does NOT open /app/inbox", isBlocked(p), String(p.status));
       }
-      // A merchant web cookie must not unlock the platform surface (covered by
-      // the signed-out sweep above, re-asserted with a bogus platform value).
+      // A merchant web cookie must not unlock the admin surface (covered by
+      // the signed-out sweep above, re-asserted with a bogus admin value).
       {
-        const p = await probe("/platform/settings", { cookie: "cc_platform=not-a-real-token" });
-        ok("bogus platform cookie → /platform/login", p.status === 302 && (p.location ?? "").includes("/platform/login"), `${p.status} ${p.location}`);
+        const p = await probe("/admin/settings", { cookie: "cc_admin=not-a-real-token" });
+        ok("bogus admin cookie → /admin/login", p.status === 302 && (p.location ?? "").includes("/admin/login"), `${p.status} ${p.location}`);
       }
       // POST-only logout, and it really clears the cookie.
       {
-        const p = await probe("/platform/logout", { cookie, method: "POST", body: new URLSearchParams({}) });
+        const p = await probe("/admin/logout", { cookie, method: "POST", body: new URLSearchParams({}) });
         const setCookie = p.headers.get("set-cookie") ?? "";
         ok(
-          "POST /platform/logout clears the cookie and redirects",
-          p.status === 302 && /cc_platform=;?/.test(setCookie) && /Max-Age=0/.test(setCookie),
+          "POST /admin/logout clears the cookie and redirects",
+          p.status === 302 && /cc_admin=;?/.test(setCookie) && /Max-Age=0/.test(setCookie),
           `${p.status} ${setCookie}`,
         );
-        const gone = await db.platformSession.findUnique({ where: { id: row.id } });
-        ok("POST /platform/logout deletes the platform_sessions row", gone === null);
+        const gone = await db.adminSession.findUnique({ where: { id: row.id } });
+        ok("POST /admin/logout deletes the platform_sessions row", gone === null);
       }
     } finally {
-      await db.platformSession.deleteMany({ where: { adminId: admin.id } }).catch(() => undefined);
-      await db.platformAdmin.delete({ where: { id: admin.id } }).catch(() => undefined);
+      await db.adminSession.deleteMany({ where: { adminId: admin.id } }).catch(() => undefined);
+      await db.adminUser.delete({ where: { id: admin.id } }).catch(() => undefined);
     }
   }
 

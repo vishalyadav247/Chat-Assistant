@@ -4,7 +4,7 @@ import { useState } from "react";
 // the copy is verbatim from the design prototype plan-usage.html).
 // Multiple items can be open at once.
 // The overage rate is NOT hard-coded: it arrives from the plan matrix
-// (plans.server.ts → the route loader), so a /platform price edit is reflected
+// (plans.server.ts → the route loader), so a /admin price edit is reflected
 // here too. `null` = the plan has no overage (AI stops at the cap).
 
 function overageAnswer(overagePerConversation: number | null): string {

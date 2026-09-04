@@ -5,7 +5,7 @@
  * Guarantees the two things the compatibility layer promises:
  *  1. NO BEHAVIOUR CHANGE for the gpt-4 family — the request parameters are
  *     exactly what the app sent before the layer existed.
- *  2. Every model offered in the platform dropdown actually works.
+ *  2. Every model offered in the admin dropdown actually works.
  */
 import {
   isReasoningModel,
@@ -18,7 +18,7 @@ import {
   chatModelError,
   chatModelWarning,
 } from "../app/lib/llm/models";
-import { priceFor } from "../app/lib/platform/llm-pricing";
+import { priceFor } from "../app/lib/admin/llm-pricing";
 
 let failures = 0;
 function assert(cond: boolean, label: string) {

@@ -81,7 +81,6 @@ export function TabPills<T extends string>(props: {
         gap: SPACE.xs,
         background: "var(--s-color-bg-fill-secondary, #f1f1f1)",
         borderRadius: RADIUS.banner,
-        padding: 4,
         width: "fit-content",
         flexWrap: "wrap",
       }}

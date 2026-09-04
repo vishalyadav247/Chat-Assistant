@@ -1,7 +1,7 @@
 import db from "../../db.server";
 import { adminAppUrl } from "../format/admin-url";
 import { requireShopId } from "../tenancy.server";
-import { runtimeConfig } from "../platform/runtime-config.server";
+import { runtimeConfig } from "../admin/runtime-config.server";
 import { DEFAULT_PLANS, PLANS, PLAN_IDS, type PlanId } from "./plans.server";
 import { recordEvent } from "../analytics/events.server";
 import { invalidateShopConfig } from "../config/shop-config.server";
@@ -32,7 +32,7 @@ export type BillingIntervalId = "monthly" | "yearly";
 export type PaidPlanId = Exclude<PlanId, "free">;
 
 /** Overage usage line: capped amount per spec 15 ($100 cap). The per-conversation
- *  rate comes from the plan matrix (platform-overridable) — see usageTermsFor. */
+ *  rate comes from the plan matrix (admin-overridable) — see usageTermsFor. */
 export const USAGE_CAPPED_AMOUNT = 100;
 
 /** Usage-line terms text, derived from the plan's (possibly overridden) rate (QA D5). */
@@ -42,7 +42,7 @@ export function usageTermsFor(plan: PaidPlanId): string {
 
 /**
  * Subscription name sent to Shopify. Uses the STABLE default name
- * ("ChatConvert Basic/Pro/Plus"), never the platform-overridable display name,
+ * ("ChatConvert Basic/Pro/Plus"), never the admin-overridable display name,
  * so planFromSubscriptionName() keeps resolving after a rename (QA D2).
  */
 export function subscriptionNameFor(plan: PaidPlanId): string {
@@ -77,7 +77,7 @@ export interface BillingProvider {
 }
 
 export function isBillingTestMode(): boolean {
-  // Operator-managed at /platform/settings; BILLING_TEST_MODE env is the fallback.
+  // Operator-managed at /admin/settings; BILLING_TEST_MODE env is the fallback.
   //
   // HARD-DISABLED IN PRODUCTION. The mock provider persists a paid plan against
   // a fabricated subscription gid without ever calling Shopify, and its
@@ -127,7 +127,7 @@ export function isPaidPlan(plan: string): plan is PaidPlanId {
 /**
  * Reverse of the "ChatConvert {Plan}" subscription-name convention (audit R1).
  * Matches case-insensitively against the plan id, the DEFAULT name and the
- * CURRENT (platform-overridden) name, so subscriptions created before a rename
+ * CURRENT (admin-overridden) name, so subscriptions created before a rename
  * and subscriptions created with a renamed plan both still resolve (QA D2).
  */
 export function planFromSubscriptionName(name: string): PaidPlanId | null {
@@ -599,4 +599,67 @@ export async function downgradeToFree(shopDomain: string): Promise<BillingReturn
   await recordEvent(shop.id, "plan_changed", { plan: "free", planStatus: "none" });
   invalidateShopConfig(shop.id);
   return { ok: true };
+}
+
+// ── Raising the usage ceiling (spec 15, added 2026-09-03) ──────────────────
+//
+// `cappedAmount` is the merchant's approved maximum for one 30-day billing
+// cycle. Once it is reached Shopify refuses further usage records, and the app
+// stops answering rather than working for free (usage.server.ts → aiAllowed).
+// Only the merchant can lift it: appSubscriptionLineItemUpdate returns a
+// confirmationUrl they must approve, exactly like the original subscription.
+
+const RAISE_CAP_MUTATION = `
+  mutation RaiseUsageCap($id: ID!, $cappedAmount: MoneyInput!) {
+    appSubscriptionLineItemUpdate(id: $id, cappedAmount: $cappedAmount) {
+      confirmationUrl
+      appSubscription { id }
+      userErrors { field message }
+    }
+  }
+`;
+
+/** Ceiling steps offered on Plan & Usage, in USD. */
+export const USAGE_CAP_STEPS = [100, 250, 500, 1000] as const;
+
+/** The next step above the current ceiling (never lowers it). */
+export function nextUsageCap(current: number): number {
+  return USAGE_CAP_STEPS.find((step) => step > current) ?? Math.ceil((current * 2) / 50) * 50;
+}
+
+export async function raiseUsageCap(
+  shopDomain: string,
+  lineItemId: string,
+  cappedAmount: number,
+): Promise<{ ok: true; confirmationUrl: string | null } | { ok: false; error: string }> {
+  if (isBillingTestMode()) {
+    console.log(`[billing mock] raiseUsageCap ${shopDomain} ${lineItemId} → $${cappedAmount}`);
+    return { ok: true, confirmationUrl: null };
+  }
+  try {
+    const { unauthenticated } = await import("../../shopify.server");
+    const { admin } = await unauthenticated.admin(shopDomain);
+    const response = await admin.graphql(RAISE_CAP_MUTATION, {
+      variables: { id: lineItemId, cappedAmount: { amount: cappedAmount, currencyCode: "USD" } },
+    });
+    const body = (await response.json()) as {
+      data?: {
+        appSubscriptionLineItemUpdate?: {
+          confirmationUrl?: string | null;
+          userErrors?: Array<{ message: string }>;
+        };
+      };
+    };
+    const payload = body.data?.appSubscriptionLineItemUpdate;
+    const errors = payload?.userErrors ?? [];
+    if (errors.length > 0) {
+      const message = errors.map((e) => e.message).join("; ");
+      logError("usage_cap_raise_error", message, { shopDomain });
+      return { ok: false, error: message.slice(0, 200) };
+    }
+    return { ok: true, confirmationUrl: payload?.confirmationUrl ?? null };
+  } catch (error) {
+    logError("usage_cap_raise_error", error, { shopDomain });
+    return { ok: false, error: "Shopify could not update the limit. Try again in a moment." };
+  }
 }

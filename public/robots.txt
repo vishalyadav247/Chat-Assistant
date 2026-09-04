@@ -1,7 +1,7 @@
 # ChatConvert — every surface of this app is a private, authenticated tool
 # (embedded admin, the standalone web app, the operator console). There is
 # nothing here for a search engine to index, and the sign-in pages
-# (/web/login, /platform/login) must never appear in results.
+# (/web/login, /admin/login) must never appear in results.
 User-agent: *
 Disallow: /
 

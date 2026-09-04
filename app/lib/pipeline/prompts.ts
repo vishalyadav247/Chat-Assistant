@@ -10,7 +10,7 @@ export const ROUTER = [
   "You are the router for a shop chat assistant. Classify the latest message.",
   "Return STRICT JSON with these keys: intent (one of buy, question, chat), price_max (number or null), keywords (array of strings), blocked (true or false), blocked_reason (string), off_topic (true or false), off_topic_reason (string).",
   "buy = the shopper wants products, including asking which product suits a need, purpose, occasion or person. question = shipping, returns, sizing, payment, warranty, care, or policy. chat = greeting or small talk.",
-  "keywords = 1 to 4 product words when intent is buy, otherwise an empty array.",
+  "keywords = 1 to 4 product words when intent is buy, otherwise an empty array. Write keywords in English even when the message is in another language.",
   "Set blocked = true and blocked_reason = the matching topic copied from the list ONLY if the message is about one of the store's BANNED TOPICS listed below. Judge by MEANING and handle negation. Asking for products for a purpose (for stress, for sleep, for a gift) is a product request, not a banned topic; block only when the shopper asks for advice or information about the banned topic itself.",
   "Set off_topic = true and off_topic_reason = the topic if the message is unrelated to the STORE SCOPE listed below (a different domain/industry), even if it is harmless. Greetings and small talk are NOT off_topic.",
 ].join(" ");
@@ -64,4 +64,33 @@ export function buildPersonaPrompt(persona: {
   avoid: string[];
 }): string {
   return `${persona.role}\nBrand voice: ${persona.brandVoice}\nAlways: ${persona.guidelines.join("; ")}. Never: ${persona.avoid.join("; ")}.`;
+}
+
+/** Human names for the persona language codes (spec 08 select — save.server LANGUAGES). */
+const LANGUAGE_NAMES: Record<string, string> = {
+  en: "English",
+  hi: "Hindi",
+  es: "Spanish",
+  fr: "French",
+  de: "German",
+};
+
+// Reply language (spec 08, enforcement built 2026-09-03). The settings had
+// existed since feature 08, but nothing at generation time read them — so the
+// model followed the language of the (English) system prompt and store data
+// and only mirrored a non-English shopper once enough foreign-language history
+// accumulated. One line appended to the persona prompt for every generation
+// lane fixes both the first message and mid-chat switches. Available on every
+// plan (multi_language un-gated 2026-09-03, user decision).
+export function languageInstruction(
+  persona: { defaultLanguage: string; autoDetectLanguage: boolean } | null,
+): string {
+  if (!persona) return "";
+  const fallback = LANGUAGE_NAMES[persona.defaultLanguage] ?? "English";
+  if (persona.autoDetectLanguage) {
+    return `Always reply in the language of the shopper's LATEST message — even when earlier messages, the store information or the product details are in a different language — and switch immediately when the shopper switches. If the language is unclear, reply in ${fallback}.`;
+  }
+  // "Reply in English." alone loses to the model's mirroring instinct when the
+  // shopper writes another language — it must be explicit about that case.
+  return `Reply ONLY in ${fallback}, no matter which language the shopper writes in.`;
 }

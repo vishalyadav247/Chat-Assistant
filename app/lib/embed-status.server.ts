@@ -1,6 +1,6 @@
 import { unauthenticated } from "../shopify.server";
 import { assertShopDomain } from "./tenancy.server";
-import { runtimeConfig } from "./platform/runtime-config.server";
+import { runtimeConfig } from "./admin/runtime-config.server";
 import { logError } from "./log.server";
 
 // Theme app-embed detection (spec 13). Two independent signals, AUTHORITATIVE

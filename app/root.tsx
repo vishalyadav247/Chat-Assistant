@@ -51,9 +51,6 @@ export function Layout({ children }: { children: ReactNode }) {
         {children}
         <ScrollRestoration />
         <Scripts />
-
-        {/* chatsupport widget */}
-       
       </body>
     </html>
   );
@@ -65,7 +62,7 @@ export default function App() {
 
 // Last-resort boundary for every surface. /app/* routes have their own
 // (app/lib/ui/route-error.tsx → boundary.error) so embedded auth retries keep
-// working; /web/* and /platform/* previously fell through to React Router's
+// working; /web/* and /admin/* previously fell through to React Router's
 // raw stack-trace screen, which support agents and operators could see.
 //
 // SECURITY: nothing from the thrown error is rendered in production — no

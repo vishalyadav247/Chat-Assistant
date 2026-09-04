@@ -82,7 +82,7 @@ function payloadFor(status: string, subscriptionId: string, name = "ChatConvert 
 async function main(): Promise<void> {
   const db = (await import("../../app/db.server")).default;
   const { action } = await import("../../app/routes/webhooks.app-subscriptions");
-  const { savePlanConfig } = await import("../../app/lib/platform/platform-settings.server");
+  const { savePlanConfig } = await import("../../app/lib/admin/admin-settings.server");
   const plans = await import("../../app/lib/billing/plans.server");
 
   const priorConfig = await db.appSecret.findUnique({

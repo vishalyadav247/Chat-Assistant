@@ -1,5 +1,5 @@
 // Plan matrix TYPES + pure constants shared by server (plans.server.ts) and
-// client (platform dashboard UI). No secrets, no DB — safe in the browser
+// client (admin dashboard UI). No secrets, no DB — safe in the browser
 // bundle. The live matrix itself stays server-only in plans.server.ts.
 
 export type PlanId = "free" | "basic" | "pro" | "plus";
@@ -16,8 +16,11 @@ export type GatedFeature =
   | "file_upload"
   | "survey" // post-chat CSAT survey (spec 16) — Basic+
   | "push_notifications" // browser push in the web app (spec 18) — Basic+
-  | "custom_recommendations" // custom recommendations + cross-sell pairs (spec 08) — Pro+
-  | "multi_language"; // persona auto-detect language (spec 08) — Plus only
+  | "custom_recommendations"; // custom recommendations + cross-sell pairs (spec 08) — Pro+
+// "multi_language" (persona auto-detect language, spec 08) was gated until
+// 2026-09-03 — un-gated on every plan (user decision; matches the spec 15
+// matrix). Stored plan overrides naming it are tolerated and filtered out
+// (plans.server planPatchSchema).
 
 export type QuotaDimension =
   | "conversations"
@@ -32,8 +35,16 @@ export type QuotaDimension =
   | "active_campaigns" // simultaneously ACTIVE proactive campaigns (spec 12)
   | "analytics_range_days"; // how far back /app/analytics may look (spec 14)
 
-/** Sentinel for "no limit". Kept here (not in plans.server) so the platform
+/** Sentinel for "no limit". Kept here (not in plans.server) so the admin
  *  dashboard and the quota meters can recognise it in the browser bundle. */
+/**
+ * What "open" enforcement grants every store: the top tier's entitlements as the
+ * matrix currently defines them — NOT unlimited (user, 2026-09-03). Lives here
+ * rather than in plans.server so the admin UI can name the plan without
+ * importing a server module.
+ */
+export const OPEN_MODE_PLAN: PlanId = "plus";
+
 export const UNLIMITED_QUOTA = Number.MAX_SAFE_INTEGER;
 
 export function isUnlimitedQuota(value: number): boolean {
@@ -55,7 +66,6 @@ export const GATED_FEATURES: GatedFeature[] = [
   "survey",
   "push_notifications",
   "custom_recommendations",
-  "multi_language",
 ];
 
 export const QUOTA_DIMENSIONS: QuotaDimension[] = [
@@ -81,4 +91,8 @@ export interface PlanDefinition {
   overagePerConversation: number | null; // null = AI stops at cap
   quotas: Record<QuotaDimension, number>;
   features: GatedFeature[];
+  /** Operator switch (/admin/plans): true = never offered to merchants. A shop
+   *  already ON the plan keeps every quota and still sees it as its current
+   *  plan — hiding withdraws an OFFER, it never downgrades anyone. */
+  hidden: boolean;
 }
