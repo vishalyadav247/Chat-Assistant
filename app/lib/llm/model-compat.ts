@@ -1,5 +1,5 @@
 // OpenAI request-dialect compatibility (spec 19). Pure functions, no DB and no
-// SDK — so the provider, the platform UI and the check script can all use them.
+// SDK — so the provider, the admin UI and the check script can all use them.
 //
 // OpenAI speaks two dialects and sending the wrong one is a hard 400:
 //   - standard chat models (gpt-4o*, gpt-4.1*): `temperature` + `max_tokens`

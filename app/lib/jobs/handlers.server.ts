@@ -11,7 +11,7 @@ import {
   deleteDiscountFromWebhook,
   syncCollectionMembershipFromWebhook,
 } from "../ingestion/catalog-sync.server";
-import { logError } from "../log.server";
+import { logError, logWarn } from "../log.server";
 import { invalidateShopConfig } from "../config/shop-config.server";
 
 // Job registry. Handlers are idempotent — webhooks redeliver, jobs retry.
@@ -30,6 +30,8 @@ export const JOBS = {
   retentionPurge: "retention-purge",
   curatedRevalidate: "curated-revalidate",
   autoResolve: "auto-resolve",
+  // Bills any overage conversation the tick-time call failed to charge for.
+  overageReconcile: "overage-reconcile",
   shopCleanup: "shop-cleanup",
   uninstallPurge: "uninstall-purge",
   knowledgeIngest: "knowledge-ingest",
@@ -113,10 +115,10 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
     const { purgeExpiredTokens } = await import("../team/tokens.server");
     await purgeExpiredTokens().catch((error: unknown) => logError("token_purge_error", error));
     // Operator sessions (spec 19) were never pruned — teamSession rows were, but
-    // platformSession rows accumulated forever (QA D-23). Same daily sweep.
-    const { purgeExpiredPlatformSessions } = await import("../platform/platform-auth.server");
-    await purgeExpiredPlatformSessions().catch((error: unknown) =>
-      logError("platform_session_purge_error", error),
+    // adminSession rows accumulated forever (QA D-23). Same daily sweep.
+    const { purgeExpiredAdminSessions } = await import("../admin/admin-auth.server");
+    await purgeExpiredAdminSessions().catch((error: unknown) =>
+      logError("admin_session_purge_error", error),
     );
     await transitionExpiredTrials()
       .then((count) => {
@@ -187,6 +189,41 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
   });
   await boss.schedule(JOBS.autoResolve, "*/10 * * * *", {}, {}).catch((error: unknown) => {
     logError("auto_resolve_schedule_error", error);
+  });
+
+  // Overage billing safety net (spec 15). Conversations past the allowance are
+  // billed at tick time, but that call is fire-and-forget: a network blip, an
+  // expired token or a rate limit would otherwise mean work served and never
+  // charged. PlanUsage keeps overageCount vs overageReported, and this drives
+  // the difference to zero. Idempotent by construction — it only ever submits
+  // what is still owed, and it stops at the merchant's approved ceiling.
+  await boss.work(JOBS.overageReconcile, async () => {
+    const { currentPeriodStart } = await import("../billing/usage.server");
+    const { submitOverageRecords } = await import("../billing/usage-records.server");
+    const periodStart = currentPeriodStart();
+    // Only shops that still owe something, and only this period — a closed
+    // month cannot be billed anyway (Shopify closes the cycle).
+    const rows = await db.$queryRaw<Array<{ shopId: string; owed: number }>>`
+      SELECT "shopId", ("overageCount" - "overageReported") AS owed
+      FROM "plan_usage"
+      WHERE "periodStart" = ${periodStart}::date
+        AND "overageCount" > "overageReported"
+      LIMIT 200
+    `;
+    for (const row of rows) {
+      const result = await submitOverageRecords(row.shopId, periodStart).catch((error: unknown) => {
+        logError("overage_reconcile_error", error, { shopId: row.shopId });
+        return null;
+      });
+      if (result && result.owed > 0 && !result.capped) {
+        logWarn("overage_still_owed", `${result.owed} conversation(s) not yet billed`, {
+          shopId: row.shopId,
+        });
+      }
+    }
+  });
+  await boss.schedule(JOBS.overageReconcile, "27 * * * *", {}, {}).catch((error: unknown) => {
+    logError("overage_reconcile_schedule_error", error);
   });
 
   await boss.work<ShopJob & { payload: unknown }>(JOBS.productUpsert, async ([job]) => {

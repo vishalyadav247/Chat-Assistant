@@ -18,7 +18,7 @@ import { RADIUS } from "./tokens";
 // The plan NAME always comes from the server (requiredPlanName /
 // nextPlanNameForQuota read the live, operator-editable matrix). Never write a
 // tier name into a component: the operator can move a feature between plans
-// from /platform, and a hard-coded "Pro" would quietly start lying.
+// from /admin, and a hard-coded "Pro" would quietly start lying.
 
 const UPGRADE_HREF = "/app/plan-usage";
 

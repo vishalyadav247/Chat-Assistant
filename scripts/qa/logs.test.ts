@@ -1,11 +1,11 @@
-/* QA — platform logging & observability, spec 21 (2026-08-21).
+/* QA — admin logging & observability, spec 21 (2026-08-21).
  *
  *   npx tsx scripts/qa/logs.test.ts
  *
  * Complements `npm run logs:check` (which covers the write seam's happy path)
  * by exercising the parts the acceptance harness does not: the fire-and-forget
  * path, the console mirror, message-column redaction, attribution fallbacks,
- * purge of uninstalled shops, the whole /platform/logs READ layer (filters,
+ * purge of uninstalled shops, the whole /admin/logs READ layer (filters,
  * bounded scan, row cap, "(removed store)"), and the unauthenticated 302.
  *
  * Everything it creates is prefixed `qa_logs_` / `qa-logs-*.myshopify.com` and
@@ -68,8 +68,8 @@ async function main(): Promise<void> {
   const { APP_LOG_RETENTION_DAYS, purgeAppLogs } = await import(
     "../../app/lib/jobs/handlers.server"
   );
-  const reports = await import("../../app/lib/platform/logs-report.server");
-  const { ROW_LIMIT, LOG_RANGE_HOURS } = await import("../../app/lib/platform/logs-shared");
+  const reports = await import("../../app/lib/admin/logs-report.server");
+  const { ROW_LIMIT, LOG_RANGE_HOURS } = await import("../../app/lib/admin/logs-shared");
 
   /** Delete only what this script created. */
   async function scrub(): Promise<void> {
@@ -434,12 +434,12 @@ async function main(): Promise<void> {
     await db.appLog.deleteMany({ where: { event: `${EVENT_PREFIX}flood` } });
 
     // ────────────────────────────────────────────────────────────────────────
-    section("14. /platform/logs requires an operator session");
-    const route = await import("../../app/routes/platform.logs");
+    section("14. /admin/logs requires an operator session");
+    const route = await import("../../app/routes/admin.logs");
     let status = 0;
     let location = "";
     try {
-      const url = "https://example.com/platform/logs?hours=168&level=error";
+      const url = "https://example.com/admin/logs?hours=168&level=error";
       // Only `request` is read by this loader; the rest of the framework's
       // args object is irrelevant here.
       await route.loader({
@@ -447,7 +447,7 @@ async function main(): Promise<void> {
         params: {},
         context: {},
         url: new URL(url),
-        pattern: "/platform/logs",
+        pattern: "/admin/logs",
       } as unknown as Parameters<typeof route.loader>[0]);
     } catch (thrown) {
       if (thrown instanceof Response) {
@@ -456,8 +456,8 @@ async function main(): Promise<void> {
       }
     }
     ok("an unauthenticated request is redirected", status === 302, String(status));
-    ok("…to the platform login", location.startsWith("/platform/login"), location);
-    ok("…preserving the deep link", location.includes(encodeURIComponent("/platform/logs")), location);
+    ok("…to the admin login", location.startsWith("/admin/login"), location);
+    ok("…preserving the deep link", location.includes(encodeURIComponent("/admin/logs")), location);
 
     section("15. compliance — app_logs is in the uninstall purge inventory");
     const handlers = readFileSync(
@@ -472,7 +472,7 @@ async function main(): Promise<void> {
     );
 
     section("16. no console.error / console.warn bypasses the seam (acceptance #2)");
-    // A bypassed call site is invisible at /platform/logs — the whole point of
+    // A bypassed call site is invisible at /admin/logs — the whole point of
     // the seam. Walked in-process so the check is shell-independent.
     const { readdirSync } = await import("node:fs");
     const appRoot = new URL("../../app/", import.meta.url);

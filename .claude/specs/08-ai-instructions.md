@@ -13,7 +13,7 @@ Admin views under `/app/ai-agent/instructions` (tabs: General Instructions / Pro
 - **Communication style** presets Friendly/Professional/Empathetic/Custom + editable tone textarea → persona.communicationStyle + brandVoice.
 - **Behaviours** textarea (max 1000 + counter; seeded with ROLE/KNOWLEDGE/COMMUNICATION STYLE/GUIDELINES/AVOID template) → persona.behaviours.
 - **Default language** select (English/Hindi/Spanish/French/German) → persona.defaultLanguage.
-- **Auto-detect shopper's language** toggle → persona.autoDetectLanguage — **Plus gate** (locked + upgrade below Plus).
+- **Auto-detect shopper's language** toggle → persona.autoDetectLanguage — available on every plan (`multi_language` gate removed 2026-09-03, user decision).
 - **Banned topics & phrases** textarea one-per-line → guardrails.bannedTopics (re-embed banned vectors on save, 03 layer c).
 - **Fallback message** textarea, blank → built-in default; hint: "assistant captures the shopper's email as a lead after showing this" (fallback turns trigger email-capture prompt in widget → Contact lead).
 - Cancel/Save (contextual save bar).
@@ -62,13 +62,13 @@ Runtime consumption: spec 10 (inbox ticket creation, AI dormant, widget states).
 
 - Persona/guardrails saves re-embed affected vectors (banned topics; recommendation triggers) via job; save returns fast.
 - Server-side length caps mirror UI counters (250/1000/150/300).
-- Auto-detect language enforced by plan server-side.
+- Reply language enforced at generation time (`languageInstruction`, spec 03): auto-detect ON → mirror the shopper's latest message (switches mid-chat); OFF → always the default language. No plan gate (un-gated 2026-09-03).
 - Seeded defaults on install: persona template + guardrails defaults from `data-sources/*.json` shapes, Best sellers/New arrivals recommendations.
 
 ## Acceptance criteria
 
 1. General tab round-trips; saving banned topics changes pipeline blocking within one config-cache TTL; fallback message override honored.
-2. Auto-detect toggle locked below Plus (server rejects too).
+2. Auto-detect toggle saves on every plan; the reply language follows it at generation time (first message and mid-chat switches).
 3. App recommendation with trigger "what are your best sellers" answers deterministically with its products (and loses to a merchant curated answer on the same question).
 4. Custom recommendation search term "wedding gift" constrains buy-lane candidates to configured collection.
 5. OOS toggle: substitution copy appears when a matched product is OOS; overstock toggle boosts tagged items.
@@ -77,4 +77,4 @@ Runtime consumption: spec 10 (inbox ticket creation, AI dormant, widget states).
 
 ## Out of scope / gaps
 
-Cross-sell pair editor beyond minimal picker; "AI settings"/"Automation settings"/translation screens; sentiment model sophistication (v1 = heuristics listed); multi-language reply enforcement (needs 15 gates + i18n pass).
+Cross-sell pair editor beyond minimal picker; "AI settings"/"Automation settings"/translation screens; sentiment model sophistication (v1 = heuristics listed). ~~Multi-language reply enforcement~~ — built 2026-09-03 (`languageInstruction` in prompts.ts, every plan; see spec 03 and the PROGRESS decisions log). Still out: translated canned strings (fallback/clarify/busy) and cross-language RAG retrieval.

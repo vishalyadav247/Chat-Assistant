@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import db from "../../db.server";
 import { embedTexts, productEmbeddingText, toSqlVector } from "../embeddings/embedding.server";
-import { runtimeConfig } from "../platform/runtime-config.server";
+import { runtimeConfig } from "../admin/runtime-config.server";
 import { requireShopId } from "../tenancy.server";
 import { logWarn } from "../log.server";
 

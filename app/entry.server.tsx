@@ -32,19 +32,19 @@ export default async function handleRequest(
   // documents are never framed. The Shopify helper only sets frame-ancestors
   // when a `shop` param is present, so they get an explicit deny.
   //
-  // /platform MUST be in this condition, not just /web: addDocumentResponseHeaders
+  // /admin MUST be in this condition, not just /web: addDocumentResponseHeaders
   // runs first and unconditionally sets `frame-ancestors https://<shop>` whenever
   // ?shop= is present, which would otherwise let anyone frame the cross-tenant
   // operator console by appending a shop param to the URL.
   const pathname = new URL(request.url).pathname;
   const webAuthPage = pathname === "/web" || pathname.startsWith("/web/");
-  const platformPage = pathname === "/platform" || pathname.startsWith("/platform/");
-  if (webAuthPage || platformPage || (hasWebCookie(request) && !hasShopifySignals(request))) {
+  const adminPage = pathname === "/admin" || pathname.startsWith("/admin/");
+  if (webAuthPage || adminPage || (hasWebCookie(request) && !hasShopifySignals(request))) {
     responseHeaders.set("Content-Security-Policy", "frame-ancestors 'none'");
     responseHeaders.set("X-Frame-Options", "DENY");
     responseHeaders.set("Cache-Control", "no-store");
     // Invite / reset / handoff URLs carry tokens — never leak them via Referer.
-    if (webAuthPage || platformPage) responseHeaders.set("Referrer-Policy", "no-referrer");
+    if (webAuthPage || adminPage) responseHeaders.set("Referrer-Policy", "no-referrer");
     // public/robots.txt only asks crawlers not to fetch. It does nothing about a
     // URL discovered another way — and invite / reset / handoff links are shared
     // by email and chat, which is exactly how a login page ends up indexed. This

@@ -14,23 +14,29 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
 import { resolveShopId } from "../lib/tenancy.server";
+import { runtimeConfig } from "../lib/admin/runtime-config.server";
 import {
   GATED_FEATURES,
   PLANS,
   QUOTA_DIMENSIONS,
   displayQuota,
   isUnlimitedQuota,
+  offeredPlans,
   overageRate,
+  yearlyBillingEnabled,
   type GatedFeature,
   type PlanDefinition,
   type QuotaDimension,
 } from "../lib/billing/plans.server";
-import { currentUsage, overageBillable } from "../lib/billing/usage.server";
+import { currentUsage, overageBillable, usageStatus } from "../lib/billing/usage.server";
+import { invalidateUsageBalance } from "../lib/billing/usage-cap.server";
 import {
   downgradeToFree,
   getBillingProvider,
   isBillingInterval,
   isPaidPlan,
+  nextUsageCap,
+  raiseUsageCap,
   yearlyTotal,
 } from "../lib/billing/shopify-billing.server";
 import { QuotaMeter } from "../components/QuotaMeter";
@@ -45,7 +51,7 @@ import {
   recordPendingRedemption,
   validatePromoCode,
 } from "../lib/billing/promo-codes.server";
-import { PlanDiscountCard, PlanDoneForYouCard } from "../components/PlanExtras";
+import { PlanDiscountCard, PlanSupportCard } from "../components/PlanExtras";
 import { PlanFaq } from "../components/PlanFaq";
 import { trialDaysByPlan } from "../lib/billing/trial.server";
 import { requireShopAccess } from "../lib/access.server";
@@ -133,11 +139,10 @@ const FEATURE_BULLET: Record<GatedFeature, string | null> = {
   survey: null,
   push_notifications: "Browser push notifications",
   custom_recommendations: "Custom recommendations + cross-sell pairs",
-  multi_language: null,
 };
 
 /** GENERATED from the live plan matrix, never hand-written per plan id.
- *  The matrix is operator-editable at /platform/plans, so hand-authored copy
+ *  The matrix is operator-editable at /admin/plans, so hand-authored copy
  *  silently stops matching what the app enforces the moment a limit or a
  *  feature moves between tiers — which is exactly how every card came to
  *  advertise "Multi-language", a feature only Plus has ever granted. */
@@ -159,6 +164,10 @@ function bulletsFor(def: PlanDefinition): string[] {
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const access = await requireShopAccess(request, { permission: "plan" });
   const { shopId, shopDomain } = access;
+
+  // One read of the metering picture for the whole loader (it may call Shopify
+  // for the spend balance, so never twice).
+  const status = await usageStatus(shopId);
 
   const [shop, usage] = await Promise.all([
     db.shop.findUnique({
@@ -193,7 +202,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     Object.keys(PLANS) as (keyof typeof PLANS)[],
   );
 
-  const plans: PlanCardData[] = Object.values(PLANS).map((def) => ({
+  // Withdrawn tiers (/admin/plans) are not offered — except the shop's own,
+  // which must still appear or the page would claim it is on something else.
+  const plans: PlanCardData[] = offeredPlans(plan).map((def) => ({
     id: def.id,
     name: def.name,
     description: PLAN_DESCRIPTIONS[def.id] ?? "",
@@ -213,8 +224,20 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     billingInterval: shop?.billingInterval,
     trialEndsAt: shop?.trialEndsAt ? shop.trialEndsAt.toISOString() : null,
     activePromo,
+    couponsEnabled: runtimeConfig().promoCodesEnabled,
     usage,
     quota: displayQuota(plan, "conversations"),
+    // Everything the merchant needs to understand metering: how close they are,
+    // whether they are being charged, and whether the AI has stopped because
+    // their approved spend limit is full (spec 15, 2026-09-03).
+    usageStatus: status,
+    // Computed here: nextUsageCap lives in a .server module and the banner is
+    // client code.
+    nextUsageCap: nextUsageCap(status.capped),
+    // Annual billing can be withdrawn from /admin/plans (yearly subscriptions
+    // can never carry overage — see plans.server.ts). A shop already ON annual
+    // still sees the toggle, so its own billing is not misrepresented.
+    yearlyEnabled: yearlyBillingEnabled() || shop?.billingInterval === "yearly",
     // FAQ copy reads the overage rate from the matrix, never a literal (D10).
     // It must reflect what this shop can ACTUALLY be billed, not just the
     // tier's headline rate: Shopify rejects usage line items on ANNUAL
@@ -254,11 +277,36 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       : { ok: false as const, error: result.error, field: "code" as const };
   }
 
+  // Raise the usage ceiling (spec 15). Only the merchant can approve a higher
+  // limit, so this returns Shopify's confirmation URL and the page breaks out
+  // of the iframe for it, exactly like subscribing.
+  if (intent === "raise_cap") {
+    const shop = await db.shop.findUnique({
+      where: { id: shopId },
+      select: { usageLineItemId: true },
+    });
+    if (!shop?.usageLineItemId) {
+      return { ok: false as const, error: "This subscription has no usage limit to raise." };
+    }
+    const status = await usageStatus(shopId);
+    const result = await raiseUsageCap(shopDomain, shop.usageLineItemId, nextUsageCap(status.capped));
+    if (!result.ok) return { ok: false as const, error: result.error };
+    invalidateUsageBalance(shopId);
+    return { ok: true as const, confirmationUrl: result.confirmationUrl };
+  }
+
   if (intent === "subscribe") {
     const plan = String(formData.get("plan") ?? "");
     const interval = String(formData.get("interval") ?? "monthly");
     if (!isBillingInterval(interval)) {
       return { ok: false as const, error: "Invalid billing interval." };
+    }
+    // THE guard for the yearly switch. Hiding the toggle is presentation; the
+    // interval is a form field, so a stale tab or a crafted POST would still
+    // reach appSubscriptionCreate with "yearly" and buy an annual plan the
+    // operator has withdrawn.
+    if (interval === "yearly" && !yearlyBillingEnabled()) {
+      return { ok: false as const, error: "Annual billing isn't available. Choose monthly." };
     }
     if (plan === "free") {
       const result = await downgradeToFree(shopDomain);
@@ -349,6 +397,7 @@ export default function PlanUsagePage() {
     data.billingInterval === "yearly" ? "yearly" : "monthly",
   );
   const [subscribingPlan, setSubscribingPlan] = useState<string | null>(null);
+  const [raisingCap, setRaisingCap] = useState(false);
   const [promo, setPromo] = useState<PlanPromo | null>(null);
 
   const upgraded = useMemo(
@@ -377,6 +426,7 @@ export default function PlanUsagePage() {
       return;
     }
     setSubscribingPlan(null);
+    setRaisingCap(false);
     if (
       fetcher.data.ok &&
       "downgraded" in fetcher.data &&
@@ -404,6 +454,13 @@ export default function PlanUsagePage() {
     );
   };
 
+  const usage = data.usageStatus;
+  const nextCap = data.nextUsageCap;
+  const raiseCap = () => {
+    setRaisingCap(true);
+    fetcher.submit({ intent: "raise_cap" }, { method: "post" });
+  };
+
   const pct = data.quota > 0 ? Math.round((data.usage / data.quota) * 100) : 0;
   const badge = statusBadge(data.planStatus, data.trialEndsAt, dt.date);
   const actionError =
@@ -427,6 +484,53 @@ export default function PlanUsagePage() {
           </s-banner>
         ) : null}
 
+        {/* Metering is money, so it says so out loud (spec 15, 2026-09-03).
+            Three states, in the order they can happen: approaching the
+            allowance, being charged past it, and stopped because the approved
+            spend limit is full. */}
+        {usage.ceilingReached ? (
+          <s-banner tone="critical" heading="AI replies are paused — spending limit reached">
+            <s-paragraph>
+              You&apos;ve used the ${usage.capped} extra-conversation limit you approved for this
+              billing cycle, so the AI has stopped answering new conversations. Raise the limit to
+              switch it back on — Shopify will ask you to approve the new amount, and you&apos;re
+              only ever charged for conversations actually handled.
+            </s-paragraph>
+            <s-button
+              slot="primary-action"
+              variant="primary"
+              loading={raisingCap}
+              onClick={raiseCap}
+            >
+              Raise limit to ${nextCap}
+            </s-button>
+          </s-banner>
+        ) : usage.overage > 0 ? (
+          <s-banner tone="warning" heading="You're past your plan allowance">
+            <s-paragraph>
+              {usage.overage.toLocaleString("en-US")} extra conversation
+              {usage.overage === 1 ? "" : "s"} this month
+              {usage.rate ? ` at $${usage.rate.toFixed(2)} each` : ""}
+              {usage.spend > 0 ? ` — $${usage.spend.toFixed(2)} so far` : ""}, billed by Shopify on
+              your next invoice. Your limit for this cycle is ${usage.capped}.
+              {usage.unbilled > 0
+                ? " A few are still being reported to Shopify; they'll appear shortly."
+                : ""}{" "}
+              Upgrading raises the included allowance.
+            </s-paragraph>
+          </s-banner>
+        ) : usage.nearCap ? (
+          <s-banner tone="warning" heading="You're close to your monthly allowance">
+            <s-paragraph>
+              {usage.used.toLocaleString("en-US")} of {data.quota.toLocaleString("en-US")}{" "}
+              conversations used.{" "}
+              {usage.billable && usage.rate
+                ? `After that the AI keeps replying and extra conversations are billed at $${usage.rate.toFixed(2)} each, up to the $${usage.capped} limit you approved.`
+                : "After that the AI stops replying until the 1st. Upgrade for a bigger allowance."}
+            </s-paragraph>
+          </s-banner>
+        ) : null}
+
         <s-section heading="Usage this month">
           <s-paragraph>
             Resets on the 1st. Conversations are your plan meter.
@@ -439,6 +543,14 @@ export default function PlanUsagePage() {
           <s-paragraph>
             You&apos;re at <b>{pct}%</b> of the {data.planName} allowance.
           </s-paragraph>
+          {usage.overage > 0 ? (
+            <s-paragraph>
+              Plus <b>{usage.overage.toLocaleString("en-US")}</b> extra conversation
+              {usage.overage === 1 ? "" : "s"}
+              {usage.rate ? ` at $${usage.rate.toFixed(2)} each` : ""} — <b>${usage.spend.toFixed(2)}</b>{" "}
+              of your ${usage.capped} limit for this billing cycle.
+            </s-paragraph>
+          ) : null}
         </s-section>
 
         <s-section heading="Your plan">
@@ -467,6 +579,7 @@ export default function PlanUsagePage() {
             currentPlan={data.plan}
             interval={interval}
             onIntervalChange={setInterval}
+            yearlyEnabled={data.yearlyEnabled}
             onSelect={
               data.billingManageable
                 ? selectPlan
@@ -480,13 +593,17 @@ export default function PlanUsagePage() {
           />
         </s-section>
 
-        <PlanDiscountCard
-          applied={promo}
-          onApplied={setPromo}
-          onRemove={() => setPromo(null)}
-          disabled={!data.billingManageable}
-        />
-        <PlanDoneForYouCard contactHref={CONTACT_HREF} />
+        {/* Coupons are an operator-level feature switch (/admin/promo-codes).
+            Off = no field at all, rather than a field that always fails. */}
+        {data.couponsEnabled ? (
+          <PlanDiscountCard
+            applied={promo}
+            onApplied={setPromo}
+            onRemove={() => setPromo(null)}
+            disabled={!data.billingManageable}
+          />
+        ) : null}
+        <PlanSupportCard />
         <PlanFaq
           contactHref={CONTACT_HREF}
           overagePerConversation={data.overagePerConversation}

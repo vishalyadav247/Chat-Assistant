@@ -1,7 +1,7 @@
 /* Plan gate enforcement — end-to-end (test cases B-10 .. B-15, spec 15).
  * Run: npx tsx scripts/qa/plan-gates.test.ts
  *
- * platform-check.ts already proves the MATRIX resolves correctly. This proves
+ * admin-check.ts already proves the MATRIX resolves correctly. This proves
  * the gates actually BITE at the real mutation points: quotas refuse the N+1th
  * create, feature gates throw PlanGateError, over-quota data survives a
  * downgrade, and the never-gate list stays open on Free.
@@ -54,7 +54,7 @@ async function main(): Promise<void> {
   const db = (await import("../../app/db.server")).default;
   const plans = await import("../../app/lib/billing/plans.server");
   const { savePlanConfig } = await import(
-    "../../app/lib/platform/platform-settings.server"
+    "../../app/lib/admin/admin-settings.server"
   );
   const { saveCuratedAnswer } = await import("../../app/lib/curated/save.server");
   const { saveCampaign, toggleCampaign } = await import("../../app/lib/campaigns/campaigns.server");
@@ -226,7 +226,7 @@ async function main(): Promise<void> {
     }
     ok("custom_recommendations allowed on Pro", proRecOk);
 
-    // multi_language: Plus only, and only the OFF→ON transition is gated.
+    // Auto-detect language is UN-GATED (2026-09-03): every plan may turn it on.
     const general = {
       role: "Support agent",
       communicationStyle: "friendly",
@@ -237,40 +237,28 @@ async function main(): Promise<void> {
       bannedTopics: [],
       fallbackMessage: "Sorry, I can't help with that.",
     };
-    await setPlan("pro");
+    await setPlan("free");
+    let freeLangOk = false;
+    try {
+      await saveGeneralInstructions(shopId, general);
+      freeLangOk = true;
+    } catch {
+      freeLangOk = false;
+    }
+    ok("auto-detect language saves on Free (multi_language un-gated 2026-09-03)", freeLangOk);
     ok(
-      "multi_language refused on Pro",
-      await refused(() => saveGeneralInstructions(shopId, general)),
+      "multi_language is no longer a gated feature",
+      !(plans.GATED_FEATURES as string[]).includes("multi_language"),
     );
-    await setPlan("plus");
-    let plusLangOk = false;
-    try {
-      await saveGeneralInstructions(shopId, general);
-      plusLangOk = true;
-    } catch {
-      plusLangOk = false;
-    }
-    ok("multi_language allowed on Plus", plusLangOk);
-
-    await setPlan("pro");
-    let keptOnDowngrade = false;
-    try {
-      // Already ON from the Plus save — saving again must NOT be refused.
-      await saveGeneralInstructions(shopId, general);
-      keptOnDowngrade = true;
-    } catch {
-      keptOnDowngrade = false;
-    }
-    ok("a downgraded shop keeps auto-detect and can still save", keptOnDowngrade);
 
     // ── B-13 never-gated surfaces stay open on Free ───────────────────────
     await setPlan("free");
-    for (const feature of ["survey", "push_notifications", "custom_recommendations", "multi_language"] as const) {
+    for (const feature of ["survey", "push_notifications", "custom_recommendations"] as const) {
       ok(`free is gated out of ${feature}`, plans.hasFeature("free", feature) === false);
     }
     // Spec 15 never-gate list: inbox, human handover, GDPR flows and the Test
     // AI console must have NO gate identifier at all, so no operator edit at
-    // /platform/plans can ever switch them off for a tier.
+    // /admin/plans can ever switch them off for a tier.
     // inbox_cart_view is deliberately allowed: it gates an extra PANEL inside
     // the inbox (the shopper's live cart), not access to the inbox itself.
     const allowed = new Set(["inbox_cart_view"]);
@@ -299,7 +287,7 @@ async function main(): Promise<void> {
       priority: "normal",
     });
     ok("open mode lifts the quota", openCreate.ok === true);
-    ok("open mode grants every feature", plans.hasFeature("free", "multi_language") === true);
+    ok("open mode grants every feature", plans.hasFeature("free", "custom_recommendations") === true);
   } finally {
     // Remove the fixture shop and restore the operator's stored plan config.
     await db.curatedAnswer.deleteMany({ where: { shopId } });
@@ -310,7 +298,7 @@ async function main(): Promise<void> {
     await db.guardrails.deleteMany({ where: { shopId } });
     await db.analyticsEvent.deleteMany({ where: { shopId } });
     // The gate fixtures embed content, so this shop owns usage rows. llm_usage_daily
-    // has no foreign key, so anything left here is counted by the platform fleet
+    // has no foreign key, so anything left here is counted by the admin fleet
     // cost tile forever with no shop left to attribute it to.
     await db.llmUsageDaily.deleteMany({ where: { shopId } });
     await db.planUsage.deleteMany({ where: { shopId } });

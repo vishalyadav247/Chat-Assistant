@@ -19,7 +19,9 @@
   --cw-shadow-md: 0 6px 20px rgba(20, 20, 25, 0.08), 0 0 0 1px rgba(20, 20, 25, 0.04);
   --cw-radius: 16px;
   position: fixed;
-  z-index: 2147483000;
+  /* Max 32-bit signed int: nothing a theme or another app ships can sit
+     above the widget. */
+  z-index: 2147483647;
   display: flex;
   flex-direction: column;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto, Helvetica, Arial, sans-serif;
@@ -860,4 +862,137 @@ textarea.cw-inp { resize: vertical; min-height: 64px; font-family: inherit; line
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ── Mobile scale ──────────────────────────────────────────────────────────
+   Everything above is sized for the 360px desktop panel, where 11-13px reads
+   fine in a small floating card. Full-screen on a phone those same numbers
+   land at roughly two thirds of the platform's own UI (iOS and Android body
+   text is 15-17px) and most tap targets fall under the 44px minimum, so the
+   widget reads as a shrunk desktop panel instead of a mobile app. This block
+   scales type, spacing and hit areas only — no layout is restructured.
+
+   Two values here are load-bearing rather than cosmetic:
+   - every focusable text field goes to 16px. Below that iOS Safari zooms the
+     page on focus and never zooms back out, which is its own bug report.
+   - .cw-send is 48px square, exactly the composer's one-row height. The two
+     were 34px and ~38px, which is the "send button is shorter than the input"
+     mismatch. */
+@media (max-width: 480px) {
+  .cw-root { font-size: 15px; }
+
+  /* Header */
+  .cw-head { padding: 14px 16px 13px; gap: 6px; }
+  .cw-logo { width: 44px; height: 44px; border-radius: 12px; }
+  .cw-title { font-size: 19px; }
+  .cw-sub { font-size: 14px; }
+
+  .cw-body { padding: 16px; gap: 14px; }
+
+  /* Home blocks */
+  .cw-blk { padding: 15px 16px; border-radius: 14px; }
+  .cw-blk-t { font-size: 16px; }
+  .cw-status { font-size: 14px; gap: 8px; margin-top: 6px; }
+  .cw-status .cw-d { width: 9px; height: 9px; }
+  .cw-actions { gap: 10px; margin-top: 14px; }
+  .cw-root .cw-chatnow { height: 48px; padding: 0 18px; font-size: 15px; border-radius: 12px; gap: 8px; }
+  .cw-cm { width: 48px; height: 48px; border-radius: 12px; }
+  .cw-cm svg { width: 25px; height: 25px; }
+  .cw-row-sub { font-size: 14px; margin-top: 4px; }
+
+  /* Search + FAQ */
+  .cw-search { padding: 11px 13px; border-radius: 11px; }
+  .cw-search input { font-size: 16px; }
+  .cw-faq { font-size: 15px; padding: 14px 2px; }
+  .cw-faq-cat { font-size: 12.5px; }
+  .cw-faq-answer { font-size: 15px; margin-top: 12px; }
+  .cw-empty { font-size: 14px; }
+
+  /* Chat thread */
+  .cw-msgs { gap: 14px; }
+  .cw-msg { gap: 9px; }
+  .cw-av { width: 32px; height: 32px; font-size: 13px; }
+  .cw-av--initials { font-size: 12px; }
+  .cw-bubble { font-size: 15px; padding: 11px 14px; border-radius: 14px; border-bottom-left-radius: 4px; }
+  .cw-bubble--user { border-bottom-left-radius: 14px; border-bottom-right-radius: 4px; }
+  .cw-bubble--sys { font-size: 13px; }
+  .cw-msg-meta { font-size: 12px; }
+  .cw-starters { gap: 9px; }
+  .cw-root .cw-chip { font-size: 15px; padding: 12px 15px; border-radius: 12px; }
+  .cw-retry { font-size: 14px; padding: 8px 12px; }
+
+  /* Product cards */
+  .cw-cards { gap: 12px; }
+  .cw-card { width: 200px; border-radius: 14px; }
+  .cw-card-img { height: 132px; }
+  .cw-card-body { padding: 11px 12px 12px; gap: 5px; }
+  .cw-card-t { font-size: 14px; }
+  .cw-card-p { font-size: 15px; }
+  .cw-card-actions { gap: 8px; padding-top: 8px; }
+  .cw-btn { padding: 10px; font-size: 13.5px; border-radius: 10px; }
+
+  /* Composer — the send button matches the input's one-row height exactly */
+  .cw-input { padding: 10px 12px; gap: 10px; }
+  .cw-input .cw-composer {
+    min-height: 48px;
+    padding: 12px 14px;
+    font-size: 16px;
+    line-height: 1.4;
+    border-radius: 12px;
+  }
+  .cw-root .cw-send { width: 48px; height: 48px; border-radius: 12px; }
+  .cw-root .cw-send svg { width: 20px; height: 20px; }
+
+  /* Order tracking */
+  .cw-tabs button { font-size: 15px; padding: 12px 4px 13px; }
+  .cw-lbl { font-size: 14px; margin-bottom: 8px; }
+  .cw-inp { padding: 13px 14px; font-size: 16px; border-radius: 12px; }
+  textarea.cw-inp { min-height: 76px; }
+  .cw-radios { gap: 24px; }
+  .cw-radio { font-size: 15px; gap: 10px; }
+  .cw-dot { width: 20px; height: 20px; }
+  .cw-radio input:checked + .cw-dot::after { inset: 4px; }
+  .cw-root .cw-track { width: 200px; padding: 13px; font-size: 15.5px; border-radius: 12px; }
+  .cw-root .cw-ot-again { padding: 13px; font-size: 15px; }
+  .cw-ot-card { padding: 15px 16px; gap: 10px; }
+  .cw-ot-name { font-size: 15px; }
+  .cw-ot-total { font-size: 15px; }
+  .cw-ot-sub { font-size: 13.5px; }
+  .cw-ot-chip { padding: 4px 10px; font-size: 13px; }
+  .cw-ot-thumb { width: 50px; height: 50px; }
+  .cw-ot-qty { min-width: 19px; height: 19px; font-size: 11px; }
+  .cw-ot-muted { font-size: 13.5px; }
+  .cw-ot-title { font-size: 15px; }
+  .cw-ot-grid { font-size: 14px; gap: 8px 14px; }
+  .cw-ot-l { max-width: 104px; }
+
+  /* Pre-chat form + survey */
+  .cw-form { padding: 15px 16px; gap: 12px; }
+  .cw-form-desc { font-size: 14px; }
+  .cw-field label { font-size: 13.5px; margin-bottom: 6px; }
+  .cw-check { font-size: 13.5px; }
+  .cw-check input { width: 18px; height: 18px; }
+  .cw-disclaimer { font-size: 12.5px; }
+  .cw-err { font-size: 13px; }
+  .cw-skip { font-size: 14px; padding: 8px 12px; }
+  .cw-stars { gap: 10px; }
+  .cw-root .cw-star, .cw-root .cw-star-emoji { font-size: 34px; }
+
+  /* Proactive campaign bubble */
+  .cw-pa-badge { top: -13px; padding: 6px 12px; font-size: 13px; }
+  .cw-pa-msg { font-size: 15px; }
+  .cw-pa-note { font-size: 13px; }
+  .cw-pa-prod { padding: 10px; }
+  .cw-pa-prod-img { width: 52px; height: 52px; }
+  .cw-pa-prod-t { font-size: 14px; }
+  .cw-pa-prod-p { font-size: 13.5px; }
+  .cw-pa-variant { min-width: 32px; padding: 6px 10px; font-size: 13px; }
+  .cw-pa-rec { font-size: 12px; }
+  .cw-pa-btn { padding: 12px 14px; font-size: 14.5px; border-radius: 11px; }
+  .cw-pa-chip { padding: 9px 14px; font-size: 13.5px; }
+  .cw-proactive { width: calc(100vw - 32px); padding: 18px 16px 16px; }
+  .cw-pa-x { padding: 8px; top: 4px; right: 4px; }
+  .cw-pa-input { padding: 12px 14px; font-size: 16px; border-radius: 11px; }
+
+  .cw-foot { font-size: 12px; padding: 10px; }
 }

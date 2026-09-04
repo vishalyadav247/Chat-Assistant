@@ -57,8 +57,17 @@ for (const [re, to] of edits) {
   out = out.replace(re, to);
 }
 
+// Say plainly whether the follow-up deploy is needed. Only a CHANGED hostname
+// requires it: Shopify keeps routing /apps/ccwidget to whatever host the last
+// released version named, so an unchanged host is already correct there. This
+// is the one question the dev loop asks every morning, and guessing it wrong is
+// expensive in both directions - a skipped push means the widget 404s with
+// nothing visibly wrong, and a needless one burns an app version.
+const previous = (/(\[app_proxy\][\s\S]*?)^url = "(.+)"$/m.exec(dev) || [])[2];
+
 if (out === dev) {
   console.log(`  shopify.app.dev.toml already points at ${base}`);
+  console.log("  hostname unchanged - no need for `npm run dev:push-proxy`.");
   process.exit(0);
 }
 
@@ -67,3 +76,13 @@ console.log(`  shopify.app.dev.toml -> ${base}`);
 console.log(`    application_url  ${base}`);
 console.log(`    redirect_urls    ${base}/auth/callback`);
 console.log(`    app_proxy.url    ${base}/proxy`);
+console.log("");
+if (previous && previous.startsWith(`${base}/`)) {
+  console.log("  app proxy host unchanged - no need for `npm run dev:push-proxy`.");
+} else {
+  console.log("  APP PROXY HOST CHANGED");
+  console.log(`    was  ${previous || "(unset)"}`);
+  console.log(`    now  ${base}/proxy`);
+  console.log("  Run this in ANOTHER terminal or the storefront widget will 404:");
+  console.log("    npm run dev:push-proxy");
+}

@@ -24,7 +24,7 @@ Legend for results: `PASS` / `FAIL` / `N/A` / `BLOCKED`.
 | P2 | Claude Chrome extension installed and connected | drives the browser |
 | P3 | Signed into the dev store `jgw-check.myshopify.com` admin | embedded surface |
 | P4 | A web-app member credential for `/web/login` | web surface |
-| P5 | Operator credential for `/platform/login` | platform surface |
+| P5 | Operator credential for `/admin/login` | admin surface |
 | P6 | Theme app embed enabled on the dev store's published theme | storefront widget |
 
 ---
@@ -70,14 +70,14 @@ Entry: `<tunnel>/web`
 | B2.9 | Console clean; no 4xx/5xx |
 | B2.10 | Responsive at 390px (agents use phones) — the whole inbox is usable |
 
-## B3. Platform operator console
+## B3. Admin operator console
 
-Entry: `<tunnel>/platform`
+Entry: `<tunnel>/admin`
 
 | # | Check |
 |---|---|
-| B3.1 | `/platform/login` renders; bad credentials rejected; good credentials land on the dashboard |
-| B3.2 | Every page renders with real cross-tenant data: Admins, AI, Logs, Plans, Promo codes, Settings, Usage |
+| B3.1 | `/admin/login` renders; bad credentials rejected; good credentials land on the dashboard |
+| B3.2 | Every page renders with real cross-tenant data: Access, AI, Logs, Plans, Promo codes, Settings, Usage |
 | B3.3 | Plans: edit a quota → save → the merchant app reflects it within 30s (check in B1 side by side) |
 | B3.4 | Plans: toggle enforcement open/enforced → gates change behaviour in the merchant app |
 | B3.5 | Promo codes: create → the code applies at checkout in B1 Plan & Usage |
@@ -117,7 +117,7 @@ Entry: the dev store's storefront with the app embed enabled.
 |---|---|
 | B5.1 | Widget message → appears in embedded Inbox AND web Inbox without a manual refresh (SSE) |
 | B5.2 | Agent reply from web → appears in the widget without a refresh |
-| B5.3 | Platform plan edit → merchant Plan & Usage updates within 30s |
+| B5.3 | Admin plan edit → merchant Plan & Usage updates within 30s |
 | B5.4 | Availability toggle in Settings → widget online/offline copy changes (allow for the ~5 min widget-config cache; note the real observed delay) |
 | B5.5 | Uninstall the app from the dev store → widget stops serving; reinstall inside the grace window → data intact |
 
@@ -153,7 +153,7 @@ plus the live storefront `jgw-check.myshopify.com`.
 | B1.7 forms fire | Toggling "Automatic resolution" flipped the switch, hid its dependent row and raised the Save bar — the React-18 `onChange` fix, proven live |
 | B2.6 inbox filters | Clicking "Handover" → `?filter=handover`; typing "arun" → `?filter=handover&q=arun`; both applied server-side (D-39) |
 | B1.12 chatbox preview parity | Preview injects the REAL `widget-renderer.js` + widget CSS — parity by construction |
-| B3.3 plan propagation | A `/platform/plans` override of Plus (1200) is live in the merchant's Plan & Usage |
+| B3.3 plan propagation | A `/admin/plans` override of Plus (1200) is live in the merchant's Plan & Usage |
 | B4.1/4.2 widget | Launcher and panel render on the live storefront with the merchant's theme colour |
 | B4.14 widget a11y | Native `<button>`, accessible name, `aria-haspopup="dialog"`, `aria-expanded` toggles, panel `role="dialog"` + `aria-modal`, focus moves to a VISIBLE control |
 | Consent | `cc:session` absent on page load — no identifier before interaction (a competing chat app on the same store writes one immediately) |
@@ -180,8 +180,8 @@ plus the live storefront `jgw-check.myshopify.com`.
 
 ### Could NOT be executed, and why
 
-- **Platform console visual pass** — a valid operator session exists server-side, but
-  the cookie never landed in the Chrome window the extension drives. `/platform` is
+- **Admin console visual pass** — a valid operator session exists server-side, but
+  the cookie never landed in the Chrome window the extension drives. `/admin` is
   covered by 352 automated cases; only the visual sweep is outstanding.
 - **True 390px mobile** — the extension cannot emulate a device, and Chrome refuses to
   render a window that narrow (viewport reports 0×0). The widget's mobile CSS fixes

@@ -549,12 +549,17 @@ model PlanUsage {
   periodStart       DateTime @db.Date
   conversationCount Int      @default(0)
   overageCount      Int      @default(0)
+  // How many of those overage conversations Shopify has actually accepted a
+  // usage record for. overageCount - overageReported = work done but not yet
+  // billed; the hourly reconcile job submits the difference, so a failed or
+  // rate-limited appUsageRecordCreate is retried instead of quietly lost.
+  overageReported   Int      @default(0)
 
   @@unique([shopId, periodStart])
   @@map("plan_usage")
 }
 
-// Per-shop LLM token consumption, rolled up daily (spec 19 · platform usage
+// Per-shop LLM token consumption, rolled up daily (spec 19 · admin usage
 // analytics). One row per shop × UTC day × model × purpose. Written
 // fire-and-forget from the LLM seam — never blocks a shopper's chat.
 model LlmUsageDaily {
@@ -678,10 +683,12 @@ model AppSecret {
   @@map("app_secrets")
 }
 
-// ── Platform admin panel (spec 19) — operator accounts, cross-tenant BY DESIGN ──
-// These tables belong to the company running the app, not to any shop.
+// ── Admin panel (spec 19) — operator accounts, cross-tenant BY DESIGN ──
+// These tables belong to the company running the app, not to any shop. The
+// physical table names stay `platform_*` (@@map) — renaming them would be a
+// data migration for zero user-visible gain.
 
-model PlatformAdmin {
+model AdminUser {
   id           String            @id @default(cuid())
   email        String            @unique
   name         String
@@ -690,16 +697,16 @@ model PlatformAdmin {
   lockedUntil  DateTime?
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt
-  sessions     PlatformSession[]
+  sessions     AdminSession[]
 
   @@map("platform_admins")
 }
 
-model PlatformSession {
+model AdminSession {
   id         String        @id @default(cuid())
   tokenHash  String        @unique // sha256 of the raw cookie token
   adminId    String
-  admin      PlatformAdmin @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  admin      AdminUser     @relation(fields: [adminId], references: [id], onDelete: Cascade)
   expiresAt  DateTime
   lastSeenAt DateTime      @default(now())
   userAgent  String?
@@ -711,7 +718,7 @@ model PlatformSession {
 }
 
 // ── Logging & observability (spec 21) ───────────────────────────────────────
-// Operator-only error/warning log, surfaced cross-tenant at /platform/logs.
+// Operator-only error/warning log, surfaced cross-tenant at /admin/logs.
 // Errors and warnings ONLY (never a row per request) and purged after 14 days
 // by the nightly retention job — those two rules are what keep this table in
 // Postgres instead of a paid log service. `shopId` is nullable by design: the
@@ -733,7 +740,7 @@ model AppLog {
 }
 
 // ── Promo codes (spec 15 · discount coupons) — operator-owned, cross-tenant BY DESIGN ──
-// Codes are created in the platform console and handed to merchants out of band
+// Codes are created in the admin console and handed to merchants out of band
 // (mail/chat). Redemptions are per shop and feed the Shopify Billing API
 // `discount` on the recurring line of appSubscriptionCreate.
 

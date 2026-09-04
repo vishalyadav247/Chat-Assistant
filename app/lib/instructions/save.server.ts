@@ -82,16 +82,8 @@ export async function saveGeneralInstructions(
   requireShopId(shopId);
   const data = generalSchema.parse(raw);
 
-  if (data.autoDetectLanguage) {
-    const current = await db.persona.findUnique({
-      where: { shopId },
-      select: { autoDetectLanguage: true },
-    });
-    // Only the OFF→ON transition is gated: a shop that downgrades keeps the
-    // setting it already had and can still save everything else on this page.
-    if (!current?.autoDetectLanguage) await requireShopFeature(shopId, "multi_language");
-  }
-
+  // Auto-detect language is available on every plan (un-gated 2026-09-03) —
+  // no feature check here anymore.
   const personaData = {
     role: data.role.trim(),
     communicationStyle: data.communicationStyle,

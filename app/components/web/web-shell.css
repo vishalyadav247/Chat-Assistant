@@ -2,7 +2,7 @@
    /app pages that render inside the Shopify admin. Distinct from the admin
    (own rail + brand accent) — see Polaris license note in spec 18.
    Rail switched dark → LIGHT on 2026-08-20 (user: "nav bar is looking dirty,
-   I need light color bg"); shared by the web app and the /platform console. */
+   I need light color bg"); shared by the web app and the /admin console. */
 body{
   margin: 0;
 }

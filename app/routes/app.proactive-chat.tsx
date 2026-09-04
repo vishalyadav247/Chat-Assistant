@@ -102,7 +102,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     premiumAllowed: hasFeature(plan, "premium_campaign_templates"),
     // Tier name for every premium-template chip/banner in this tree. Read from
     // the live matrix rather than hard-coded, because the operator can move the
-    // feature between plans from /platform.
+    // feature between plans from /admin.
     premiumPlan: hasFeature(plan, "premium_campaign_templates")
       ? null
       : requiredPlanName("premium_campaign_templates"),

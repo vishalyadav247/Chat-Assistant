@@ -25,6 +25,42 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
+# --- Refuse to run against the PRODUCTION app ------------------------------
+#
+# `shopify app dev` uses whichever config the CLI has selected, and that
+# selection is machine-local state nothing here can see in a diff. After a
+# release you are left on production, and the next morning `dev:tunnel` starts
+# the dev server holding PRODUCTION's API key while sync-dev-urls.cjs and
+# dev:push-proxy both write to the DEV app - a split brain whose only symptom is
+# the embedded admin rendering the string "Handling response" (Shopify's error
+# boundary falling back when authenticate.admin() throws a re-auth response,
+# because the stored token was minted for the other app). Happened 2026-09-03.
+#
+# `automatically_update_urls_on_dev = false` in shopify.app.toml stops the far
+# worse outcome - the production URLs being rewritten to a tunnel host - but it
+# does not stop the session confusion. This does. Mirrors deploy:prod, which
+# already refuses to run while the dev config is selected.
+$prodToml = Join-Path $root 'shopify.app.toml'
+if (Test-Path $prodToml) {
+  $prodId = (Select-String -Path $prodToml -Pattern '^client_id = "(.+)"' |
+             Select-Object -First 1).Matches[0].Groups[1].Value
+  $info = cmd /c "npx shopify app info --no-color 2>&1"
+  $activeId = ([regex]'Client ID\s+(\S+)').Match(($info -join "`n")).Groups[1].Value
+  if ($activeId -and $activeId -eq $prodId) {
+    Write-Host ''
+    Write-Host '  REFUSING: the Shopify CLI is pointed at the PRODUCTION app.' -ForegroundColor Red
+    Write-Host ("  client id {0}" -f $activeId)
+    Write-Host ''
+    Write-Host '  `shopify app dev` would run your dev server as the production app,' -ForegroundColor Yellow
+    Write-Host '  while the proxy config goes to the dev app. The embedded admin then' -ForegroundColor Yellow
+    Write-Host '  renders "Handling response" and never authenticates.' -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host '  Switch first:' -ForegroundColor Yellow
+    Write-Host '    npm run config:use -- dev'
+    exit 1
+  }
+}
+
 # --- Which tunnel? ---------------------------------------------------------
 $ngrokDomain = $null
 $envFile = Join-Path $root '.env'

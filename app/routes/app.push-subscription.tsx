@@ -37,7 +37,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   // Client-side failure report (push-client.ts). Enabling notifications fails
   // on the member's own device, where no server log would otherwise see it —
-  // this puts the real cause in /platform/logs.
+  // this puts the real cause in /admin/logs.
   if (body && typeof body === "object" && "report" in body) {
     const raw = (body as { report: Record<string, unknown> }).report ?? {};
     const pick = (key: string) => String(raw[key] ?? "").slice(0, 200);

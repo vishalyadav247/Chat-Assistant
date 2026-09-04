@@ -12,8 +12,8 @@
 import db from "../app/db.server";
 import { getLlmProvider } from "../app/lib/llm/index.server";
 import { embedText } from "../app/lib/embeddings/embedding.server";
-import { usageForShop } from "../app/lib/platform/usage-report.server";
-import { costOf } from "../app/lib/platform/llm-pricing";
+import { usageForShop } from "../app/lib/admin/usage-report.server";
+import { costOf } from "../app/lib/admin/llm-pricing";
 
 const DEV_SHOP_DOMAIN = "dev-shop.myshopify.com";
 

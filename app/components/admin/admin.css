@@ -1,0 +1,901 @@
+/* ChatConvert admin console — glassmorphism, mobile first (spec 19, redesigned
+ * 2026-09-03: user asked for "robust and authentic" glass UI, phone first).
+ *
+ * Scope: /admin ONLY. It no longer borrows web-shell.css — the operator console
+ * and the merchant-facing web app were sharing a stylesheet, so this design
+ * could not exist without dragging the merchant app with it. (That sharing was
+ * a deliberate 2026-08-20 decision; this supersedes it for /admin.)
+ *
+ * How the theme works: `data-theme` on `.cca` is "light" | "dark" | "system".
+ * Bare `.cca` is the light palette; the dark block is repeated for an explicit
+ * choice and for `system` under prefers-color-scheme, so a colour is never
+ * defined ONLY inside a media query.
+ *
+ * Glass rule of thumb used throughout: a translucent fill + saturated backdrop
+ * blur + a 1px hairline that is lighter at the top than the bottom. Without the
+ * hairline the panels read as flat transparency, which is the usual reason
+ * "glassmorphism" looks cheap.
+ */
+ body{
+  margin: 0;
+}
+
+.cca {
+  /* Brand ramp */
+  --cca-brand: #6d3bf5;
+  --cca-brand-2: #3b82f6;
+  --cca-brand-ink: #ffffff;
+
+  /* Ink */
+  --cca-ink: #171528;
+  --cca-ink-soft: #4c4a63;
+  --cca-ink-faint: #6f6a86;
+
+  /* Page ground + blooms behind the glass */
+  --cca-bg: #eceaf6;
+  --cca-bloom-1: rgba(109, 59, 245, 0.34);
+  --cca-bloom-2: rgba(59, 130, 246, 0.28);
+  --cca-bloom-3: rgba(236, 72, 153, 0.2);
+
+  /* Glass surfaces */
+  --cca-glass: rgba(255, 255, 255, 0.62);
+  --cca-glass-strong: rgba(255, 255, 255, 0.78);
+  --cca-glass-soft: rgba(255, 255, 255, 0.42);
+  --cca-hairline: rgba(255, 255, 255, 0.75);
+  --cca-edge: rgba(23, 21, 40, 0.09);
+  --cca-shadow: 0 18px 40px -24px rgba(23, 21, 40, 0.45), 0 2px 8px -4px rgba(23, 21, 40, 0.18);
+  --cca-shadow-lift: 0 28px 60px -28px rgba(23, 21, 40, 0.5);
+
+  /* Controls */
+  --cca-control: rgba(255, 255, 255, 0.7);
+  --cca-control-hover: rgba(255, 255, 255, 0.92);
+  --cca-track: rgba(23, 21, 40, 0.16);
+
+  /* Tones */
+  --cca-success: #12855c;
+  --cca-success-bg: rgba(16, 185, 129, 0.16);
+  --cca-warning: #9a6200;
+  --cca-warning-bg: rgba(245, 158, 11, 0.18);
+  --cca-critical: #c02a3f;
+  --cca-critical-bg: rgba(239, 68, 68, 0.16);
+  --cca-accent-bg: rgba(109, 59, 245, 0.14);
+
+  --cca-radius: 20px;
+  --cca-radius-sm: 12px;
+  --cca-blur: saturate(170%) blur(20px);
+
+  color: var(--cca-ink);
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  min-height: 100dvh;
+  background: var(--cca-bg);
+  /* -webkit-tap-highlight kills the grey flash on the switch/nav taps. */
+  -webkit-tap-highlight-color: transparent;
+}
+
+.cca[data-theme="dark"],
+.cca[data-theme="system"] {
+  color-scheme: light;
+}
+
+.cca[data-theme="dark"] {
+  --cca-ink: #f2f0ff;
+  --cca-ink-soft: #bdb8d8;
+  --cca-ink-faint: #918cb0;
+
+  --cca-bg: #0b0918;
+  --cca-bloom-1: rgba(124, 77, 255, 0.42);
+  --cca-bloom-2: rgba(34, 211, 238, 0.22);
+  --cca-bloom-3: rgba(236, 72, 153, 0.22);
+
+  --cca-glass: rgba(255, 255, 255, 0.07);
+  --cca-glass-strong: rgba(255, 255, 255, 0.12);
+  --cca-glass-soft: rgba(255, 255, 255, 0.045);
+  --cca-hairline: rgba(255, 255, 255, 0.16);
+  --cca-edge: rgba(255, 255, 255, 0.08);
+  --cca-shadow: 0 24px 50px -30px rgba(0, 0, 0, 0.9), 0 2px 10px -6px rgba(0, 0, 0, 0.7);
+  --cca-shadow-lift: 0 34px 70px -30px rgba(0, 0, 0, 0.95);
+
+  --cca-control: rgba(255, 255, 255, 0.09);
+  --cca-control-hover: rgba(255, 255, 255, 0.16);
+  --cca-track: rgba(255, 255, 255, 0.18);
+
+  --cca-success: #4ade9f;
+  --cca-success-bg: rgba(16, 185, 129, 0.2);
+  --cca-warning: #fbbf5b;
+  --cca-warning-bg: rgba(245, 158, 11, 0.2);
+  --cca-critical: #ff8095;
+  --cca-critical-bg: rgba(239, 68, 68, 0.2);
+  --cca-accent-bg: rgba(139, 92, 246, 0.24);
+
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  .cca[data-theme="system"] {
+    --cca-ink: #f2f0ff;
+    --cca-ink-soft: #bdb8d8;
+    --cca-ink-faint: #918cb0;
+
+    --cca-bg: #0b0918;
+    --cca-bloom-1: rgba(124, 77, 255, 0.42);
+    --cca-bloom-2: rgba(34, 211, 238, 0.22);
+    --cca-bloom-3: rgba(236, 72, 153, 0.22);
+
+    --cca-glass: rgba(255, 255, 255, 0.07);
+    --cca-glass-strong: rgba(255, 255, 255, 0.12);
+    --cca-glass-soft: rgba(255, 255, 255, 0.045);
+    --cca-hairline: rgba(255, 255, 255, 0.16);
+    --cca-edge: rgba(255, 255, 255, 0.08);
+    --cca-shadow: 0 24px 50px -30px rgba(0, 0, 0, 0.9), 0 2px 10px -6px rgba(0, 0, 0, 0.7);
+    --cca-shadow-lift: 0 34px 70px -30px rgba(0, 0, 0, 0.95);
+
+    --cca-control: rgba(255, 255, 255, 0.09);
+    --cca-control-hover: rgba(255, 255, 255, 0.16);
+    --cca-track: rgba(255, 255, 255, 0.18);
+
+    --cca-success: #4ade9f;
+    --cca-success-bg: rgba(16, 185, 129, 0.2);
+    --cca-warning: #fbbf5b;
+    --cca-warning-bg: rgba(245, 158, 11, 0.2);
+    --cca-critical: #ff8095;
+    --cca-critical-bg: rgba(239, 68, 68, 0.2);
+    --cca-accent-bg: rgba(139, 92, 246, 0.24);
+
+    color-scheme: dark;
+  }
+}
+
+/* The blooms live on a fixed pseudo-element so scrolling does not drag the
+   gradient around — the glass has to blur something that stays put. */
+.cca::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(58% 42% at 12% 4%, var(--cca-bloom-1), transparent 68%),
+    radial-gradient(52% 46% at 92% 12%, var(--cca-bloom-2), transparent 66%),
+    radial-gradient(46% 40% at 68% 96%, var(--cca-bloom-3), transparent 70%);
+}
+
+.cca *,
+.cca *::before,
+.cca *::after {
+  box-sizing: border-box;
+}
+
+.cca-icon {
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+
+/* ── Shell ────────────────────────────────────────────────────────────────
+   Mobile first: one column under a sticky glass bar. The rail appears at
+   900px, where there is finally room for it. */
+
+.cca-shell {
+  position: relative;
+  z-index: 1;
+  min-height: 100dvh;
+}
+
+.cca-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  padding-top: max(10px, env(safe-area-inset-top));
+  background: var(--cca-glass);
+  backdrop-filter: var(--cca-blur);
+  -webkit-backdrop-filter: var(--cca-blur);
+  border-bottom: 1px solid var(--cca-edge);
+  box-shadow: inset 0 1px 0 var(--cca-hairline);
+}
+
+.cca-topbar__title {
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  margin-inline-end: auto;
+}
+
+.cca-iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border-radius: 12px;
+  border: 1px solid var(--cca-edge);
+  background: var(--cca-control);
+  color: var(--cca-ink);
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+.cca-iconbtn:hover { background: var(--cca-control-hover); }
+.cca-iconbtn:active { transform: scale(0.96); }
+
+.cca-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.cca-brand__mark {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  background: linear-gradient(135deg, var(--cca-brand), var(--cca-brand-2));
+  color: var(--cca-brand-ink);
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: -0.02em;
+  box-shadow: 0 8px 18px -8px var(--cca-brand);
+}
+.cca-brand__text { display: flex; flex-direction: column; min-width: 0; }
+.cca-brand__name { font-weight: 700; font-size: 14px; line-height: 1.2; }
+.cca-brand__sub {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--cca-ink-faint);
+}
+
+/* Rail — off-canvas on phones, permanent from 900px. */
+.cca-rail {
+  position: fixed;
+  z-index: 60;
+  inset: 0 auto 0 0;
+  width: min(280px, 84vw);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 14px;
+  padding-top: max(16px, env(safe-area-inset-top));
+  background: var(--cca-glass-strong);
+  backdrop-filter: var(--cca-blur);
+  -webkit-backdrop-filter: var(--cca-blur);
+  border-right: 1px solid var(--cca-edge);
+  box-shadow: var(--cca-shadow-lift);
+  transform: translateX(-102%);
+  transition: transform 0.24s cubic-bezier(0.32, 0.72, 0, 1);
+  overflow-y: auto;
+}
+.cca-rail.is-open { transform: translateX(0); }
+
+.cca-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(9, 7, 20, 0.5);
+  backdrop-filter: blur(2px);
+  border: 0;
+  padding: 0;
+}
+
+.cca-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-block: 4px auto;
+}
+.cca-nav__item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 12px;
+  border-radius: 13px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--cca-ink-soft);
+  text-decoration: none;
+  border: 1px solid transparent;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.cca-nav__item:hover { background: var(--cca-glass-soft); color: var(--cca-ink); }
+.cca-nav__item.is-active {
+  color: var(--cca-ink);
+  background: linear-gradient(120deg, var(--cca-accent-bg), transparent 85%);
+  border-color: var(--cca-hairline);
+  box-shadow: inset 0 1px 0 var(--cca-hairline);
+}
+.cca-nav__item.is-active .cca-icon { color: var(--cca-brand); }
+.cca[data-theme="dark"] .cca-nav__item.is-active .cca-icon { color: #b69bff; }
+
+.cca-railfoot {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--cca-edge);
+}
+
+.cca-user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.cca-avatar {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--cca-brand), var(--cca-brand-2));
+  color: var(--cca-brand-ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+.cca-user__text { display: flex; flex-direction: column; min-width: 0; }
+.cca-user__name {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cca-user__role { font-size: 11.5px; color: var(--cca-ink-faint); }
+
+.cca-main {
+  position: relative;
+  z-index: 1;
+  padding: 16px 14px 40px;
+  padding-bottom: max(40px, env(safe-area-inset-bottom));
+}
+
+@media (min-width: 900px) {
+  .cca-shell { display: grid; grid-template-columns: 272px 1fr; }
+  .cca-topbar { display: none; }
+  .cca-rail {
+    position: sticky;
+    top: 0;
+    height: 100dvh;
+    width: auto;
+    transform: none;
+    box-shadow: none;
+  }
+  .cca-scrim { display: none; }
+  .cca-main { padding: 30px 34px 60px; }
+}
+
+/* ── Page + cards ─────────────────────────────────────────────────────── */
+
+.cca-page { max-width: 1180px; margin: 0 auto; }
+
+.cca-pagehead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.cca-pagehead__text { min-width: 0; flex: 1 1 260px; }
+.cca-pagehead h1 {
+  margin: 0;
+  font-size: 25px;
+  font-weight: 750;
+  letter-spacing: -0.025em;
+  background: linear-gradient(100deg, var(--cca-ink), var(--cca-ink-soft));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.cca-pagehead p { margin: 6px 0 0; font-size: 13.5px; color: var(--cca-ink-soft); }
+
+/* Page-level text is OUR markup, so it follows the ink tokens and turns light
+   in dark mode (reported 2026-09-03: page intros were dark on the dark ground).
+   Route intros therefore live in AdminPage's `subheading`, never as a loose
+   Polaris <s-text> next to the cards — Polaris always renders light chrome and
+   cannot be re-inked from here. */
+
+/* Page action buttons stay plain Polaris on the ground, with no sheet behind
+   them (user, 2026-09-03: "leave the buttons as previously"). */
+.cca-pagehead__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.cca-page__body { display: flex; flex-direction: column; gap: 16px; }
+
+.cca-card {
+  position: relative;
+  border-radius: var(--cca-radius);
+  background: var(--cca-glass);
+  backdrop-filter: var(--cca-blur);
+  -webkit-backdrop-filter: var(--cca-blur);
+  border: 1px solid var(--cca-edge);
+  box-shadow: var(--cca-shadow), inset 0 1px 0 var(--cca-hairline);
+  overflow: hidden;
+}
+
+/* CARDS ARE LIGHT SHEETS IN DARK MODE — dark chrome, light paper.
+ *
+ * Not a stylistic whim. Polaris `s-*` elements (text, tables, badges, every
+ * form control) render their own LIGHT chrome from inside shadow DOM, which no
+ * rule here can reach, and they are in every card on this surface. A dark card
+ * therefore put dark Polaris ink on a dark ground: invisible (reported
+ * 2026-09-03, "text is same color, cards look ugly"). One rule for all cards
+ * beats a per-card opt-in, because the failure is silent — a card that gains a
+ * Polaris child later would go dark-on-dark with nobody noticing.
+ *
+ * The sheet re-declares the INK TOKENS rather than just setting `color`: every
+ * descendant reads var(--cca-ink*), so a bare `color` override left headings,
+ * table cells and hints on the dark theme's near-white ink. Re-theming the
+ * tokens fixes the whole subtree at once — borders and hairlines included,
+ * which is what makes it read as paper rather than a white rectangle. */
+.cca[data-theme="dark"] .cca-card {
+  --cca-ink: #171528;
+  --cca-ink-soft: #4c4a63;
+  --cca-ink-faint: #6f6a86;
+  --cca-edge: rgba(23, 21, 40, 0.1);
+  --cca-hairline: rgba(255, 255, 255, 0.85);
+  --cca-glass-soft: rgba(23, 21, 40, 0.04);
+  --cca-glass-strong: rgba(255, 255, 255, 0.7);
+  --cca-control: rgba(255, 255, 255, 0.8);
+  --cca-control-hover: #ffffff;
+  --cca-track: rgba(23, 21, 40, 0.16);
+  --cca-brand: #5b2fd0;
+  --cca-success: #12855c;
+  --cca-warning: #8a5700;
+  --cca-critical: #c02a3f;
+  --cca-accent-bg: rgba(109, 59, 245, 0.12);
+  --cca-success-bg: rgba(16, 185, 129, 0.16);
+  --cca-warning-bg: rgba(245, 158, 11, 0.18);
+  --cca-critical-bg: rgba(239, 68, 68, 0.14);
+  background: linear-gradient(180deg, #fbfaff, #f3f1fb);
+  border-color: rgba(23, 21, 40, 0.12);
+  box-shadow: var(--cca-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  color: var(--cca-ink);
+  color-scheme: light;
+}
+/* The badge/tag brand tints are lightened for the dark shell; on the sheet they
+   need the light-theme ink back or they wash out. */
+.cca[data-theme="dark"] .cca-card :is(.cca-badge--accent, .cca-tag) { color: #5b2fd0; }
+.cca[data-theme="dark"] .cca-card .ccpf-logLink { color: #5b2fd0; }
+
+@media (prefers-color-scheme: dark) {
+  .cca[data-theme="system"] .cca-card {
+    --cca-ink: #171528;
+    --cca-ink-soft: #4c4a63;
+    --cca-ink-faint: #6f6a86;
+    --cca-edge: rgba(23, 21, 40, 0.1);
+    --cca-hairline: rgba(255, 255, 255, 0.85);
+    --cca-glass-soft: rgba(23, 21, 40, 0.04);
+    --cca-glass-strong: rgba(255, 255, 255, 0.7);
+    --cca-control: rgba(255, 255, 255, 0.8);
+    --cca-control-hover: #ffffff;
+    --cca-track: rgba(23, 21, 40, 0.16);
+    --cca-brand: #5b2fd0;
+    --cca-success: #12855c;
+    --cca-warning: #8a5700;
+    --cca-critical: #c02a3f;
+    --cca-accent-bg: rgba(109, 59, 245, 0.12);
+    --cca-success-bg: rgba(16, 185, 129, 0.16);
+    --cca-warning-bg: rgba(245, 158, 11, 0.18);
+    --cca-critical-bg: rgba(239, 68, 68, 0.14);
+    background: linear-gradient(180deg, #fbfaff, #f3f1fb);
+    border-color: rgba(23, 21, 40, 0.12);
+    box-shadow: var(--cca-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+    color: var(--cca-ink);
+    color-scheme: light;
+  }
+  .cca[data-theme="system"] .cca-card :is(.cca-badge--accent, .cca-tag) { color: #5b2fd0; }
+}
+
+.cca-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 18px 0;
+}
+.cca-card__head > div:first-child { flex: 1 1 220px; min-width: 0; }
+.cca-card__head h2 {
+  margin: 0;
+  font-size: 15.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.cca-card__desc { margin: 5px 0 0; font-size: 13px; color: var(--cca-ink-soft); }
+.cca-card__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.cca-card__body { padding: 16px 18px 18px; }
+.cca-card__body--flush { padding: 14px 0 0; }
+
+.cca-prose { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--cca-ink-soft); }
+.cca-prose + .cca-prose { margin-top: 10px; }
+.cca-prose code,
+.cca code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+  padding: 1px 5px;
+  border-radius: 6px;
+  background: var(--cca-glass-soft);
+  border: 1px solid var(--cca-edge);
+}
+.cca-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+
+/* ── Stats ─────────────────────────────────────────────────────────────── */
+
+.cca-stats {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+.cca-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 14px 16px;
+  border-radius: var(--cca-radius-sm);
+  background: var(--cca-glass-soft);
+  border: 1px solid var(--cca-edge);
+  box-shadow: inset 0 1px 0 var(--cca-hairline);
+}
+.cca-stat__icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  margin-bottom: 6px;
+  background: var(--cca-accent-bg);
+  color: var(--cca-brand);
+}
+.cca-stat--success .cca-stat__icon { background: var(--cca-success-bg); color: var(--cca-success); }
+.cca-stat--warning .cca-stat__icon { background: var(--cca-warning-bg); color: var(--cca-warning); }
+.cca-stat--critical .cca-stat__icon { background: var(--cca-critical-bg); color: var(--cca-critical); }
+.cca-stat__label {
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--cca-ink-faint);
+}
+.cca-stat__value { font-size: 23px; font-weight: 750; letter-spacing: -0.02em; }
+.cca-stat__hint { font-size: 12px; color: var(--cca-ink-soft); }
+
+/* ── Buttons ─────────────────────────────────────────────────────────────
+   Chrome only. Every button INSIDE a page is Polaris (user, 2026-09-03), so
+   this is just the rail's sign-out and the icon buttons — controls that sit on
+   the frosted rail and must inherit the theme's ink, which a Polaris button
+   cannot. */
+
+.cca-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: var(--cca-radius-sm);
+  border: 1px solid var(--cca-edge);
+  background: var(--cca-control);
+  color: var(--cca-ink);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.12s ease, box-shadow 0.15s ease;
+}
+.cca-btn:hover { background: var(--cca-control-hover); }
+.cca-btn:active { transform: translateY(1px); }
+.cca-btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+.cca-btn--ghost { background: transparent; }
+.cca-btn--ghost:hover { background: var(--cca-glass-soft); }
+
+.cca :is(.cca-btn, .cca-iconbtn, .cca-nav__item, .cca-seg__item):focus-visible {
+  outline: 2px solid var(--cca-brand);
+  outline-offset: 2px;
+}
+
+/* ── Segmented control (theme switch) ──────────────────────────────────── */
+
+/* The selected item is FILLED with the brand gradient, not merely a lighter
+   frost. A frosted pill on a frosted track is ~4% apart in light mode, which is
+   invisible in daylight and on a phone (user, 2026-09-03) — and the whole job
+   of this control is to say which of three states you are in. Filled reads at a
+   glance, matches the primary button, and survives both themes. */
+.cca-seg {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--cca-glass-soft);
+  border: 1px solid var(--cca-edge);
+  box-shadow: inset 0 1px 2px rgba(23, 21, 40, 0.06);
+}
+.cca[data-theme="dark"] .cca-seg { box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4); }
+.cca-seg__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 13px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--cca-ink-soft);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.cca-seg__item .cca-icon { width: 17px; height: 17px; opacity: 0.75; }
+.cca-seg__item:hover { color: var(--cca-ink); background: var(--cca-glass-strong); }
+.cca-seg__item.is-active,
+.cca-seg__item.is-active:hover {
+  background: linear-gradient(135deg, var(--cca-brand), var(--cca-brand-2));
+  color: var(--cca-brand-ink);
+  font-weight: 700;
+  box-shadow: 0 6px 14px -8px var(--cca-brand), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+.cca-seg__item.is-active .cca-icon { opacity: 1; }
+.cca-seg--small .cca-seg__item { padding: 5px 10px; font-size: 12px; }
+.cca-seg--small .cca-seg__item span { display: none; }
+@media (min-width: 480px) {
+  .cca-seg--small .cca-seg__item span { display: inline; }
+}
+
+/* ── Badges, tags, tables ──────────────────────────────────────────────── */
+
+.cca-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 650;
+  border: 1px solid var(--cca-edge);
+  background: var(--cca-glass-soft);
+  color: var(--cca-ink-soft);
+}
+.cca-badge--accent { background: var(--cca-accent-bg); color: var(--cca-brand); }
+.cca-badge--success { background: var(--cca-success-bg); color: var(--cca-success); }
+.cca-badge--warning { background: var(--cca-warning-bg); color: var(--cca-warning); }
+.cca-badge--critical { background: var(--cca-critical-bg); color: var(--cca-critical); }
+.cca[data-theme="dark"] .cca-badge--accent { color: #c4b0ff; }
+
+.cca-tag {
+  display: inline-block;
+  margin-left: 7px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  background: var(--cca-accent-bg);
+  color: var(--cca-brand);
+  vertical-align: middle;
+}
+.cca[data-theme="dark"] .cca-tag { color: #c4b0ff; }
+.cca-tag--root { background: var(--cca-warning-bg); color: var(--cca-warning); }
+
+/* Tables pan horizontally rather than reflowing — an operator comparing rows
+   wants the columns kept, and this is the same call the merchant DataTable
+   made (spec 20). */
+.cca-tablewrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.cca-table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 520px; }
+.cca-table th {
+  text-align: left;
+  padding: 9px 18px;
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--cca-ink-faint);
+  border-bottom: 1px solid var(--cca-edge);
+  white-space: nowrap;
+}
+.cca-table td {
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--cca-edge);
+  vertical-align: middle;
+}
+.cca-table tbody tr:last-child td { border-bottom: 0; }
+.cca-table tbody tr:hover { background: var(--cca-glass-soft); }
+.cca-num { text-align: right; font-variant-numeric: tabular-nums; }
+.cca-rowactions { display: flex; gap: 6px; justify-content: flex-end; }
+
+.cca-person { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.cca-person__text { display: flex; flex-direction: column; min-width: 0; }
+.cca-person__name { font-weight: 650; }
+.cca-person__meta { font-size: 12px; color: var(--cca-ink-faint); }
+
+.cca-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 26px 18px;
+  text-align: center;
+  color: var(--cca-ink-soft);
+  font-size: 13.5px;
+}
+.cca-empty strong { font-size: 14.5px; color: var(--cca-ink); }
+
+/* ── Sign-in ───────────────────────────────────────────────────────────── */
+
+.cca-auth {
+  position: relative;
+  z-index: 1;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+}
+.cca-auth__card {
+  width: 100%;
+  max-width: 400px;
+  padding: 26px 22px;
+  border-radius: var(--cca-radius);
+  background: var(--cca-glass-strong);
+  backdrop-filter: var(--cca-blur);
+  -webkit-backdrop-filter: var(--cca-blur);
+  border: 1px solid var(--cca-edge);
+  box-shadow: var(--cca-shadow-lift), inset 0 1px 0 var(--cca-hairline);
+}
+.cca-auth__head { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
+.cca-auth__head h1 { margin: 0; font-size: 20px; font-weight: 720; letter-spacing: -0.02em; }
+.cca-auth__head p { margin: 0; font-size: 13px; color: var(--cca-ink-soft); line-height: 1.5; }
+.cca-auth__form { display: flex; flex-direction: column; gap: 14px; margin-top: 20px; }
+.cca-auth__foot { margin: 16px 0 0; text-align: center; font-size: 12.5px; color: var(--cca-ink-faint); }
+
+/* Reduced motion: the drawer and switch are the only animated things. */
+@media (prefers-reduced-motion: reduce) {
+  .cca *, .cca *::before, .cca *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+/* backdrop-filter is unsupported on older Firefox; fall back to a solid-enough
+   fill so text never lands on the raw gradient. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .cca-card, .cca-rail, .cca-topbar, .cca-auth__card { background: var(--cca-glass-strong); }
+  .cca[data-theme="dark"] .cca-card { background: #191631; }
+  .cca[data-theme="dark"] .cca-rail,
+  .cca[data-theme="dark"] .cca-topbar { background: #141129; }
+}
+
+/* ── Data bits with no primitive of their own ─────────────────────────────
+   Carried over from the pre-glass console (`ccpf-*`, spec 19/21) and retuned
+   to the theme tokens so they follow light/dark like everything else. The
+   class names are kept: the routes that use them are unchanged, and renaming
+   them would have been churn with no reader benefit. */
+
+/* Plan distribution meter: ordinal ramp, 2px gaps, identity carried by the
+   labelled legend (never colour alone — dataviz rule). */
+.ccpf-meter {
+  display: flex;
+  height: 14px;
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--cca-track);
+}
+.ccpf-meterSeg { height: 100%; min-width: 6px; }
+.ccpf-meterSeg + .ccpf-meterSeg { margin-left: 2px; }
+
+.ccpf-legend { display: flex; flex-wrap: wrap; gap: 8px 22px; }
+.ccpf-legendItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--cca-ink-soft);
+}
+.ccpf-legendDot { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+.ccpf-legendCount { font-weight: 700; color: var(--cca-ink); font-variant-numeric: tabular-nums; }
+
+/* Daily cost bars: one series, so no legend — the card heading names it. */
+.ccpf-chart { display: flex; align-items: flex-end; gap: 2px; height: 120px; }
+.ccpf-chartCol {
+  flex: 1;
+  min-width: 3px;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  border-radius: 4px;
+}
+.ccpf-chartCol:hover { background: var(--cca-glass-soft); }
+.ccpf-chartBar {
+  width: 100%;
+  background: linear-gradient(180deg, var(--cca-brand), var(--cca-brand-2));
+  border-radius: 4px 4px 0 0;
+}
+.ccpf-chartCol:hover .ccpf-chartBar { filter: brightness(1.12); }
+.ccpf-chartAxis {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--cca-ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Share-of-total bars in the "where the tokens go" breakdown. */
+.ccpf-breakRow {
+  display: grid;
+  grid-template-columns: minmax(110px, 210px) 1fr auto;
+  align-items: center;
+  gap: 14px;
+  font-size: 13px;
+}
+.ccpf-breakBar { height: 8px; border-radius: 4px; background: var(--cca-track); overflow: hidden; }
+.ccpf-breakFill {
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(135deg, var(--cca-brand), var(--cca-brand-2));
+}
+.ccpf-breakValue {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--cca-ink-soft);
+  white-space: nowrap;
+}
+.ccpf-breakCost { font-weight: 700; color: var(--cca-ink); min-width: 62px; text-align: right; }
+
+.ccpf-mono { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12.5px; }
+.ccpf-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* ── Logs (spec 21) ─────────────────────────────────────────────────────── */
+
+.ccpf-logFilters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+/* Event codes in the top-events table double as a filter control. */
+.ccpf-logLink {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 12.5px;
+  color: var(--cca-brand);
+  cursor: pointer;
+  text-align: left;
+}
+.cca[data-theme="dark"] .ccpf-logLink { color: #b69bff; }
+.ccpf-logLink:hover { text-decoration: underline; }
+
+.ccpf-logDetail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 52ch;
+  overflow-wrap: anywhere;
+}
+.ccpf-logCtx > summary { cursor: pointer; font-size: 12px; color: var(--cca-ink-soft); }
+.ccpf-logCtx > pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--cca-glass-soft);
+  border: 1px solid var(--cca-edge);
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+/* The drawer's own close button — mobile only; on desktop the rail is always there. */
+.cca-rail__close { margin-left: auto; width: 34px; height: 34px; }
+@media (min-width: 900px) {
+  .cca-rail__close { display: none; }
+}

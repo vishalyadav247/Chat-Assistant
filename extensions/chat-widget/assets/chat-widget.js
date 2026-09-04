@@ -448,59 +448,54 @@
   }
 
   // ── mobile viewport: the soft keyboard ───────────────────────────────────
-  /* `100dvh` tracks browser chrome (the URL bar), NOT the on-screen keyboard.
-   * When the keyboard opens, the VISUAL viewport shrinks but the LAYOUT
-   * viewport does not — so a `position: fixed` full-height panel keeps its
-   * full size, the composer sits behind the keyboard, and the browser scrolls
-   * the storefront page to try to reveal the focused field. That is the
-   * "nonsense height + scrolling". visualViewport is the only thing that
-   * reports the real visible box, so drive the panel from it, phones only. */
+  /* The keyboard shrinks the VISUAL viewport; by default the LAYOUT viewport
+   * keeps its full height. `position: fixed` is laid out against the layout
+   * viewport, so a full-height panel keeps its full size, the composer sits
+   * behind the keys, and the browser scrolls the storefront trying to reveal
+   * the focused field.
+   *
+   * `interactive-widget=resizes-content` tells the browser to shrink the
+   * LAYOUT viewport instead. `inset: 0` then means "the area above the
+   * keyboard" and there is nothing left to compute — earlier versions of this
+   * file tried to derive the keyboard height from window.innerHeight and
+   * visualViewport, and were wrong three times running.
+   *
+   * Chrome 108+ and Firefox 132+ honour it. Safari does not, and that is the
+   * only reason syncViewport still exists. */
   var vvUnbind = null;
   var scrollUnlock = null;
+  var viewportMetaRestore = null;
 
   function isPhone() {
     return Boolean(window.matchMedia && window.matchMedia("(max-width: 480px)").matches);
   }
 
-  function syncViewport() {
-    var vv = window.visualViewport;
-    if (!ui.panel) return;
-    if (!vv || !state.open || !isPhone()) {
-      // Desktop and the closed state must fall back to the stylesheet, or an
-      // inline pixel height would survive a rotate or a resize.
-      ui.panel.style.height = "";
-      ui.panel.style.top = "";
-      ui.panel.style.bottom = "";
-      ui.panel.style.paddingBottom = "";
-      return;
-    }
-    // Anchor the BOTTOM to the keyboard rather than setting height = vv.height.
-    // A fixed element is laid out against the LAYOUT viewport, while vv.height
-    // measures the VISUAL one; the two have different baselines depending on
-    // the browser's interactive-widget mode, and setting height from the wrong
-    // baseline left the panel ending short of the keyboard with the storefront
-    // showing through the gap. The difference between them IS the keyboard, so
-    // deriving it works in both modes: under resizes-content the layout
-    // viewport has already shrunk, the difference is 0, and bottom: 0 is right.
-    var keyboard = Math.max(0, window.innerHeight - vv.height - (vv.offsetTop || 0));
-    // Shrinking the panel must not scroll the newest message out of sight —
-    // but only re-pin when the shopper was ALREADY at the bottom, or reading
-    // back through history would be yanked away every time the keyboard moves.
-    var atBottom =
-      ui.body && ui.body.scrollHeight - ui.body.scrollTop - ui.body.clientHeight < 40;
-    ui.panel.style.height = "auto";
-    ui.panel.style.top = "0px";
-    ui.panel.style.bottom = keyboard + "px";
-    // env(safe-area-inset-bottom) clears the home indicator, but the keyboard
-    // already covers that strip — keeping the inset would park empty panel
-    // between the composer and the keys.
-    ui.panel.style.paddingBottom = keyboard > 0 ? "0px" : "";
-    if (atBottom && ui.body) ui.body.scrollTop = ui.body.scrollHeight;
+  /** Set while the panel is open on a phone, restored on close. Skipped when
+   *  the theme already chose a value — that is the merchant's call, not ours. */
+  function lockInteractiveWidget() {
+    if (viewportMetaRestore || !isPhone()) return;
+    var meta = document.querySelector('meta[name="viewport"]');
+    if (!meta) return;
+    var original = meta.getAttribute("content") || "";
+    if (original.indexOf("interactive-widget") !== -1) return;
+    var head = original.replace(/[, ]+$/, "");
+    meta.setAttribute("content", (head ? head + "," : "") + "interactive-widget=resizes-content");
+    viewportMetaRestore = function () {
+      meta.setAttribute("content", original);
+      viewportMetaRestore = null;
+    };
   }
 
-  /** Android fires several resizes while the keyboard animates in, and the
-   *  last one we see is not always the settled size. Re-measure shortly after
-   *  the burst so a mid-animation value cannot be what sticks. */
+  /** Safari fallback. Where the meta above is honoured the layout viewport has
+   *  already shrunk, so this writes the height the panel has anyway. */
+  function syncViewport() {
+    if (!ui.panel) return;
+    var vv = window.visualViewport;
+    ui.panel.style.height = vv && state.open && isPhone() ? vv.height + "px" : "";
+  }
+
+  /** The keyboard animates, and the last resize we see is not always the
+   *  settled size — re-measure once after the burst. */
   var vvSettle = null;
   function syncViewportSettling() {
     syncViewport();
@@ -582,6 +577,7 @@
     refreshCartSnapshot(); // first message's pageContext carries the cart
     state.open = true;
     store(sessionStorage, OPEN_KEY, "1");
+    lockInteractiveWidget(); // before the first measurement — it resizes it
     bindViewport();
     lockBodyScroll();
     syncViewport();
@@ -600,11 +596,9 @@
   function closePanel() {
     if (vvUnbind) vvUnbind();
     if (scrollUnlock) scrollUnlock();
+    if (viewportMetaRestore) viewportMetaRestore();
     if (ui.panel) {
       ui.panel.style.height = "";
-      ui.panel.style.top = "";
-      ui.panel.style.bottom = "";
-      ui.panel.style.paddingBottom = "";
       ui.panel.style.display = "none";
     }
     ui.launcher.style.display = "";

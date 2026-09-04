@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import db from "../../db.server";
 import { getQuota } from "../billing/plans.server";
 import { embedTexts, toSqlVector } from "../embeddings/embedding.server";
-import { runtimeConfig } from "../platform/runtime-config.server";
+import { runtimeConfig } from "../admin/runtime-config.server";
 import { stripToText } from "../sanitize.server";
 import { requireShopId } from "../tenancy.server";
 import { crawl, htmlToText, HARD_CRAWL_PAGE_CAP, type CrawlScope } from "./fetchers.server";

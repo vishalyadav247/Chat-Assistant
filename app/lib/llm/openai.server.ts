@@ -1,15 +1,15 @@
 import OpenAI from "openai";
 import { env } from "../env.server";
-import { getAiOverrides } from "../platform/platform-settings.server";
-import { runtimeConfig } from "../platform/runtime-config.server";
+import { getAiOverrides } from "../admin/admin-settings.server";
+import { runtimeConfig } from "../admin/runtime-config.server";
 import { samplingParams, supportsJsonObject } from "./model-compat";
 import { recordLlmUsage, type LlmPurpose } from "./usage.server";
 import type { ChatMessage, ChatOptions, LlmCallContext, LlmProvider, ShopContext } from "./types";
-import type { AiOverrides } from "../platform/platform-settings.server";
+import type { AiOverrides } from "../admin/admin-settings.server";
 import { logError, logWarn } from "../log.server";
 
 // The ONLY file that imports the openai SDK.
-// The chat MODEL can be overridden globally from the /platform dashboard
+// The chat MODEL can be overridden globally from the /admin dashboard
 // (spec 19): per-call `options.model` → dashboard override → env CHAT_MODEL.
 //
 // temperature/maxTokens resolve differently, on purpose (QA fix 2026-08-21):
@@ -20,7 +20,7 @@ import { logError, logWarn } from "../log.server";
 // Embeddings deliberately stay on env EMBEDDING_MODEL (vectors are pinned to
 // 1536 dims; switching embedding models requires a re-embed migration, not a
 // toggle — `scripts/reembed-products.ts`).
-// Every call reports exact token usage to llm_usage_daily (spec 19 · platform
+// Every call reports exact token usage to llm_usage_daily (spec 19 · admin
 // usage analytics) — including streamed replies, via stream_options.
 
 const EMBED_BATCH_LIMIT = 100;
@@ -99,7 +99,7 @@ function report(
 export class OpenAiProvider implements LlmProvider {
   private cached: { key: string; client: OpenAI } | null = null;
 
-  /** Rebuilt when the operator rotates the key at /platform/settings. */
+  /** Rebuilt when the operator rotates the key at /admin/settings. */
   private get client(): OpenAI {
     const apiKey = runtimeConfig().openaiApiKey;
     if (!this.cached || this.cached.key !== apiKey) {

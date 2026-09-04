@@ -1,7 +1,7 @@
 import db from "../../db.server";
 import { logError } from "../log.server";
 
-// Token-usage recording (spec 19 · platform usage analytics). Called from the
+// Token-usage recording (spec 19 · admin usage analytics). Called from the
 // LLM seam on every completed API call and rolled up into llm_usage_daily.
 //
 // Two hard rules, because this sits in the shopper chat hot path:

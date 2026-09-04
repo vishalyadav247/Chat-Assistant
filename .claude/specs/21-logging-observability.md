@@ -1,6 +1,6 @@
 # 21 — Logging & observability (operator log console)
 
-**Status:** built · **Surface:** `/platform/logs` (operator only) · **Depends on:** spec 19
+**Status:** built · **Surface:** `/admin/logs` (operator only) · **Depends on:** spec 19
 
 ## Purpose
 
@@ -18,7 +18,7 @@ real "who changed what" ambiguity between multiple humans.
 ## Why Postgres and not a log service (user decision 2026-08-21)
 
 The operator console already has DB-backed auth, a cross-tenant page pattern
-(`/platform/usage`), and a nightly purge job. A log table reuses all three at
+(`/admin/usage`), and a nightly purge job. A log table reuses all three at
 zero marginal cost and zero external dependency — it works in dev, offline, and
 without anyone signing up for a vendor free tier.
 
@@ -88,10 +88,10 @@ deletes logs belonging to any shop with `uninstalledAt` set, and the 14-day
 window ages out anything missed. Trade-off accepted: a churned merchant's error
 history is deleted with them, same as their token history (spec 19).
 
-## Page — `/platform/logs`
+## Page — `/admin/logs`
 
-Cross-tenant aggregate BY DESIGN, guarded by `requirePlatformAdmin` like every
-other platform route.
+Cross-tenant aggregate BY DESIGN, guarded by `requireAdminUser` like every
+other admin route.
 
 - Stat tiles: errors (24h), warnings (24h), stores affected (24h).
 - Filters: range (24h · 7d · 14d), level, event code, store — all in the query
@@ -114,7 +114,7 @@ other platform route.
 ## Acceptance criteria
 
 1. `app_logs` exists via migration (never `db push`); page loads at
-   `/platform/logs` and 302s to login when unauthenticated.
+   `/admin/logs` and 302s to login when unauthenticated.
 2. Every `console.error`/`console.warn` in server code routes through the seam;
    client code (`app/lib/ui/*`) and `console.log` sites are untouched.
 3. A thrown error in a job handler produces exactly one row with the right
@@ -127,12 +127,12 @@ other platform route.
 
 - `app/lib/log.server.ts` — the write seam (`logError`/`logWarn`/`logSync`),
   rate cap, PII denylist, size ceiling, domain→shopId resolution.
-- `app/lib/platform/logs-report.server.ts` — read layer (cross-tenant,
+- `app/lib/admin/logs-report.server.ts` — read layer (cross-tenant,
   read-only; the shop filter is validated against the shop table).
-- `app/lib/platform/logs-shared.ts` — client-safe ranges/labels/row cap.
-- `app/routes/platform.logs.tsx` — the page.
-- `app/components/platform/PlatformShell.tsx` — "Logs" nav entry.
-- `app/components/platform/platform.css` — `ccpf-log*` styles.
+- `app/lib/admin/logs-shared.ts` — client-safe ranges/labels/row cap.
+- `app/routes/admin.logs.tsx` — the page.
+- `app/components/admin/AdminShell.tsx` — "Logs" nav entry.
+- `app/components/admin/admin.css` — `ccpf-log*` styles.
 - `app/lib/jobs/handlers.server.ts` — `purgeAppLogs()` (called from
   `retentionPurge`), `app_logs` in `cleanupShop` + `countShopRows`.
 - `scripts/logs-check.ts` (`npm run logs:check`) — the acceptance harness.

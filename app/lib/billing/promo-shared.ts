@@ -1,5 +1,5 @@
 // Pure promo-code helpers shared by server (promo-codes.server.ts) and client
-// (platform coupons page). No DB, no secrets — safe in the browser bundle.
+// (admin coupons page). No DB, no secrets — safe in the browser bundle.
 
 export type PromoKind = "percent" | "fixed";
 

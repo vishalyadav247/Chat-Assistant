@@ -19,7 +19,7 @@
  * writes still succeed (dimensions match), so nothing fails; retrieval just
  * quietly gets worse. The other three columns had no re-embed path at all.
  *
- * The fix is a marker row in app_secrets (`platform:embedding-model`) that
+ * The fix is a marker row in app_secrets (`admin:embedding-model`) that
  * records which model built the vectors on disk. A mismatch against env
  * EMBEDDING_MODEL means EVERYTHING is stale, regardless of hashes.
  *
@@ -87,7 +87,7 @@ async function main() {
     "../app/lib/embeddings/embedding.server"
   );
   const { getEmbeddingModelMarker, setEmbeddingModelMarker } = await import(
-    "../app/lib/platform/platform-settings.server"
+    "../app/lib/admin/admin-settings.server"
   );
 
   const model = process.env.EMBEDDING_MODEL || "text-embedding-3-small";

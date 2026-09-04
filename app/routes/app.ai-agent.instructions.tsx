@@ -184,9 +184,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       customRecs: hasFeature(plan, "custom_recommendations")
         ? null
         : requiredPlanName("custom_recommendations"),
-      multiLanguage: hasFeature(plan, "multi_language")
-        ? null
-        : requiredPlanName("multi_language"),
     },
   };
 };
@@ -365,7 +362,6 @@ export default function InstructionsPage() {
         {tab === "general" ? (
           <InstructionsGeneralTab
             initial={data.general}
-            multiLanguagePlan={data.planSignals.multiLanguage}
           />
         ) : null}
         {tab === "recommendations" ? (
