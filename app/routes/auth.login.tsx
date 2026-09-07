@@ -1,16 +1,24 @@
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { redirect } from "react-router";
+
+import { login } from "../shopify.server";
 
 // The Shopify library treats /auth/login as its configured login path, so the
 // auth.$ splat cannot serve it — authenticate.admin() refuses and the route
 // 500s on a public URL (QA routing audit).
 //
-// The template's shop-domain form that used to live here was removed
-// deliberately: App Store review requirement 2.3.1 forbids asking a merchant to
-// type their .myshopify.com domain. Installation happens through the App Store
-// listing, and Shopify bounces merchants into /?shop=… which _index redirects
-// to /app. So this path has no legitimate UI — send anyone who lands here to
-// the marketing page instead of showing them a stack trace.
+// The login UI itself lives on "/" (one card, one place). This route only has
+// to handle the library bouncing here, and stale bookmarks:
 //
-// Do NOT re-add a shop-domain input here.
-export const loader = () => redirect("/");
-export const action = () => redirect("/");
+//   • with ?shop=… — login() throws a redirect to the managed-install screen,
+//     so the install completes instead of dead-ending;
+//   • without one — login() returns {} and we send them to the card on "/".
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  await login(request);
+  return redirect("/");
+};
+
+export const action = async ({ request }: ActionFunctionArgs) => {
+  await login(request);
+  return redirect("/");
+};

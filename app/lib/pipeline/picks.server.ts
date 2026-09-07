@@ -51,17 +51,31 @@ export interface PicksStream {
   result(): { picks: Picks | null; line: string | null };
 }
 
+export interface LeadingLineStream<T> {
+  /** The shopper-visible text: the source stream minus the control line. */
+  text: AsyncIterable<string>;
+  /** Valid once `text` has been fully consumed. */
+  result(): { parsed: T | null; line: string | null };
+}
+
 /** Longest a first line may grow (chars) before it is treated as prose. */
 const MAX_FIRST_LINE = 80;
 
 /**
- * Wrap a token stream: buffer the first line, consume it if it is a picks
- * line, pass everything else through unchanged. The delay before the first
- * visible token is the picks line itself (~10 tokens); a reply that opens with
- * prose is flushed as soon as its first line ends or MAX_FIRST_LINE is reached.
+ * Wrap a token stream: buffer the first line, consume it if `parse` claims it,
+ * pass everything else through unchanged. The delay before the first visible
+ * token is the control line itself (~10 tokens); a reply that opens with prose
+ * is flushed as soon as its first line ends or MAX_FIRST_LINE is reached.
+ *
+ * Generic since 2026-09-04: the buy lane's `PICKS:` line and the support
+ * lanes' `ACTION:` line (actions.server.ts) are the same trick, and one
+ * carefully-tested buffering loop is worth more than two.
  */
-export function splitPicksStream(source: AsyncIterable<string>): PicksStream {
-  let picks: Picks | null = null;
+export function splitLeadingLine<T>(
+  source: AsyncIterable<string>,
+  parse: (line: string) => T | null,
+): LeadingLineStream<T> {
+  let parsed: T | null = null;
   let line: string | null = null;
 
   async function* text(): AsyncIterable<string> {
@@ -85,9 +99,9 @@ export function splitPicksStream(source: AsyncIterable<string>): PicksStream {
       const nl = buffer.indexOf("\n");
       if (nl < 0 && buffer.length < MAX_FIRST_LINE) continue;
       decided = true;
-      const parsed = nl >= 0 ? parsePicksLine(buffer.slice(0, nl)) : null;
-      if (parsed) {
-        picks = parsed;
+      const hit = nl >= 0 ? parse(buffer.slice(0, nl)) : null;
+      if (hit !== null) {
+        parsed = hit;
         line = buffer.slice(0, nl).trim();
         const rest = buffer.slice(nl + 1).replace(/^\s+/, "");
         if (rest) yield rest;
@@ -98,11 +112,11 @@ export function splitPicksStream(source: AsyncIterable<string>): PicksStream {
       buffer = "";
     }
     if (!decided && buffer) {
-      // Stream ended inside the first line: a lone picks line (no prose) or a
+      // Stream ended inside the first line: a lone control line (no prose) or a
       // one-line reply.
-      const parsed = parsePicksLine(buffer);
-      if (parsed) {
-        picks = parsed;
+      const hit = parse(buffer);
+      if (hit !== null) {
+        parsed = hit;
         line = buffer.trim();
       } else {
         yield buffer;
@@ -110,5 +124,18 @@ export function splitPicksStream(source: AsyncIterable<string>): PicksStream {
     }
   }
 
-  return { text: text(), result: () => ({ picks, line }) };
+  return { text: text(), result: () => ({ parsed, line }) };
+}
+
+/** The buy lane's `PICKS:` line. Thin wrapper over splitLeadingLine so the
+ *  call site keeps reading in the vocabulary of what it is doing. */
+export function splitPicksStream(source: AsyncIterable<string>): PicksStream {
+  const split = splitLeadingLine(source, parsePicksLine);
+  return {
+    text: split.text,
+    result: () => {
+      const { parsed, line } = split.result();
+      return { picks: parsed, line };
+    },
+  };
 }

@@ -50,6 +50,74 @@
     return node;
   }
 
+  /** A model-written href we are willing to follow: this store's own paths, or
+   *  an explicit https page. Everything else (javascript:, data:, mailto
+   *  built from model text) renders as plain text instead of a link. */
+  function safeHref(raw) {
+    var href = String(raw || "").trim();
+    if (/^https:\/\/[^\s<>"']+$/i.test(href)) return href;
+    if (/^\/[^\s<>"']*$/.test(href)) return href;
+    return null;
+  }
+
+  var INLINE = /\[([^\]\n]{1,120})\]\((https:\/\/[^\s)]+|\/[^\s)]*)\)|(https:\/\/[^\s<>"']+)|\*\*([^*\n]{1,200})\*\*/g;
+
+  /**
+   * Bot text with the small amount of formatting the model actually produces:
+   * **bold**, markdown links, and bare https URLs.
+   *
+   * Everything is built with createElement/createTextNode — the model's output
+   * never becomes markup, so there is nothing to inject. Two visible bugs this
+   * fixes: replies were arriving with literal `**` around product names, and a
+   * URL in a reply (or quoted out of the merchant's own help articles)
+   * rendered as dead text because bot bubbles were textContent only.
+   */
+  function appendInline(node, text) {
+    var source = String(text == null ? "" : text);
+    var at = 0;
+    var m;
+    INLINE.lastIndex = 0;
+    while ((m = INLINE.exec(source)) !== null) {
+      if (m.index > at) node.appendChild(document.createTextNode(source.slice(at, m.index)));
+      var linkLabel = m[1];
+      var linkHref = m[2];
+      var bareUrl = m[3];
+      var bold = m[4];
+      if (bold !== undefined) {
+        var strong = document.createElement("strong");
+        strong.textContent = bold;
+        node.appendChild(strong);
+      } else {
+        var href = safeHref(linkHref !== undefined ? linkHref : bareUrl);
+        var label = linkLabel !== undefined ? linkLabel : bareUrl;
+        if (href) {
+          var a = el("a", null, { href: href, rel: "noopener noreferrer" });
+          // A storefront path stays in this tab (the widget survives the
+          // navigation); an external page must not take the shopper away.
+          if (href.charAt(0) !== "/") a.setAttribute("target", "_blank");
+          a.textContent = label;
+          node.appendChild(a);
+        } else {
+          node.appendChild(document.createTextNode(m[0]));
+        }
+      }
+      at = m.index + m[0].length;
+    }
+    if (at < source.length) node.appendChild(document.createTextNode(source.slice(at)));
+  }
+
+  /** Like setText, but renders the inline formatting above. Bot/agent bubbles
+   *  only — a shopper's own message is always shown exactly as they typed it. */
+  function setRichText(node, text) {
+    node.textContent = "";
+    String(text == null ? "" : text)
+      .split("\n")
+      .forEach(function (line, i) {
+        if (i > 0) node.appendChild(document.createElement("br"));
+        appendInline(node, line);
+      });
+  }
+
   // Bot/agent identity on message bubbles (spec 06 "Chat avatar"): with
   // "Store branding" the shell passes {url, name} from Settings → General →
   // Store information — logo (or the name's initials) as the avatar and the
@@ -402,7 +470,10 @@
       row.appendChild(avatar());
     }
     var bubble = el("div", "cw-bubble" + (kind === "user" ? " cw-bubble--user" : kind === "sys" ? " cw-bubble--sys" : ""));
-    setText(bubble, content);
+    // The shopper's own words go in verbatim; a reply gets its links and bold
+    // rendered (see setRichText).
+    if (kind === "user") setText(bubble, content);
+    else setRichText(bubble, content);
     appendWithLabel(row, bubble, kind === "bot" ? botLabel(label) : label);
     return { el: row, bubbleEl: bubble };
   }
@@ -440,6 +511,29 @@
     dots.appendChild(el("span"));
     row.appendChild(dots);
     return row;
+  }
+
+  /**
+   * Buttons that open a screen of the widget itself (order tracking, contact,
+   * help), chosen by the agent from what the shop has switched on.
+   *
+   * Replaces the agent describing storefront navigation it cannot see — it
+   * once told a shopper to "click the Track navigation", which does not exist:
+   * order tracking lives in this panel. cb.onAction(action).
+   */
+  function actionChips(actions, cb) {
+    var wrap = el("div", "cw-actions-row");
+    actions.forEach(function (action) {
+      if (!action || !action.key) return;
+      var chip = el("button", "cw-chip cw-chip--action", { type: "button" });
+      // The label is written by the server, never by the model.
+      chip.textContent = action.label || "Open";
+      if (cb && cb.onAction) {
+        chip.addEventListener("click", function () { cb.onAction(action); });
+      }
+      wrap.appendChild(chip);
+    });
+    return wrap;
   }
 
   /** Starter chips. cb.onStarter(starter). */
@@ -487,7 +581,37 @@
       var add = el("button", "cw-btn cw-btn--primary", { type: "button" });
       add.textContent = "Add to cart";
       if (cb && cb.onAdd) {
-        add.addEventListener("click", function () { cb.onAdd(card); });
+        // The add is a network round trip. Without a pending state the button
+        // sat idle until the drawer opened, which reads as "nothing happened"
+        // — so shoppers clicked again and added the item twice.
+        var busy = false;
+        var setPending = function (on) {
+          if (on === busy) return;
+          busy = on;
+          add.disabled = on;
+          add.setAttribute("aria-busy", on ? "true" : "false");
+          if (on) {
+            add.textContent = "";
+            add.appendChild(el("span", "cw-spin", { "aria-hidden": "true" }));
+            add.appendChild(document.createTextNode("Adding…"));
+          } else {
+            add.textContent = "Add to cart";
+          }
+        };
+        add.addEventListener("click", function () {
+          if (busy) return;
+          setPending(true);
+          var done = false;
+          var release = function () {
+            if (done) return;
+            done = true;
+            setPending(false);
+          };
+          var result = cb.onAdd(card, { release: release });
+          // A handler that navigates away never settles; one that returns a
+          // promise releases the button when the cart call finishes.
+          if (result && typeof result.then === "function") result.then(release, release);
+        });
       }
       actions.appendChild(view);
       actions.appendChild(add);
@@ -1550,6 +1674,8 @@
     icons: ICONS,
     el: el,
     setText: setText,
+    setRichText: setRichText,
+    actionChips: actionChips,
     themeVars: themeVars,
     applyTheme: applyTheme,
     formatPrice: formatPrice,

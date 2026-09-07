@@ -36,6 +36,7 @@ import { FILTERS, displayName } from "../components/InboxShared";
 import type { FilterKey, InboxRow } from "../components/InboxShared";
 import { requireShopAccess } from "../lib/access.server";
 import { routeError } from "../lib/ui/route-error";
+import { installFullBleedPage } from "../lib/ui/spage-fullbleed";
 import { APP_NAME } from "./app";
 
 // Inbox workspace (spec 10, design inbox.html): 4 columns —
@@ -273,6 +274,10 @@ export default function InboxPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [detailsOpen, filtersOpen]);
 
+  // s-page keeps its gutter inside a shadow root, so page CSS can't reach it;
+  // this is the one route that goes edge to edge on a phone (spec 20).
+  useEffect(() => installFullBleedPage(), []);
+
   // Fill the viewport: size the workspace from its rendered top edge down to
   // the bottom of the iframe (the CSS 130px offset is only a pre-paint guess).
   const gridRef = useRef<HTMLDivElement>(null);
@@ -456,6 +461,7 @@ export default function InboxPage() {
           onSearch={setSearch}
           onSelect={selectConversation}
           onOpenFilters={() => setFiltersOpen(true)}
+          filtered={filter !== "all"}
         />
         <InboxThread
           active={active}
@@ -504,6 +510,9 @@ export default function InboxPage() {
           onBlock={() => op("block")}
           onDelete={() => op("delete")}
         />
+        {/* Phones only (CSS-gated): the filter tabs as a bar under the list,
+            in place of the trigger + overlay. Hidden in thread view. */}
+        <InboxFilters variant="bar" counts={data.counts} filter={filter} onSelect={setFilter} />
         {filtersOpen ? (
           <div
             className="cin-fov"
@@ -514,8 +523,10 @@ export default function InboxPage() {
           >
             <div className="cin-fov-panel" role="dialog" aria-modal="true" aria-label="Conversation filters">
               <InboxFilters
+                variant="sheet"
                 counts={data.counts}
                 filter={filter}
+                onClose={() => setFiltersOpen(false)}
                 onSelect={(key) => {
                   setFilter(key);
                   setFiltersOpen(false);
@@ -590,23 +601,83 @@ const WORKSPACE_CSS = `
 .cin-grid button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit;}
 .cin-grid button:disabled{cursor:default;}
 
-.cin-filcol{padding:10px 8px;overflow-y:auto;}
-/* Mobile filter slide-over (Chatty reference inbox_nav.png): the same rail
-   panel, opened from the list header's filter button. */
-.cin-filbtn{display:none;width:38px;height:38px;border-radius:11px;background:#fbfbfc;box-shadow:inset 0 0 0 1px #dcdce1;color:#2b2b30;align-items:center;justify-content:center;flex:none;}
-.cin-filbtn:active{background:#f1f1f4;}
-.cin-fov{position:fixed;inset:0;z-index:130;background:rgba(14,14,20,.45);display:flex;justify-content:flex-start;}
-.cin-fov-panel{width:min(300px,85vw);height:100%;background:#fff;border-radius:0 18px 18px 0;overflow:hidden;box-shadow:0 0 50px rgba(0,0,0,.35);}
-.cin-fov-panel .cin-filcol{display:flex;flex-direction:column;width:100%;height:100%;border:none;border-radius:0;box-shadow:none;padding-top:max(14px,env(safe-area-inset-top));}
-.cin-fil-title{font-weight:750;color:#141417;font-size:14px;padding:6px 8px 4px;}
-.cin-fil-grp{font-size:10.5px;font-weight:700;color:#9a9aa2;text-transform:uppercase;letter-spacing:.5px;padding:12px 8px 5px;}
-.cin-fil{display:flex;align-items:center;gap:9px;height:33px;padding:0 8px;border-radius:8px;width:100%;font-size:12.5px;font-weight:550;text-align:left;}
-.cin-fil:hover{background:#fbfbfc;}
-.cin-fil.active{background:#f3f1fb;color:${BRAND.accent};font-weight:700;}
+/* Filter rail ─────────────────────────────────────────────────────────────
+   This is the workspace's primary navigation, so it is built as a navigation
+   surface rather than another white data card: a faintly tinted gradient
+   column, a branded header, and one coloured glyph per tab so the seven rows
+   can be scanned instead of read. The selected tab is a frosted brand pill
+   (translucent gradient + blur + accent bar) — the one glassmorphic moment,
+   spent on the single element whose job is to say "you are here". Everything
+   else stays opaque: chat rows and counts need contrast, not translucency. */
+.cin-filcol{padding:0 0 8px;overflow-y:auto;background:linear-gradient(180deg,#fcfcfe 0%,#f5f4fb 100%);border-color:#e6e4ee;}
+.cin-fil-head{flex:none;position:sticky;top:0;z-index:2;display:flex;flex-direction:column;padding:12px 13px 11px;background:rgba(252,252,254,.82);-webkit-backdrop-filter:blur(10px) saturate(150%);backdrop-filter:blur(10px) saturate(150%);box-shadow:inset 0 -1px 0 rgba(20,20,25,.07);}
+.cin-fil-title{font-weight:750;color:#141417;font-size:13.5px;line-height:1.2;}
+.cin-fil-sub{font-size:10.5px;font-weight:600;color:#8b8b96;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.cin-fil-grp{font-size:10px;font-weight:750;color:#9a9aa2;text-transform:uppercase;letter-spacing:.6px;padding:13px 13px 6px;}
+.cin-fil{position:relative;flex:none;display:flex;align-items:center;gap:9px;min-height:34px;margin:1px 7px;padding:0 8px;border-radius:10px;font-size:12.5px;font-weight:600;text-align:left;transition:background .14s ease,box-shadow .14s ease,transform .12s ease;}
+.cin-fil:hover{background:rgba(255,255,255,.92);box-shadow:0 1px 3px rgba(20,20,25,.07),inset 0 0 0 1px rgba(20,20,25,.05);}
+.cin-fil:active{transform:scale(.985);}
+.cin-fil.active{background:linear-gradient(135deg,rgba(109,59,245,.15),rgba(59,130,246,.09));-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);color:${BRAND.accent};font-weight:750;box-shadow:inset 0 0 0 1px rgba(109,59,245,.2),0 4px 12px rgba(109,59,245,.14);}
+.cin-fil-ic{width:24px;height:24px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;color:#6b6b73;background:#f0f0f5;box-shadow:inset 0 0 0 1px rgba(20,20,25,.05);transition:background .14s ease,color .14s ease,box-shadow .14s ease;}
+.cin-fil[data-k="open"] .cin-fil-ic{color:#2563eb;background:#e4edff;}
+.cin-fil[data-k="resolved"] .cin-fil-ic{color:#0c8f5a;background:#d9f6e9;}
+.cin-fil[data-k="unassigned"] .cin-fil-ic{color:#0e7490;background:#d8f1f7;}
+.cin-fil[data-k="handover"] .cin-fil-ic{color:#c2410c;background:#ffe6da;}
+.cin-fil[data-k="starred"] .cin-fil-ic{color:#b7791f;background:#fdf3d4;}
+.cin-fil[data-k="blocked"] .cin-fil-ic{color:#be123c;background:#ffe1e7;}
+/* Last, so it wins over the per-tab tints above at equal specificity. */
+.cin-fil.active .cin-fil-ic{background:${BRAND.gradient};color:#fff;box-shadow:0 2px 6px rgba(109,59,245,.35);}
 .cin-fil-l{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.cin-fil-c{font-size:11px;font-weight:700;color:#6b6b73;}
-.cin-fil.active .cin-fil-c{color:${BRAND.accent};}
+.cin-fil-c{font-size:11px;font-weight:750;color:#6b6b73;background:rgba(20,20,25,.055);border-radius:20px;min-width:20px;padding:2px 6px;text-align:center;}
+.cin-fil.active .cin-fil-c{color:#fff;background:${BRAND.accent};}
 .cin-fil-c.red{color:#fff;background:#f43f5e;border-radius:10px;padding:1px 3px;min-width:18px;text-align:center;}
+
+/* Filter trigger + slide-over (Chatty reference inbox_nav.png): below 1041px
+   the rail column is gone, so this button IS the filter feature — it gets the
+   same brand pill treatment plus a dot whenever a non-default tab is active,
+   so a filtered list can never be mistaken for an empty one. */
+.cin-filbtn{position:relative;display:none;width:38px;height:38px;border-radius:12px;background:linear-gradient(180deg,#fff,#f6f5fb);box-shadow:inset 0 0 0 1px #dedce7,0 1px 2px rgba(20,20,25,.06);color:#4a4a53;align-items:center;justify-content:center;flex:none;transition:background .14s ease,box-shadow .14s ease,transform .12s ease;}
+.cin-filbtn:hover{box-shadow:inset 0 0 0 1px #cfcddb,0 2px 6px rgba(20,20,25,.09);}
+.cin-filbtn:active{transform:scale(.94);}
+.cin-filbtn.on{color:${BRAND.accent};background:linear-gradient(135deg,rgba(109,59,245,.15),rgba(59,130,246,.09));box-shadow:inset 0 0 0 1px rgba(109,59,245,.28),0 3px 10px rgba(109,59,245,.16);}
+.cin-filbtn.on::after{content:"";position:absolute;top:4px;right:4px;width:8px;height:8px;border-radius:50%;background:${BRAND.gradient};box-shadow:0 0 0 2px #fff;}
+/* Phone filter bar — declared here, switched on only in the ≤768px block. */
+.cin-fbar{display:none;}
+
+/* Bottom sheet, NOT a left drawer: the web shell's nav drawer already slides
+   in from the left, and two identical left panels on one screen read as the
+   same control. A sheet rising from the bottom is a different gesture, sits
+   under the thumb, and is short enough that the conversation list stays
+   visible behind it. Above 768px it becomes a centred dialog instead. */
+.cin-fov{position:fixed;inset:0;z-index:130;background:rgba(14,14,20,.42);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);display:flex;align-items:flex-end;justify-content:center;}
+.cin-fov-panel{width:100%;max-height:min(78dvh,520px);background:rgba(252,252,254,.96);-webkit-backdrop-filter:blur(20px) saturate(160%);backdrop-filter:blur(20px) saturate(160%);border-radius:22px 22px 0 0;overflow:hidden;box-shadow:0 -10px 44px rgba(0,0,0,.3);animation:cinSheetIn .2s cubic-bezier(.22,.9,.3,1);}
+.cin-fsheet{display:flex;flex-direction:column;min-height:0;height:100%;padding:0 12px calc(14px + env(safe-area-inset-bottom,0px));}
+.cin-fsheet-grab{flex:none;width:38px;height:4px;border-radius:4px;background:#d3d1de;margin:9px auto 3px;}
+.cin-fsheet-head{flex:none;display:flex;align-items:center;gap:8px;padding:6px 2px 10px;}
+.cin-fsheet-head .cin-fil-title{flex:1;font-size:14.5px;}
+.cin-fsheet-x{width:32px;height:32px;border-radius:9px;color:#6b6b73;display:flex;align-items:center;justify-content:center;flex:none;}
+.cin-fsheet-x:hover{background:rgba(20,20,25,.06);}
+/* Two columns: seven tabs fit without scrolling on a phone, so the sheet
+   never grows tall enough to feel like a full-screen takeover. */
+.cin-fsheet-grid{flex:1;min-height:0;overflow-y:auto;display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:1px 1px 2px;}
+.cin-fsheet-grid .cin-fil{margin:0;min-height:48px;padding:0 10px;border-radius:13px;background:#fff;box-shadow:inset 0 0 0 1px #e6e4ee;}
+.cin-fsheet-grid .cin-fil:hover{background:#fbfbfc;box-shadow:inset 0 0 0 1px #d7d4e4;}
+.cin-fsheet-grid .cin-fil.active{background:linear-gradient(135deg,rgba(109,59,245,.15),rgba(59,130,246,.09));box-shadow:inset 0 0 0 1.5px rgba(109,59,245,.35),0 4px 12px rgba(109,59,245,.14);}
+@keyframes cinSheetIn{from{transform:translateY(100%);}to{transform:none;}}
+/* Tablets and narrow desktop windows: a bottom sheet at 900px wide looks
+   stranded, so the same panel centres as a dialog. */
+@media (min-width:769px){
+  .cin-fov{align-items:center;}
+  .cin-fov-panel{width:min(460px,92vw);border-radius:20px;box-shadow:0 20px 60px rgba(0,0,0,.32);animation-name:cinDialogIn;}
+  .cin-fsheet{padding:0 14px 14px;}
+  .cin-fsheet-grab{display:none;}
+  .cin-fsheet-head{padding:14px 2px 12px;}
+}
+@keyframes cinDialogIn{from{transform:translateY(12px) scale(.97);opacity:0;}to{transform:none;opacity:1;}}
+@media (prefers-reduced-motion:reduce){
+  .cin-fil,.cin-filbtn,.cin-fil-ic{transition:none;}
+  .cin-fov-panel{animation:none;}
+}
 
 .cin-list-top{padding:12px 12px 10px;box-shadow:inset 0 -1px 0 #e9e9ec;flex:none;}
 .cin-list-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:13px;}
@@ -690,6 +761,10 @@ ${CHAT_CARD_CSS}
 .cin-comp-input:focus{scrollbar-color:#c9c9d2 transparent;}
 .cin-comp-input:focus::-webkit-scrollbar-thumb{background:#c9c9d2;}
 .cin-comp-input::-webkit-scrollbar-thumb:hover{background:#adadb8;}
+/* Layout-neutral wrapper on pointer devices — the phone rules turn it into
+   the rounded input pill. */
+.cin-comp-pill{display:block;}
+.cin-emoji-btn{display:none;}
 .cin-comp-bar{display:flex;align-items:center;gap:2px;margin-top:8px;padding-top:8px;box-shadow:inset 0 1px 0 #e9e9ec;}
 .cin-emoji{width:30px;height:30px;border-radius:8px;font-size:15px;display:flex;align-items:center;justify-content:center;}
 .cin-emoji:hover{background:#fbfbfc;}
@@ -761,48 +836,129 @@ button.cin-send:disabled{opacity:.4;box-shadow:none;}
   .cin-back,.cin-infobtn,.cin-star{width:40px;height:40px;}
   .cin-kebab{width:40px;height:34px;}
   .cin-filbtn{min-width:40px;min-height:40px;}
+  .cin-fil{min-height:44px;margin:2px 8px;padding:0 9px;font-size:13.5px;}
+  .cin-fil-ic{width:28px;height:28px;border-radius:9px;}
 }
 @media (max-width:1240px){.cin-grid{grid-template-columns:150px 260px 1fr;}.cin-details{display:none;}.cin-infobtn{display:flex;}}
-@media (max-width:1040px){.cin-grid{grid-template-columns:260px 1fr;}.cin-filcol{display:none;}}
+/* The rail folds into the slide-over here, so the trigger has to appear in the
+   same breakpoint that removes it — otherwise tablets lose filtering entirely. */
+@media (max-width:1040px){.cin-grid{grid-template-columns:260px 1fr;}.cin-filcol{display:none;}.cin-filbtn{display:flex;}}
 @media (max-width:768px){
   /* One pane at a time (data-view from ?c=): list view = full-screen list;
      thread view = full-screen thread with a back button. */
-  .cin-grid{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);gap:10px;}
+  /* Full-bleed workspace: the shell's page gutter is removed for this page
+     (app-mobile.css), so the list, the thread and the filter bar all run edge
+     to edge — a phone screen has no room for a card inset around a surface
+     that already fills it, and the bottom bar only reads as a bar when it
+     touches both edges. */
+  .cin-grid{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);gap:0;}
   .cin-grid[data-view="list"] .cin-threadcol{display:none;}
   .cin-grid[data-view="thread"] .cin-listcol{display:none;}
-  .cin-col{border-radius:14px;}
+  .cin-col{border-radius:0;border:none;box-shadow:none;}
+
+  /* Header keeps the search and nothing else — the title was a restatement of
+     the active filter chip, and the filter/unread controls now live at the
+     bottom. Everything between the two is the conversation list, scrolling. */
+  .cin-list-head{display:none;}
 
   /* List header (Chatty layout): [filter button] [active-filter title] …
      [Unread toggle], search full-width below; roomy 44px-avatar rows. */
-  .cin-filbtn{display:flex;}
-  .cin-list-top{padding:10px 12px;}
-  .cin-list-head{justify-content:flex-start;gap:10px;margin-bottom:10px;}
-  .cin-list-title{font-size:15px;}
-  .cin-unread-toggle{margin-left:auto;}
-  .cin-lsearch{height:38px;border-radius:12px;}
+  /* Filters move out of the header and overlay entirely: a scrollable strip
+     pinned under the list, always visible, one tap to switch. Cheaper than a
+     sheet (no open/close) and it shows the current tab without being asked.
+     Thread view hides it — that pane needs every pixel for the composer. */
+  .cin-filbtn{display:none;}
+  .cin-grid[data-view="list"] .cin-fbar{display:flex;}
+  /* Five equal slots, no horizontal scrolling: a strip you have to drag hides
+     the state you are trying to read and is a poor target one-handed. Fixed
+     slots also let the bar sit flush to both screen edges. */
+  .cin-fbar{position:relative;align-items:stretch;gap:0;flex:none;padding:0 0 env(safe-area-inset-bottom,0px);background:#fff;box-shadow:inset 0 1px 0 #e9e9ec;}
+  .cin-fbar .cin-fil{position:relative;flex:1 1 0;min-width:0;flex-direction:column;justify-content:center;gap:3px;margin:0;min-height:56px;padding:8px 2px 7px;border-radius:0;background:none;box-shadow:none;font-size:10px;font-weight:650;color:#6b6b73;}
+  .cin-fbar .cin-fil:hover{background:none;box-shadow:none;}
+  .cin-fbar .cin-fil-ic{width:25px;height:25px;border-radius:8px;}
+  .cin-fbar .cin-fil-l{flex:none;max-width:100%;font-size:10px;line-height:1;}
+  /* Count rides the glyph as a superscript — a vertical tab has no room for it
+     on the label line, and it must stay visible when the tab is inactive. */
+  .cin-fbar .cin-fil-c{position:absolute;top:5px;left:50%;margin-left:5px;min-width:16px;height:16px;padding:0 4px;font-size:9.5px;line-height:16px;border-radius:16px;background:#e9e9ee;color:#4a4a53;box-shadow:0 0 0 2px #fff;}
+  /* Active: brand glyph chip, accent label, and a short bar on the top edge —
+     the tab-bar equivalent of the rail's left accent. */
+  .cin-fbar .cin-fil.active{background:none;box-shadow:none;color:${BRAND.accent};font-weight:750;}
+  .cin-fbar .cin-fil.active .cin-fil-ic{background:${BRAND.gradient};color:#fff;box-shadow:0 2px 6px rgba(109,59,245,.35);}
+  .cin-fbar .cin-fil.active .cin-fil-c{background:${BRAND.accent};color:#fff;}
+
+  /* "More" opens upward, anchored to its own slot — a popover, not another
+     full-width sheet, so the list stays readable behind it. */
+  .cin-fmore-wrap{position:relative;flex:1 1 0;min-width:0;display:flex;}
+  .cin-fmore-wrap .cin-fil{flex:1 1 auto;}
+  .cin-fmore{position:absolute;bottom:calc(100% + 6px);right:6px;z-index:20;min-width:196px;padding:6px;display:flex;flex-direction:column;gap:2px;background:#fff;border-radius:15px;box-shadow:0 -8px 30px rgba(20,20,25,.2),inset 0 0 0 1px #e9e9ec;animation:cinMoreIn .15s ease-out;}
+  .cin-fmore .cin-fil{flex:none;flex-direction:row;justify-content:flex-start;gap:9px;min-height:44px;padding:0 9px;border-radius:11px;font-size:13px;font-weight:600;color:#2b2b30;}
+  .cin-fmore .cin-fil-l{flex:1;font-size:13px;text-align:left;overflow:hidden;text-overflow:ellipsis;}
+  .cin-fmore .cin-fil-c{position:static;margin:0;box-shadow:none;font-size:11px;height:auto;line-height:1.5;}
+  .cin-fmore-scrim{position:fixed;inset:0;z-index:15;background:transparent;}
+  @keyframes cinMoreIn{from{transform:translateY(6px);opacity:0;}to{transform:none;opacity:1;}}
+
+  /* The header is one full-bleed row: search on the left, Unread on the
+     right. Unread is a modifier, not a filter — it composes with whichever tab
+     is selected — so it belongs next to the search box that also narrows the
+     list, not in the tab bar where it would read as an eighth filter.
+     Achieved with flex order so the desktop DOM is untouched. */
+  .cin-list-top{display:flex;align-items:center;gap:8px;padding:8px 10px;background:#fff;box-shadow:inset 0 -1px 0 #e9e9ec;}
+  .cin-list-head{order:2;flex:none;display:flex;align-items:center;margin:0;justify-content:flex-end;}
+  .cin-list-title{display:none;}
+  .cin-unread-toggle{margin:0;padding:0 4px;font-size:12px;gap:6px;}
+  /* The search is the only bordered thing in the row: the field reads as a
+     field, while the row itself stays flush to both screen edges. */
+  .cin-lsearch{order:1;flex:1;min-width:0;height:46px;border-radius:13px;padding:0 13px;font-size:16px;background:#fbfbfc;box-shadow:inset 0 0 0 1px #dcdce1;}
+  .cin-lsearch:focus{background:#fff;box-shadow:inset 0 0 0 1.5px ${BRAND.accent};}
   .cin-conv{padding:13px 14px;gap:12px;}
   .cin-cav{width:44px;height:44px;border-radius:14px;font-size:13px;}
   .cin-cname{font-size:14px;}
   .cin-cprev{font-size:12.5px;}
 
-  /* Thread: 52px header, ellipsized name, comfy touch targets. */
+  /* Thread: the header sits flush against the top edge and the message list
+     starts immediately under it — a phone thread has no room for a gutter
+     above the first bubble, and the day divider already provides the break. */
   .cin-back{display:flex;}
   .cin-th-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;font-size:15px;}
-  .cin-th-head{gap:8px;padding:9px 12px;min-height:52px;box-sizing:border-box;}
+  .cin-th-head{gap:8px;padding:6px 10px;min-height:48px;box-sizing:border-box;}
   .cin-star,.cin-kebab{width:36px;height:36px;}
-  .cin-msgs{padding:14px 12px 18px;}
+  .cin-msgs{padding:0 12px 12px;}
   .cin-mline{max-width:85%;}
+  /* Phone reading size: 13px is a desktop density that a thread held at arm's
+     length can't carry. */
+  .cin-bubble{font-size:15px;line-height:1.5;padding:9px 13px;}
+  .cin-mmeta{font-size:11.5px;}
 
-  /* Composer: SAME shape as the desktop chat bar — reply field on top, a
-     divider, then the emoji strip with Send at the right — just scaled to the
-     phone (one starting row, 32px emoji, 34px send). 16px input stops the iOS
-     focus-zoom; the growth cap keeps a long reply from eating the thread. */
-  .cin-composer{border-radius:14px;margin:8px 8px calc(8px + env(safe-area-inset-bottom, 0px));padding:9px 11px;}
+  /* Composer, messaging-app shape: a rounded pill holding the emoji button
+     and the field, with a round Send beside it. The desktop two-row bar cost
+     ~46px of a screen that has none to spare, and the six-emoji strip sat
+     under the field where a thumb reaching for Send kept hitting it.
+     display:contents on the bar promotes Send to a sibling of the pill, so the
+     row is built from the same markup the desktop uses — no branch. 16px input
+     stops the iOS focus-zoom; the growth cap keeps a long reply from eating
+     the thread. */
+  .cin-composer{position:relative;display:flex;align-items:flex-end;gap:8px;background:transparent;border:none;box-shadow:none;border-radius:0;margin:0;padding:7px 8px calc(7px + env(safe-area-inset-bottom, 0px));}
+  .cin-comp-pill{flex:1;min-width:0;display:flex;align-items:flex-end;gap:4px;background:#fff;border-radius:5px;box-shadow:inset 0 0 0 1px #dcdce1;padding:3px 12px 3px 3px;}
+  .cin-comp-pill:focus-within{box-shadow:inset 0 0 0 1.5px ${BRAND.accent};}
+  .cin-emoji-btn{display:flex;align-items:center;justify-content:center;flex:none;width:40px;height:40px;border-radius:5px;font-size:23px;line-height:1;}
+  .cin-emoji-btn:active{background:#f1f1f4;}
   .cin-comp-input,.cin-lsearch{font-size:16px;}
-  .cin-comp-input{min-height:30px;max-height:96px;}
-  .cin-comp-bar{margin-top:7px;padding-top:7px;gap:1px;}
-  .cin-emoji{display:flex;width:32px;height:32px;font-size:16px;}
-  button.cin-send{width:34px;height:34px;border-radius:10px;font-size:13px;}
+  /* One line to start (line-height + padding only — no min-height floor to
+     inflate it), then the autosize effect grows it to the 3-row cap. */
+  .cin-comp-input{min-height:0;max-height:120px;padding:8px 0;font-size:17px;line-height:1.45;}
+  /* The strip leaves the flow: its Send becomes a sibling of the pill and its
+     six emoji move into the popover above. */
+  .cin-comp-bar{display:contents;}
+  .cin-emoji{display:none;}
+  button.cin-send{width:46px;height:46px;border-radius:5px;font-size:15px;flex:none;margin-left:0;}
+  /* Six per row, spanning the composer width — a grid, not a strip, so the
+     fuller set stays reachable without scrolling. */
+  .cin-epop{position:absolute;bottom:calc(100% - 2px);left:8px;right:8px;z-index:20;display:grid;grid-template-columns:repeat(6,1fr);gap:2px;padding:6px;background:#fff;border-radius:10px;box-shadow:0 -6px 26px rgba(20,20,25,.2),inset 0 0 0 1px #e9e9ec;animation:cinEpopIn .15s ease-out;}
+  .cin-epop .cin-emoji{display:flex;width:auto;height:42px;border-radius:6px;font-size:23px;}
+  /* Emoji-only message: no bubble, just the glyphs at display size. */
+  .cin-bubble.emo{background:none;color:inherit;box-shadow:none;padding:2px 0;font-size:34px;line-height:1.2;}
+  .cin-epop-scrim{position:fixed;inset:0;z-index:15;background:transparent;}
+  @keyframes cinEpopIn{from{transform:translateY(6px);opacity:0;}to{transform:none;opacity:1;}}
 
   .cin-dov-panel{width:min(400px,100vw);}
 }

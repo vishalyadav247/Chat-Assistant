@@ -31,7 +31,9 @@
     "trace": "tsx scripts/trace-turn.ts",
     "logs:check": "tsx scripts/logs-check.ts",
     "config:which": "node scripts/deploy-shopify.cjs --which",
-    "deploy:prod": "node scripts/deploy-shopify.cjs"
+    "deploy:prod": "node scripts/deploy-shopify.cjs",
+    "eval:quality": "tsx scripts/qa/agent-quality.test.ts",
+    "qa:preflight": "tsx scripts/qa/preflight.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

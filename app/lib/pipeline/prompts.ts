@@ -18,6 +18,30 @@ export const ROUTER = [
 export const SUMMARY_SYSTEM =
   "Summarize the earlier conversation in 2-3 short sentences. Keep the shopper's needs, budget, sizes, and any products or topics discussed. Be concise and factual.";
 
+/**
+ * The summarizer's user turn, folding the summary it produced last time into
+ * the one it produces now.
+ *
+ * Tuning event 2026-09-04. Refreshes used to re-summarize only the messages
+ * still inside the 50-row lookback, from scratch — so on a long thread the
+ * opening (which is where the shopper says what they are actually shopping
+ * for) fell out of the window and out of the summary at the same time, and the
+ * agent quietly forgot it. Folding makes the summary cumulative: what it
+ * already knew survives even after the messages that taught it are gone.
+ */
+export function summaryUser(prior: string, transcript: string): string {
+  if (!prior.trim()) return transcript;
+  return [
+    "What you already knew about this conversation:",
+    prior.trim(),
+    "",
+    "Newer messages:",
+    transcript,
+    "",
+    "Write ONE updated summary covering both. Keep facts from the first part that the newer messages do not contradict — they came from messages you can no longer see.",
+  ].join("\n");
+}
+
 export const CHAT_REPLY = "Reply in ONE short sentence, no products.";
 
 export const QUESTION_ANSWER =

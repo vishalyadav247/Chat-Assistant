@@ -333,8 +333,8 @@
   display: grid;
   place-items: center;
   border-radius: 50%;
-  background: linear-gradient(135deg, var(--cca-brand), var(--cca-brand-2));
-  color: var(--cca-brand-ink);
+  border: 1px solid var(--cca-brand);
+  color: #000000;
   font-size: 13px;
   font-weight: 700;
 }

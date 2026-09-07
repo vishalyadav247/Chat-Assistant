@@ -128,15 +128,53 @@ export async function contactStats(shopId: string): Promise<ContactStats> {
 /** Ensure the widget session has a contact row: reuse whatever contact is
  *  already bound to the sessionId (anonymous OR identified), else create an
  *  anonymous one (spec 11: anonymous conversation start → anonymous contact). */
-export async function ensureSessionContact(shopId: string, sessionId: string): Promise<string> {
-  const existing = await db.contact.findFirst({
-    where: { shopId: requireShopId(shopId), sessionId },
-    orderBy: { createdAt: "desc" },
-    select: { id: true },
-  });
-  if (existing) return existing.id;
+export async function ensureSessionContact(
+  shopId: string,
+  sessionId: string,
+  /** Stable per-browser id (spec 15 rotates sessionId every 30 idle minutes;
+   *  this does not). Absent for widgets served before it shipped. */
+  visitorId?: string,
+): Promise<string> {
+  requireShopId(shopId);
+  const select = { id: true, visitorId: true, sessionId: true } as const;
+  // visitorId first: it is what makes a shopper returning tomorrow the SAME
+  // person as yesterday, which is what lets the agent carry anything forward.
+  // Two explicit lookups rather than one OR — ordering a nullable column to
+  // "prefer the visitorId match" puts NULLs first under Postgres' DESC default
+  // and quietly picks the WRONG row. The second query only runs for a browser
+  // this shop has not seen before.
+  const byVisitor = visitorId
+    ? await db.contact.findFirst({
+        where: { shopId, visitorId },
+        orderBy: { createdAt: "desc" },
+        select,
+      })
+    : null;
+  // sessionId stays the fallback, so a widget that has not been updated — and
+  // every contact created before this column existed — behaves as it did.
+  const existing =
+    byVisitor ??
+    (await db.contact.findFirst({
+      where: { shopId, sessionId },
+      orderBy: { createdAt: "desc" },
+      select,
+    }));
+
+  if (existing) {
+    // Adopt the ids this browser is presenting now: the visitorId backfills an
+    // older row, and the sessionId keeps the row reachable by the routes that
+    // still bind on it.
+    const data: { visitorId?: string; sessionId?: string } = {};
+    if (visitorId && existing.visitorId !== visitorId) data.visitorId = visitorId;
+    if (existing.sessionId !== sessionId) data.sessionId = sessionId;
+    if (Object.keys(data).length > 0) {
+      await db.contact.update({ where: { id: existing.id }, data });
+    }
+    return existing.id;
+  }
+
   const created = await db.contact.create({
-    data: { shopId, sessionId, type: "anonymous", channel: "store" },
+    data: { shopId, sessionId, visitorId: visitorId ?? null, type: "anonymous", channel: "store" },
     select: { id: true },
   });
   return created.id;

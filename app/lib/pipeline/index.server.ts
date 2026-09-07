@@ -9,6 +9,7 @@ import {
   hybridProductSearch,
   browseCheapestInBudget,
   candidateSnippet,
+  normalizeNumberIds,
   purchasableWhere,
   selectRelevant,
   TIER_MARGIN,
@@ -25,8 +26,15 @@ import { notifyNewConversation, notifyShopperMessage } from "../notify.server";
 import { keywordScan, meaningScan, moderationCheck } from "./guardrail.server";
 import { detectHandover, detectCannotAnswer, executeHandover } from "./handover.server";
 import { loadHistory } from "./history.server";
+import {
+  actionInstruction,
+  availableActions,
+  splitActionStream,
+  type ChatAction,
+} from "./actions.server";
 import { splitPicksStream } from "./picks.server";
 import { route } from "./router.server";
+import { shopperContext } from "./shopper.server";
 import {
   blockConfirmUser,
   buildPersonaPrompt,
@@ -53,6 +61,9 @@ type TrackFn = (type: AnalyticsEventType, payload?: Record<string, unknown>) => 
 export interface PipelineInput {
   shopId: string;
   sessionId: string;
+  /** Stable per-browser id. sessionId rotates on the 30-minute billing rule;
+   *  this is what keeps a returning shopper the same person (spec 11). */
+  visitorId?: string;
   conversationId?: string;
   message: string;
   pageContext?: unknown;
@@ -65,6 +76,10 @@ export type PipelineFrame =
   | { type: "token"; text: string }
   | { type: "message"; text: string }
   | { type: "cards"; cards: ProductCard[] }
+  // Buttons that open a screen of the widget itself (order tracking, contact,
+  // help) — the answer to "just click the Track navigation", which named
+  // storefront chrome that does not exist. See actions.server.ts.
+  | { type: "actions"; actions: import("./actions.server").ChatAction[] }
   | { type: "handover"; data: import("./handover.server").HandoverFrameData }
   | { type: "done"; outcome: string; conversationId: string }
   // Test AI only: the full decision record for the turn, yielded after "done"
@@ -79,15 +94,25 @@ export interface ProductCard {
   handle: string;
   /** Numeric variant id for /cart/add.js (first available variant), null if unknown. */
   variantId: string | null;
+  /** The SAME variant as a GID, for Shopify.actions.updateCart — the standard
+   *  storefront action the widget prefers, because it works on Horizon and
+   *  every other theme, where the Dawn-shaped /cart/add.js + sections path
+   *  silently fell back to a full page navigation. Null when variantId is. */
+  variantGid: string | null;
 }
 
-function numericVariantId(
+/** First available variant (else the first at all) as {numeric, gid}. The two
+ *  cart paths want different spellings of the same id, so both ride the card. */
+function variantIds(
   variants: { id: string; available: boolean }[] | null | undefined,
-): string | null {
+): { variantId: string | null; variantGid: string | null } {
   const first = variants?.find((v) => v.available) ?? variants?.[0];
-  if (!first) return null;
+  if (!first) return { variantId: null, variantGid: null };
   const numeric = first.id.split("/").pop();
-  return numeric && /^\d+$/.test(numeric) ? numeric : null;
+  if (!numeric || !/^\d+$/.test(numeric)) return { variantId: null, variantGid: null };
+  // Mirrored rows always store the gid, but a legacy row may hold the bare id.
+  const gid = first.id.startsWith("gid://") ? first.id : `gid://shopify/ProductVariant/${numeric}`;
+  return { variantId: numeric, variantGid: gid };
 }
 
 const DEFAULT_FALLBACK =
@@ -232,13 +257,71 @@ export async function* runPipeline(
     return;
   }
 
+  // ── Fan out everything that does not depend on anything else ──────────────
+  // Measured 2026-09-04 (prod: first reply median 5.8 s, chat-lane p90 20.7 s):
+  // the turn was a chain of round trips that had no reason to be one. The
+  // embedding gates the vector layers, but the ROUTER needs only the history —
+  // so it starts here and is awaited below, hiding its ~1.1 s behind the
+  // embedding's ~0.9 s. Moderation joins them (it was already parallel, just
+  // started later). A turn that short-circuits before the router (curated /
+  // recommendation / off-topic) throws that call away: ~$0.0002 on well under
+  // 5% of turns, against ~1 s saved on every other one.
+  const embedPromise = embedText(message, { shopId });
+  const historyPromise = loadHistory(shopId, convo.id, {
+    excludeMessageId: shopperMessageId, // appended once below, never twice
+  });
+  const routedPromise = historyPromise.then((history) =>
+    route({
+      shopId,
+      message,
+      history: history.routerHistory,
+      bannedTopics: guardrails?.bannedTopics ?? [],
+      storeScope: config.persona?.scope ?? "",
+    }),
+  );
+  const moderationPromise = moderationCheck(shopId, message);
+  const shopperPromise = shopperContext({
+    shopId,
+    contactId: convo.contactId,
+    // The row's blob was merged with THIS turn's context by ensureConversation
+    // above, so it already carries the page they are on and the live cart.
+    pageContext: mergePageContext(convo.pageContext, input.pageContext, input.userAgent),
+    currency: config.currency,
+  });
+  // Nothing awaits these on a short-circuit path, and an unhandled rejection
+  // takes the process down under Node's default policy.
+  const settle = (p: Promise<unknown>) => void p.catch(() => {});
+  settle(routedPromise);
+  settle(moderationPromise);
+  settle(shopperPromise);
+
   // ── One embedding per turn ────────────────────────────────────────────────
-  const queryEmbedding = await embedText(message, { shopId });
+  const queryEmbedding = await embedPromise;
   trace.countLlm("embedding");
   trace.step("embedding", "Message embedded once, reused all turn", "info", {
     dimensions: queryEmbedding.length,
     embeddedText: message,
   });
+
+  // The three vector layers below read the embedding and nothing else, so they
+  // run together instead of end to end (measured cold: 626 + 58 + 598 ms
+  // sequential → ~630 ms). Precedence is unchanged: the results are still
+  // CONSULTED in order — banned meaning, then merchant curated, then app
+  // recommendations — only the waiting overlaps.
+  const curatedThreshold = guardrails?.curatedMatchThreshold ?? 0.8;
+  const curatedBorderline = guardrails?.curatedBorderline ?? 0.65;
+  const meaningPromise = guardrails
+    ? meaningScan(shopId, queryEmbedding, guardrails)
+    : Promise.resolve(null);
+  // The raw message goes in too: curatedMatch runs a second lane that matches
+  // the merchant's own synonym phrasings exactly, which no embedding can.
+  const curatedPromise = curatedMatch(shopId, queryEmbedding, message);
+  const recommendationPromise = recommendationMatch(shopId, queryEmbedding).catch((error) => {
+    logError("recommendation_match_error", error, { shopId });
+    return null;
+  });
+  settle(meaningPromise);
+  settle(curatedPromise);
 
   // ── Handover intent rules (needs the embedding) ───────────────────────────
   if (config.handover.intentRules.length === 0) {
@@ -277,7 +360,7 @@ export async function* runPipeline(
     });
   }
   if (guardrails) {
-    const meaningHit = await meaningScan(shopId, queryEmbedding, guardrails);
+    const meaningHit = await meaningPromise;
     if (guardrails.bannedTopics.filter((t) => t.trim()).length > 0) {
       trace.step("guardrail_meaning", "Banned topics: meaning scan", meaningHit ? "hit" : "pass", {
         threshold: guardrails.bannedMatchThreshold,
@@ -292,11 +375,7 @@ export async function* runPipeline(
   }
 
   // ── Curated shortcut (zero generation) ────────────────────────────────────
-  const curatedThreshold = guardrails?.curatedMatchThreshold ?? 0.8;
-  const curatedBorderline = guardrails?.curatedBorderline ?? 0.65;
-  // The raw message goes in too: curatedMatch runs a second lane that matches
-  // the merchant's own synonym phrasings exactly, which no embedding can.
-  const curated = await curatedMatch(shopId, queryEmbedding, message);
+  const curated = await curatedPromise;
   trace.step(
     "curated_match",
     "Merchant curated answers (vector)",
@@ -383,10 +462,7 @@ export async function* runPipeline(
   }
 
   // ── App recommendations (ranked below merchant curated, spec 08) ──────────
-  const recommendation = await recommendationMatch(shopId, queryEmbedding).catch((error) => {
-    logError("recommendation_match_error", error, { shopId });
-    return null;
-  });
+  const recommendation = await recommendationPromise;
   trace.step(
     "recommendation_match",
     "App recommendations (vector)",
@@ -435,22 +511,13 @@ export async function* runPipeline(
     }
   }
 
-  // ── Router (moderation racing in parallel — layer b) ──────────────────────
-  const { routerHistory, generationHistory } = await loadHistory(shopId, convo.id, {
-    excludeMessageId: shopperMessageId, // appended once below, never twice
-  });
+  // ── Router (started at the top of the turn — layer b raced beside it) ─────
+  const { routerHistory, generationHistory } = await historyPromise;
   trace.step("history", "Conversation history loaded", "info", {
     routerTurns: routerHistory.length,
     generationTurns: generationHistory.length,
   });
-  const moderationPromise = moderationCheck(shopId, message);
-  const routed = await route({
-    shopId,
-    message,
-    history: routerHistory,
-    bannedTopics: guardrails?.bannedTopics ?? [],
-    storeScope: config.persona?.scope ?? "",
-  });
+  const routed = await routedPromise;
   trace.countLlm("router");
   trace.step("router", "Intent router (LLM call 1 of 2)", routed.parseFailed ? "error" : "info", {
     intent: routed.intent,
@@ -605,9 +672,17 @@ export async function* runPipeline(
     defaultLanguage: config.persona?.defaultLanguage ?? null,
     instruction: language || "none (no persona row — model default)",
   });
+  // Who the agent is talking to (name from the pre-chat form, live cart, the
+  // product page they are on). Started with the other fan-out work at the top
+  // of the turn, so it costs no wall time here.
+  const shopper = await shopperPromise;
+  trace.step("shopper_context", "What the agent knows about the shopper", shopper ? "hit" : "skip", {
+    facts: shopper || "nothing identified — anonymous visitor with no cart",
+    privacy: "name only; email / phone / address are never put in the prompt",
+  });
   const personaPrompt = `${
     config.persona ? buildPersonaPrompt(config.persona) : "You are a helpful shop assistant."
-  }${language ? `\n${language}` : ""}`;
+  }${language ? `\n${language}` : ""}${shopper ? `\n${shopper}` : ""}`;
 
   // ── Lanes ─────────────────────────────────────────────────────────────────
   trace.step("lane", `Lane selected: ${routed.intent}`, "info", {
@@ -635,23 +710,34 @@ export async function* runPipeline(
   }
 
   // chat lane
-  const stream = getLlmProvider().chatStream(
-    [
-      { role: "system", content: `${personaPrompt}\n${CHAT_REPLY}` },
-      ...generationHistory,
-      { role: "user", content: message },
-    ],
-    { shopId, purpose: "reply" },
-    { temperature: 0.5, maxTokens: 60 },
+  const chatActions = availableActions(config.widget);
+  const chatStream = splitActionStream(
+    getLlmProvider().chatStream(
+      [
+        {
+          role: "system",
+          content: `${personaPrompt}\n${CHAT_REPLY}\n${actionInstruction(chatActions)}`,
+        },
+        ...generationHistory,
+        { role: "user", content: message },
+      ],
+      { shopId, purpose: "reply" },
+      // +25 tokens over the old 60: the ACTION line has to fit inside the
+      // budget or it eats the sentence the shopper actually reads.
+      { temperature: 0.5, maxTokens: 85 },
+    ),
+    chatActions,
   );
   trace.step("generation", "Reply generation (LLM call 2 of 2)", "info", {
-    prompt: "persona + CHAT_REPLY",
+    prompt: "persona + CHAT_REPLY + widget actions",
     grounding: "none — small talk lane retrieves nothing",
+    offerable: chatActions.map((a) => a.key),
     temperature: 0.5,
-    maxTokens: 60,
+    maxTokens: 85,
   });
   yield* streamAndLog({
-    shopId, convoId: convo.id, stream, sourceLayer: "chat", intent: routed, meterPromise, track, trace,
+    shopId, convoId: convo.id, stream: chatStream.text, sourceLayer: "chat", intent: routed,
+    actions: chatStream.actions, meterPromise, track, trace,
   });
 }
 
@@ -830,7 +916,12 @@ async function* buyLane(args: {
   // four picks whenever it is allowed to. Purpose-shaped asks ("for stress",
   // "for money") never satisfy this, so there the model's judgement (synonyms,
   // meaning) decides across the whole allow-list.
-  const routerTerms = args.keywords.map((k) => k.trim().toLowerCase()).filter((k) => k.length > 0);
+  // Normalised exactly as keywordSearch normalises them, or a router keyword of
+  // "ruling no 5" would never equal the "ruling number 5" the search recorded
+  // in headTerms and both tier guards below would quietly go dead.
+  const routerTerms = args.keywords
+    .map((k) => normalizeNumberIds(k).trim().toLowerCase())
+    .filter((k) => k.length > 0);
   const lexicalComplete =
     routerTerms.length > 0 && routerTerms.every((t) => candidates[0].headTerms.includes(t));
   const tierIds = new Set(relevant.map((c) => c.id));
@@ -1151,29 +1242,41 @@ async function* questionLane(args: {
 
   const context =
     hits.map((h) => `[${h.topic}] ${h.body}`).join("\n\n") + discountContext + collectionContext;
-  const stream = getLlmProvider().chatStream(
-    [
-      { role: "system", content: `${args.personaPrompt}\n${QUESTION_ANSWER}` },
-      ...args.generationHistory,
-      { role: "user", content: `Store info:\n${context}\n\nShopper question: ${args.message}` },
-    ],
-    { shopId: args.shopId, purpose: "reply" },
-    { temperature: 0.3, maxTokens: 220 },
+  // Support questions are exactly where the agent used to send shoppers to
+  // storefront navigation it had imagined ("click the Track navigation"), so
+  // this is the lane the action buttons matter most in.
+  const actions = availableActions(args.config.widget);
+  const stream = splitActionStream(
+    getLlmProvider().chatStream(
+      [
+        {
+          role: "system",
+          content: `${args.personaPrompt}\n${QUESTION_ANSWER}\n${actionInstruction(actions)}`,
+        },
+        ...args.generationHistory,
+        { role: "user", content: `Store info:\n${context}\n\nShopper question: ${args.message}` },
+      ],
+      { shopId: args.shopId, purpose: "reply" },
+      { temperature: 0.3, maxTokens: 240 },
+    ),
+    actions,
   );
   args.trace.step("generation", "Reply generation (LLM call 2 of 2)", "info", {
-    prompt: "persona + QUESTION_ANSWER",
+    prompt: "persona + QUESTION_ANSWER + widget actions",
     grounding: "the store-info block below, the model may not answer past it",
     storeInfo: context,
+    offerable: actions.map((a) => a.key),
     historyTurns: args.generationHistory.length,
     temperature: 0.3,
-    maxTokens: 220,
+    maxTokens: 240,
   });
   yield* streamAndLog({
     shopId: args.shopId,
     convoId: args.convoId,
-    stream,
+    stream: stream.text,
     sourceLayer: "question",
     intent: args.routed,
+    actions: stream.actions,
     meterPromise: args.meterPromise,
     track: args.track,
     trace: args.trace,
@@ -1310,6 +1413,9 @@ async function* streamAndLog(args: {
   cards?: ProductCard[] | (() => Promise<ProductCard[]>);
   /** Shown when the model produced no visible text (e.g. only a PICKS line). */
   emptyReplyText?: string;
+  /** In-widget buttons the reply asked for, resolved AFTER the stream (the
+   *  ACTION line is only complete once the stream has ended). */
+  actions?: () => ChatAction[];
   meterPromise: Promise<unknown>;
   track: TrackFn;
   trace?: Trace;
@@ -1342,6 +1448,19 @@ async function* streamAndLog(args: {
       : args.cards;
   if (cards && cards.length > 0) {
     yield { type: "cards", cards };
+  }
+  const actions = args.actions?.() ?? [];
+  if (args.actions) {
+    args.trace?.step("actions", "In-widget buttons offered", actions.length > 0 ? "hit" : "miss", {
+      offered: actions.map((a) => a.key),
+      note:
+        actions.length > 0
+          ? "the model chose from the shop's enabled screens; code owns the label and the destination"
+          : "the model's ACTION line named nothing (or it wrote no line) — reply stands on its own",
+    });
+  }
+  if (actions.length > 0) {
+    yield { type: "actions", actions };
   }
   await saveMessage(args.shopId, args.convoId, {
     role: "out",
@@ -1495,7 +1614,9 @@ async function ensureConversation(
   // New conversation: bind it to the session's contact (existing identified
   // row, else a fresh anonymous one) so unidentified chatters appear in the
   // Contacts Anonymous tab (spec 11). Test-widget chats stay contact-less.
-  const contactId = input.isTest ? null : await ensureSessionContact(shopId, input.sessionId);
+  const contactId = input.isTest
+    ? null
+    : await ensureSessionContact(shopId, input.sessionId, input.visitorId);
   const created = await db.conversation.create({
     data: {
       shopId,
@@ -1503,11 +1624,46 @@ async function ensureConversation(
       isTest: input.isTest ?? false,
       contactId,
       pageContext: mergePageContext(undefined, input.pageContext, input.userAgent),
+      // Carry forward what the agent already learned about this person. The
+      // 30-minute session rule (spec 15) is a BILLING boundary, but it was
+      // acting as a memory boundary too: the shopper came back, said "the one
+      // we discussed", and the agent had nothing. The summary is the compact
+      // thing worth carrying — the previous transcript is not replayed.
+      summary: contactId ? await previousSummary(shopId, contactId) : null,
     },
   });
   // Opt-in "new conversation" notification for team members (spec 18).
   if (!input.isTest) await notifyNewConversation(shopId, created.id);
   return { conversation: created, previousLastMessageAt: null };
+}
+
+/** How far back a returning shopper is still "the same conversation" for the
+ *  agent's purposes. Long enough to cover a lunch break or an evening, short
+ *  enough that a month-old need is not read back as current. */
+const MEMORY_CARRY_DAYS = 14;
+
+/**
+ * The summary of this contact's most recent earlier conversation, or null.
+ *
+ * Only a summary crosses the boundary, never the raw transcript: it is bounded
+ * (2-3 sentences), it is what the model already reads as context anyway, and a
+ * merchant deleting a contact (spec 17 erasure) takes the conversations — and
+ * therefore this — with it.
+ */
+async function previousSummary(shopId: string, contactId: string): Promise<string | null> {
+  const since = new Date(Date.now() - MEMORY_CARRY_DAYS * 24 * 60 * 60 * 1000);
+  const previous = await db.conversation.findFirst({
+    where: {
+      shopId,
+      contactId,
+      isTest: false,
+      summary: { not: null },
+      lastMessageAt: { gte: since },
+    },
+    orderBy: { lastMessageAt: "desc" },
+    select: { summary: true },
+  });
+  return previous?.summary?.trim() || null;
 }
 
 async function saveMessage(
@@ -1693,7 +1849,7 @@ async function cardsForShopifyIds(
     price: Number(r.price),
     imageUrl: r.imageUrl,
     handle: r.handle,
-    variantId: numericVariantId(r.variants as { id: string; available: boolean }[] | null),
+    ...variantIds(r.variants as { id: string; available: boolean }[] | null),
   }));
 }
 
@@ -1704,7 +1860,7 @@ function toCard(candidate: ProductCandidate): ProductCard {
     price: candidate.price,
     imageUrl: candidate.imageUrl,
     handle: candidate.handle,
-    variantId: numericVariantId(candidate.variants),
+    ...variantIds(candidate.variants),
   };
 }
 

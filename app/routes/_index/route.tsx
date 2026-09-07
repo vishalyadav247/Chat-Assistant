@@ -1,16 +1,23 @@
-import type { LoaderFunctionArgs, MetaFunction } from "react-router";
-import { redirect, useLoaderData } from "react-router";
+import type { ActionFunctionArgs, LoaderFunctionArgs, MetaFunction } from "react-router";
+import { Form, redirect, useActionData, useLoaderData, useNavigation } from "react-router";
 
+import { runtimeConfig } from "../../lib/admin/runtime-config.server";
+import { login } from "../../shopify.server";
 import styles from "./styles.module.css";
 
 // Public marketing page — the only ChatConvert surface served outside the
-// Shopify admin and the /web team app. App Store review requirement 2.3.1
-// forbids asking a merchant to type their .myshopify.com domain here, so
-// installation goes through the App Store listing only; the template's
-// "Shop domain" login form was removed deliberately. Do not re-add it.
+// Shopify admin and the /web team app. Two ways in:
+//
+//   1. the shop-domain login card → login() → Shopify's managed install screen;
+//   2. the App Store listing link, once a handle is configured.
+//
+// The login card was removed on 2026-08-21 citing "App Store review req 2.3.1",
+// and restored on 2026-09-07: that citation was never verifiable (see the note
+// in shopify.server.ts) and Shopify's own app template ships this exact form.
 //
 // Shopify still bounces merchants through this route with ?shop=… on their way
-// into the embedded app — that redirect below is load-bearing.
+// into the embedded app — that redirect below is load-bearing, and has to stay
+// AHEAD of the card so an install already in flight is never shown a form.
 
 export const meta: MetaFunction = () => [
   { title: "ChatConvert — AI product recommendations & support chat for Shopify" },
@@ -28,12 +35,31 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     throw redirect(`/app?${url.searchParams.toString()}`);
   }
 
-  // Blank until the App Store listing is live (same env var the in-app review
-  // prompt uses). While blank we show a plain status line instead of a dead link.
-  // eslint-disable-next-line no-undef
-  const handle = process.env.SHOPIFY_APP_STORE_HANDLE || "";
+  // The EFFECTIVE handle — Admin → Settings, then SHOPIFY_APP_STORE_HANDLE,
+  // then DEFAULT_APP_STORE_HANDLE — not process.env directly, which is why
+  // setting the handle in the operator console never lit this link up. It only
+  // comes back blank if someone deliberately clears every source, and then the
+  // band degrades to a note rather than to a dead link.
+  const handle = runtimeConfig().appStoreHandle;
   return { listingUrl: handle ? `https://apps.shopify.com/${handle}` : null };
 };
+
+// login() throws a redirect to Shopify's managed-install screen on success, so
+// anything that comes back here is a validation failure to re-render in place.
+// It accepts a bare handle as well as a full domain and normalises both.
+export const action = async ({ request }: ActionFunctionArgs) => {
+  return { errors: await login(request) };
+};
+
+// LoginErrorType is a string enum — MISSING_SHOP / INVALID_SHOP, NOT the member
+// names. Compared as literals so the enum (a value from a .server package) never
+// reaches the client bundle; the fallback covers both, so a renamed member
+// degrades to the generic message rather than to nothing.
+function loginErrorMessage(error: string | undefined): string | null {
+  if (!error) return null;
+  if (error === "MISSING_SHOP") return "Enter your store domain to continue.";
+  return "That doesn't look like a Shopify store domain — try my-store.myshopify.com.";
+}
 
 /** 20px stroke icons, sized by the chip that holds them. */
 const ICONS = {
@@ -47,6 +73,8 @@ const ICONS = {
   check: "M20 6 9 17l-5-5",
   spark: "m12 3 1.9 5.8L20 10.7l-5.2 3.4L15.5 20 12 16.8 8.5 20l.7-5.9L4 10.7l6.1-1.9L12 3z",
   arrow: "M5 12h14M12 5l7 7-7 7",
+  store: "M3 9.5 4.8 4.2A1.5 1.5 0 0 1 6.2 3h11.6a1.5 1.5 0 0 1 1.4 1.2L21 9.5M3 9.5h18M3 9.5a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0M5 12.6V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-7.4",
+  info: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 16v-4M12 8h.01",
 } as const;
 
 function Icon(props: { path: string; size?: number; className?: string }) {
@@ -113,6 +141,12 @@ const FEATURES: { title: string; body: string; icon: string; tint: string }[] = 
 
 export default function Index() {
   const { listingUrl } = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>();
+  const navigation = useNavigation();
+  // The success path leaves this page entirely (redirect to admin.shopify.com),
+  // so the button stays busy until the browser navigates away.
+  const submitting = navigation.formMethod === "POST";
+  const error = loginErrorMessage(actionData?.errors?.shop);
 
   return (
     <div className={styles.page}>
@@ -143,24 +177,49 @@ export default function Index() {
           </div>
 
           <div className={styles.heroCard}>
-            <h2 className={styles.cardTitle}>Get ChatConvert</h2>
-            <p className={styles.cardSub}>Install from the Shopify App Store to get started.</p>
+            <h2 className={styles.cardTitle}>Install ChatConvert</h2>
+            <p className={styles.cardSub}>Log in with your store to get started.</p>
 
-            {listingUrl ? (
-              <a className={styles.primaryButton} href={listingUrl}>
-                View on the Shopify App Store
-                <Icon path={ICONS.arrow} size={17} />
-              </a>
-            ) : (
-              <p className={styles.cardNote}>
-                The App Store listing is not live yet. If ChatConvert is already installed, open it
-                from <strong>Apps</strong> in your Shopify admin.
-              </p>
-            )}
+            {/* Plain <Form>, not useSubmit — this page is NOT embedded, so the
+                iframe session rules in CLAUDE.md do not apply here. */}
+            <Form method="post" className={styles.loginForm}>
+              <label className={styles.fieldLabel} htmlFor="shop">
+                Shop domain
+              </label>
+              <div className={styles.fieldRow}>
+                <span className={styles.field}>
+                  <Icon path={ICONS.store} size={17} className={styles.fieldIcon} />
+                  <input
+                    id="shop"
+                    name="shop"
+                    type="text"
+                    className={styles.fieldInput}
+                    placeholder="my-shop-domain.myshopify.com"
+                    autoComplete="on"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    aria-invalid={error ? true : undefined}
+                    aria-describedby={error ? "shop-error" : "shop-hint"}
+                  />
+                </span>
+                <button type="submit" className={styles.submitButton} disabled={submitting}>
+                  {submitting ? "Redirecting…" : "Log in"}
+                  <Icon path={ICONS.arrow} size={16} />
+                </button>
+              </div>
 
-            <p className={styles.cardHint}>
-              Already installed? Open it from <strong>Apps</strong> in your Shopify admin.
-            </p>
+              {error ? (
+                <p className={styles.fieldError} id="shop-error" role="alert">
+                  {error}
+                </p>
+              ) : (
+                <p className={styles.fieldHint} id="shop-hint">
+                  <Icon path={ICONS.info} size={14} />
+                  e.g. my-shop-domain.myshopify.com
+                </p>
+              )}
+            </Form>
 
             <div className={styles.cardDivider} />
 
@@ -181,6 +240,27 @@ export default function Index() {
               <p className={styles.featureBody}>{feature.body}</p>
             </article>
           ))}
+        </section>
+
+        <section className={styles.band}>
+          <div>
+            <h2 className={styles.bandTitle}>Install from the Shopify App Store</h2>
+            <p className={styles.bandSub}>
+              {listingUrl
+                ? "One click from the listing — no code, no theme edits."
+                : "Log in with your store domain above — the install screen is the same one the listing opens."}
+            </p>
+          </div>
+          {listingUrl ? (
+            <a className={styles.primaryButton} href={listingUrl}>
+              View on the Shopify App Store
+              <Icon path={ICONS.arrow} size={17} />
+            </a>
+          ) : (
+            <p className={styles.cardHint}>
+              Already installed? Open it from <strong>Apps</strong> in your Shopify admin.
+            </p>
+          )}
         </section>
 
         <section className={styles.band}>

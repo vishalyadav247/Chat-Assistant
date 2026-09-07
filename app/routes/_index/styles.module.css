@@ -148,22 +148,136 @@
   color: #61616b;
 }
 
-.cardNote {
-  margin: 0;
-  padding: 12px 14px;
-  border-radius: 10px;
-  background: #f6f5fb;
-  border: 1px solid rgba(109, 59, 245, 0.12);
-  font-size: 13px;
-  line-height: 1.55;
-  color: #4a4a53;
-}
-
 .cardHint {
-  margin: 12px 0 0;
+  margin: 0;
   font-size: 12.5px;
   line-height: 1.5;
   color: #78787f;
+}
+
+/* ── Shop-domain login form ──────────────────────────────────────────────── */
+
+.loginForm {
+  display: grid;
+  gap: 8px;
+}
+
+.fieldLabel {
+  font-size: 13px;
+  font-weight: 650;
+  color: #3a3a44;
+}
+
+/* Input and button side by side down to ~360px, then stacked (below). */
+.fieldRow {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.field {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.fieldIcon {
+  position: absolute;
+  left: 12px;
+  color: #9a9aa3;
+  pointer-events: none;
+}
+
+.fieldInput {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 11px 12px 11px 37px;
+  border-radius: 10px;
+  border: 1px solid rgba(20, 20, 25, 0.16);
+  background: #fff;
+  font: inherit;
+  font-size: 14px;
+  color: #1f1f27;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.fieldInput::placeholder {
+  color: #a2a2ab;
+}
+
+.fieldInput:focus {
+  outline: none;
+  border-color: #6d3bf5;
+  box-shadow: 0 0 0 3px rgba(109, 59, 245, 0.16);
+}
+
+.fieldInput[aria-invalid="true"] {
+  border-color: #be123c;
+}
+
+.fieldInput[aria-invalid="true"]:focus {
+  box-shadow: 0 0 0 3px rgba(190, 18, 60, 0.16);
+}
+
+.submitButton {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 11px 18px;
+  border: 0;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #6d3bf5, #3b82f6);
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(109, 59, 245, 0.3);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.submitButton:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 7px 20px rgba(109, 59, 245, 0.38);
+}
+
+.submitButton:focus-visible {
+  outline: 2px solid #1f1f27;
+  outline-offset: 2px;
+}
+
+.submitButton:disabled {
+  opacity: 0.65;
+  cursor: default;
+  box-shadow: none;
+}
+
+.fieldHint,
+.fieldError {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.fieldHint {
+  color: #78787f;
+}
+
+.fieldHint svg {
+  flex-shrink: 0;
+  color: #9a9aa3;
+}
+
+.fieldError {
+  color: #be123c;
+  font-weight: 600;
 }
 
 .cardDivider {
@@ -390,6 +504,18 @@
   }
 
   .band .primaryButton {
+    width: 100%;
+  }
+}
+
+/* The card is 390px in the hero grid and full-width once the hero stacks, so
+   the input+button row only runs out of room on the narrowest phones. */
+@media (max-width: 400px) {
+  .fieldRow {
+    flex-direction: column;
+  }
+
+  .submitButton {
     width: 100%;
   }
 }

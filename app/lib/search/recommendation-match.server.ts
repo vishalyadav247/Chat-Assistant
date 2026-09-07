@@ -30,11 +30,9 @@ declare global {
   var recVectorCache: Map<string, CachedRec[]> | undefined;
 }
 
-export async function recommendationMatch(
-  shopId: string,
-  queryEmbedding: number[],
-): Promise<RecommendationMatch | null> {
-  requireShopId(shopId);
+/** Trigger vectors for this shop's active recommendations, embedding on a miss.
+ *  Null when the shop has none to match against. */
+async function triggerVectors(shopId: string): Promise<CachedRec[] | null> {
   const rows = await db.recommendation.findMany({
     where: { shopId, status: "active" },
     select: { id: true, title: true, triggerQuestions: true, productIds: true },
@@ -47,20 +45,40 @@ export async function recommendationMatch(
     .map((r) => `${r.id}:${r.triggerQuestions.join("|")}`)
     .join("||");
   const cacheKey = `${shopId}:${fingerprint}`;
-  let cached = global.recVectorCache.get(cacheKey);
-  if (!cached) {
-    const texts = candidates.flatMap((rec) => rec.triggerQuestions);
-    const vectors = await embedTexts(texts, { shopId });
-    let cursor = 0;
-    cached = candidates.map((rec) => {
-      const take = rec.triggerQuestions.length;
-      const slice = vectors.slice(cursor, cursor + take);
-      cursor += take;
-      return { id: rec.id, title: rec.title, productIds: rec.productIds, vectors: slice };
-    });
-    global.recVectorCache.set(cacheKey, cached);
-    if (global.recVectorCache.size > 500) global.recVectorCache.clear();
+  const hit = global.recVectorCache.get(cacheKey);
+  if (hit) return hit;
+
+  const texts = candidates.flatMap((rec) => rec.triggerQuestions);
+  const vectors = await embedTexts(texts, { shopId });
+  let cursor = 0;
+  const cached = candidates.map((rec) => {
+    const take = rec.triggerQuestions.length;
+    const slice = vectors.slice(cursor, cursor + take);
+    cursor += take;
+    return { id: rec.id, title: rec.title, productIds: rec.productIds, vectors: slice };
+  });
+  global.recVectorCache.set(cacheKey, cached);
+  if (global.recVectorCache.size > 500) global.recVectorCache.clear();
+  return cached;
+}
+
+/** Fill the trigger-vector cache off the hot path (widget boot). Never throws.
+ *  Lazily, this cost the first shopper of every process ~600 ms (2026-09-04). */
+export async function primeRecommendationVectors(shopId: string): Promise<void> {
+  try {
+    await triggerVectors(requireShopId(shopId));
+  } catch {
+    // A cold cache is a slow turn, never a broken one — the caller is a warmup.
   }
+}
+
+export async function recommendationMatch(
+  shopId: string,
+  queryEmbedding: number[],
+): Promise<RecommendationMatch | null> {
+  requireShopId(shopId);
+  const cached = await triggerVectors(shopId);
+  if (!cached) return null;
 
   let best: RecommendationMatch | null = null;
   for (const rec of cached) {

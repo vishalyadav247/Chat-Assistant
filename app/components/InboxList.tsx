@@ -17,6 +17,7 @@ export function InboxList({
   onSearch,
   onSelect,
   onOpenFilters,
+  filtered,
 }: {
   title: string;
   rows: InboxRow[];
@@ -28,8 +29,10 @@ export function InboxList({
   search: string;
   onSearch: (value: string) => void;
   onSelect: (row: InboxRow) => void;
-  /** Mobile only (spec 20): opens the filter slide-over panel. */
+  /** Mobile/tablet only (spec 20): opens the filter slide-over panel. */
   onOpenFilters: () => void;
+  /** A non-default tab is selected — the trigger shows it is holding state. */
+  filtered: boolean;
 }) {
   const dt = useDateTime();
   return (
@@ -38,8 +41,8 @@ export function InboxList({
         <div className="cin-list-head">
           <button
             type="button"
-            className="cin-filbtn"
-            aria-label="Conversation filters"
+            className={`cin-filbtn${filtered ? " on" : ""}`}
+            aria-label={`Conversation filters — showing ${title}`}
             onClick={onOpenFilters}
           >
             <s-icon type="filter" />

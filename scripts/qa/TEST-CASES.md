@@ -238,7 +238,7 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 | J-07 | Wrong HTTP method | Resource routes reject cleanly, no 500 | A |
 | J-08 | Logout is POST-only | GET must not log out (CSRF) — both web and admin | A |
 | J-09 | Nav integrity | Every `NAV` entry resolves; role filtering matches `can()` | H, S |
-| J-10 | No shop-domain login form | App Store req 2.3.1 — `_index` must never ask for `.myshopify.com` | A |
+| J-10 | Shop-domain login form | `_index` renders the field, posts it through `login()`, and rejects a bad domain in place; no *embedded* route asks for it | A |
 | J-11 | Embedded navigation | `Link`/`useSubmit`/`authenticate.admin`'s `redirect` — never raw `<a>` or react-router `redirect` | A |
 
 ## K. Sessions, auth, authorization & cookies (spec 18/19)
@@ -488,6 +488,110 @@ failure. The HTTP suites additionally require `npm run dev` to be running on `:3
 | `scripts/qa/ui-web.test.ts` | S | **yes** |
 | `scripts/qa/ui-admin.test.ts` | T | **yes** |
 | `scripts/qa/storefront.test.ts` | U | **yes** |
+| `scripts/qa/agent-quality.test.ts` | W | no |
+| `scripts/qa/widget-viewport.test.ts` | X | no |
+| `scripts/qa/preflight.ts` | — (environment health, run first) | no |
 
 Seeding: `scripts/qa/seed-curated.ts` (curated fixtures), `scripts/qa/perf-seed.ts` (synthetic
 volume — **remove it again afterwards**).
+
+---
+
+# Round 3 — recommendation quality on the real catalogue (2026-09-04)
+
+## W. Agent answer quality (`scripts/qa/agent-quality.test.ts`)
+
+The golden eval measures the **path** a turn takes on the clean 43-product seed
+fixture. This measures the **answer** on `jgw-check`'s 167-product mixed
+catalogue — crystal bracelets and a cosmetics range in one shop — which is where
+relevance gets hard, and it is the shop whose long SEO descriptions produced the
+field-aware-ranking work on 2026-09-01.
+
+| # | Area | Case | Expected |
+|---|---|---|---|
+| W1–W6 | cross-category | sunscreen for oily skin · shampoo for dandruff · hair fall · beard oil · red lipstick · vitamin C serum | the cosmetics half answers; **no bracelet card** |
+| W7–W12 | intent | money & wealth · calm my mind · evil eye · confidence & leadership · gift, she loves pink · focus & concentrate | the benefit in the title tail / description ranks; **no cosmetics card** |
+| W13–W16 | literal | lapis lazuli · moonstone · green aventurine · anklets | the named stone wins over prose that merely mentions it |
+| W17 | literal | tiger eye (**out of stock**) | reply says so in words; see the note below |
+| W18–W19 | budget | bracelets under 500 · perfume under 1500 | every card at or below the stated ceiling |
+| W20–W21 | honesty | running shoes · a laptop | no invented cards from an unrelated category |
+| W22–W25 | support | ship internationally · return policy · hello · "does this crystal cure cancer" | question / chat / **blocked** — never a product pitch |
+| W26 | multi-turn | "show me some bracelets" → "under 500" | subject and budget both carried |
+
+Result 2026-09-04: **26/26 pass.**
+
+### Notes this round found
+
+1. **Out-of-stock dominates this catalogue** — 126 of 167 products have
+   `stock = 0`, and `excludeOutOfStock` defaults to `true`, so Tiger Eye and
+   Green Jade genuinely cannot be recommended. Write cases against the in-stock
+   set (`select … where stock > 0`), or a correct agent looks broken.
+
+2. **`PICKS: none` is overridden by a generic category noun.** For "do you have
+   a tiger eye bracelet" the model answered *"we don't have a tiger eye bracelet
+   available right now"* and picked nothing — then `lexicalAnchor` fired on the
+   router keyword *bracelet*, which every candidate carries, and the mechanical
+   tier showed four unrelated bracelets anyway. The rule
+   (`index.server.ts:944`, `:1019`) exists so a real name match cannot be
+   contradicted by a stray "none"; it just does not distinguish the head noun
+   from the discriminating attribute. Not wrong enough to change under a frozen
+   prompt without a golden re-run — **logged for a decision**, not fixed.
+
+3. **Curated fixtures were left `draft`.** The golden eval parks the 14
+   `[qa-fixture]` curated answers while it runs and republishes them in a
+   `finally`; a killed run had left them parked, so `storefront.test.ts` failed
+   three curated cases against a shop that had no published curated answers to
+   match. Republished; storefront then passed 226/1.
+
+4. **`yearlyBilling: false` was left in `admin:plans`** — the same failure mode,
+   one step worse. `overage.test.ts` withdraws annual billing to prove the
+   subscribe action refuses a yearly interval, and restores the snapshot in a
+   `finally`; an interrupted run had left it off, which switches annual billing
+   off for **every tenant** and made the suite fail its own restore assertion.
+   Removed the field (absent = the code default, on); overage then passed 60/0.
+
+### Preflight — `npm run qa:preflight`
+
+Notes 3 and 4 are the same bug twice: a suite mutates global state, restores it
+in a `finally`, and a `finally` does not run when the process is killed. Rather
+than trust memory, `scripts/qa/preflight.ts` checks the four pieces of shared
+state any suite can leave dirty — parked curated fixtures, `admin:plans`
+overrides (`yearlyBilling`, `enforcement`), `platform:ai` temperature/maxTokens,
+and throwaway shops — and exits non-zero if the environment cannot be believed.
+`--fix` puts back everything that is safe to put back (it never deletes shops,
+which could race a live run). **Run it before a campaign and after any
+interrupted suite.**
+
+---
+
+## X. Storefront widget — the iOS soft keyboard (`scripts/qa/widget-viewport.test.ts`)
+
+Static suite, 31 checks, no server and no DB. It reads
+`extensions/chat-widget/assets/chat-widget.{js,css}` and asserts the mobile
+keyboard contract, because the failure it guards is invisible on every desktop
+browser **and** on Chrome for Android — including a desktop DevTools device
+emulator, which is why B4.15 kept passing while real iPhones did not.
+
+iOS does not shrink the layout viewport for the keyboard; it shrinks the
+**visual** viewport and slides it up to reveal the focused field. `position:
+fixed` is laid out against the **layout** viewport, so a panel pinned with
+`inset: 0` stays where the screen used to be while the visible area moves out
+from under it. Three separate fixes here only ever wrote the panel's `height`,
+which resizes the box and moves it not at all.
+
+| Case | Assertion |
+|---|---|
+| X-1 | `syncViewport` reads `offsetTop`/`offsetLeft`, not only `height` |
+| X-2 | It writes `top`/`left`/`width`/`height` and releases `bottom`/`right` to `auto` (`inset: 0` + a height is over-constrained) |
+| X-3 | It clears all six properties when the panel is closed or off-phone — a stale inline `top` survives into the desktop layout after a rotate |
+| X-4 | The `visualViewport` **scroll** listener is bound to a handler that repositions (it was previously bound to a height-only function, so it was a no-op) |
+| X-5 | Writes are coalesced with `requestAnimationFrame`, and a pending frame is cancelled on unbind |
+| X-6 | The body scroll lock uses `position: fixed` — `overflow: hidden` is not a scroll lock on iOS — is phone-only, and restores the shopper's scroll offset on close |
+| X-7 | `closePanel` unbinds the listeners, releases the lock, restores the viewport meta, and clears `cw-kbd` |
+| X-8 | `cw-kbd` (toggled on `focusin`/`focusout`, using `relatedTarget`) drops the `safe-area-inset-bottom` padding, which is dead space once the keyboard covers the gesture bar |
+| X-9 | `.cw-body` sets `overscroll-behavior: contain` — the rubber-band chain moves the visual viewport, which drags the panel |
+| X-10 | `.cw-root` keeps `z-index: 2147483647` and has **no** `transform` (a transform makes it the containing block for its own fixed children) |
+
+The suite is written to fail loudly on regression: reverting any one of these
+turns the corresponding case red. Verified by mutation — replacing
+`vv.offsetTop` with a constant fails X-1 and nothing else.

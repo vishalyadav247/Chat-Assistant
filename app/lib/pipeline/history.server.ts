@@ -1,7 +1,7 @@
 import db from "../../db.server";
 import { getLlmProvider, type ChatMessage } from "../llm/index.server";
 import { requireShopId } from "../tenancy.server";
-import { SUMMARY_SYSTEM } from "./prompts";
+import { SUMMARY_SYSTEM, summaryUser } from "./prompts";
 import { logError } from "../log.server";
 
 // Conversation history (spec 03): rolling summary + recent-verbatim window —
@@ -56,7 +56,10 @@ export async function loadHistory(
     olderCount > 0 &&
     (!summary || olderCount - convo.summaryMessageCount >= SUMMARY_REFRESH_EVERY)
   ) {
-    summary = await summarize(rows.slice(0, rows.length - ROUTER_WINDOW), shopId);
+    // The previous summary goes back in: the lookback below is only 50 rows,
+    // so on a long thread the opening messages are already gone and a
+    // from-scratch refresh would drop what they said with them.
+    summary = await summarize(rows.slice(0, rows.length - ROUTER_WINDOW), shopId, convo.summary ?? "");
     await db.conversation.update({
       where: { id: convo.id },
       data: { summary, summaryMessageCount: olderCount },
@@ -77,7 +80,11 @@ export async function loadHistory(
   };
 }
 
-async function summarize(rows: { role: string; content: string }[], shopId: string): Promise<string> {
+async function summarize(
+  rows: { role: string; content: string }[],
+  shopId: string,
+  prior: string,
+): Promise<string> {
   try {
     const text = rows
       .map((r) => `${r.role === "in" ? "Shopper" : "Assistant"}: ${r.content}`)
@@ -86,7 +93,7 @@ async function summarize(rows: { role: string; content: string }[], shopId: stri
     return await getLlmProvider().chat(
       [
         { role: "system", content: SUMMARY_SYSTEM },
-        { role: "user", content: text },
+        { role: "user", content: summaryUser(prior, text) },
       ],
       { shopId, purpose: "summary" },
       { temperature: 0.2, maxTokens: 130 },
