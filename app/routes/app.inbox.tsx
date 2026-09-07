@@ -618,7 +618,6 @@ const WORKSPACE_CSS = `
 .cin-fil:hover{background:rgba(255,255,255,.92);box-shadow:0 1px 3px rgba(20,20,25,.07),inset 0 0 0 1px rgba(20,20,25,.05);}
 .cin-fil:active{transform:scale(.985);}
 .cin-fil.active{background:linear-gradient(135deg,rgba(109,59,245,.15),rgba(59,130,246,.09));-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);color:${BRAND.accent};font-weight:750;box-shadow:inset 0 0 0 1px rgba(109,59,245,.2),0 4px 12px rgba(109,59,245,.14);}
-.cin-fil.active::before{content:"";position:absolute;left:-4px;top:8px;bottom:8px;width:3px;border-radius:3px;background:${BRAND.gradient};}
 .cin-fil-ic{width:24px;height:24px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;color:#6b6b73;background:#f0f0f5;box-shadow:inset 0 0 0 1px rgba(20,20,25,.05);transition:background .14s ease,color .14s ease,box-shadow .14s ease;}
 .cin-fil[data-k="open"] .cin-fil-ic{color:#2563eb;background:#e4edff;}
 .cin-fil[data-k="resolved"] .cin-fil-ic{color:#0c8f5a;background:#d9f6e9;}
@@ -664,7 +663,6 @@ const WORKSPACE_CSS = `
 .cin-fsheet-grid .cin-fil{margin:0;min-height:48px;padding:0 10px;border-radius:13px;background:#fff;box-shadow:inset 0 0 0 1px #e6e4ee;}
 .cin-fsheet-grid .cin-fil:hover{background:#fbfbfc;box-shadow:inset 0 0 0 1px #d7d4e4;}
 .cin-fsheet-grid .cin-fil.active{background:linear-gradient(135deg,rgba(109,59,245,.15),rgba(59,130,246,.09));box-shadow:inset 0 0 0 1.5px rgba(109,59,245,.35),0 4px 12px rgba(109,59,245,.14);}
-.cin-fsheet-grid .cin-fil.active::before{display:none;}
 @keyframes cinSheetIn{from{transform:translateY(100%);}to{transform:none;}}
 /* Tablets and narrow desktop windows: a bottom sheet at 900px wide looks
    stranded, so the same panel centres as a dialog. */
@@ -885,7 +883,6 @@ button.cin-send:disabled{opacity:.4;box-shadow:none;}
   /* Active: brand glyph chip, accent label, and a short bar on the top edge —
      the tab-bar equivalent of the rail's left accent. */
   .cin-fbar .cin-fil.active{background:none;box-shadow:none;color:${BRAND.accent};font-weight:750;}
-  .cin-fbar .cin-fil.active::before{display:block;content:"";position:absolute;top:0;left:24%;right:24%;bottom:auto;width:auto;height:2.5px;border-radius:0 0 3px 3px;background:${BRAND.gradient};}
   .cin-fbar .cin-fil.active .cin-fil-ic{background:${BRAND.gradient};color:#fff;box-shadow:0 2px 6px rgba(109,59,245,.35);}
   .cin-fbar .cin-fil.active .cin-fil-c{background:${BRAND.accent};color:#fff;}
 
@@ -897,7 +894,6 @@ button.cin-send:disabled{opacity:.4;box-shadow:none;}
   .cin-fmore .cin-fil{flex:none;flex-direction:row;justify-content:flex-start;gap:9px;min-height:44px;padding:0 9px;border-radius:11px;font-size:13px;font-weight:600;color:#2b2b30;}
   .cin-fmore .cin-fil-l{flex:1;font-size:13px;text-align:left;overflow:hidden;text-overflow:ellipsis;}
   .cin-fmore .cin-fil-c{position:static;margin:0;box-shadow:none;font-size:11px;height:auto;line-height:1.5;}
-  .cin-fmore .cin-fil.active::before{display:none;}
   .cin-fmore-scrim{position:fixed;inset:0;z-index:15;background:transparent;}
   @keyframes cinMoreIn{from{transform:translateY(6px);opacity:0;}to{transform:none;opacity:1;}}
 

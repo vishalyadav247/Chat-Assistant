@@ -3,6 +3,7 @@ import db from "../../db.server";
 import { env } from "../env.server";
 import { decryptSecret, encryptSecret, maskSecret } from "./secrets-crypto.server";
 import { logError } from "../log.server";
+import { DEFAULT_APP_STORE_HANDLE } from "../review";
 
 // Operator-managed runtime settings (spec 19). Everything here used to require
 // an .env edit + redeploy; it is now editable at /admin/settings and stored
@@ -129,7 +130,9 @@ export function runtimeConfig(): EffectiveRuntime {
     smtpPass: stored.smtpPass || e.SMTP_PASS,
     smtpSecure: stored.smtpSecure ?? e.SMTP_SECURE,
     webAppUrl: stored.webAppUrl || e.WEB_APP_URL || process.env.SHOPIFY_APP_URL || "",
-    appStoreHandle: stored.appStoreHandle || e.SHOPIFY_APP_STORE_HANDLE,
+    // Falls back to the known listing slug so every App Store link works with
+    // no ops step; dashboard and env still win. See review.ts for why.
+    appStoreHandle: stored.appStoreHandle || e.SHOPIFY_APP_STORE_HANDLE || DEFAULT_APP_STORE_HANDLE,
     billingTestMode: stored.billingTestMode ?? envBool("BILLING_TEST_MODE") ?? false,
     billingForceTestCharges:
       stored.billingForceTestCharges ?? envBool("BILLING_FORCE_TEST_CHARGES") ?? false,

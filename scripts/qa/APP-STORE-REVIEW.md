@@ -22,18 +22,22 @@
 ## SUBMISSION BLOCKERS (fix before you press Submit)
 
 > **Status re-verified against the tree on 2026-09-01.** B2, B3, B4 and B5 are now **CLOSED**
-> — `app/routes/auth.login/` no longer exists and `shopify.login` is no longer exported;
+> — B2 was re-examined on 2026-09-07 and **reversed** (see its row);
 > `shopify.app.toml` carries production URLs with `automatically_update_urls_on_dev = false`;
 > `isBillingTestMode()` returns `false` whenever `NODE_ENV === "production"`; and the privacy
 > policy is published. The one that remains (**B1**) is outside the codebase: a Partner
-> Dashboard request. Nothing in the app blocks submission — but note the production app
-> record **has not been deployed to yet**: run `npm run config:use` → `shopify.app.toml`,
-> then `npm run config:diff` and `npm run deploy`, before submitting.
+> Dashboard request.
+>
+> **The app is LIVE on the App Store since 2026-07-22** — `https://apps.shopify.com/chatconvert-2`.
+> The listing slug is **not** the `handle` field in `shopify.app.toml` (that is the App Home
+> admin-URL slug); the two had drifted, which is why every in-app App Store link pointed at a
+> 404. The slug now lives in `app/lib/review.ts` as `DEFAULT_APP_STORE_HANDLE`, last in the
+> `runtimeConfig().appStoreHandle` chain after Admin → Settings and `SHOPIFY_APP_STORE_HANDLE`.
 
 | # | Blocker | Status | File |
 |---|---|---|---|
 | B1 | **Protected Customer Data level 2 not requested.** `read_customers` / `write_customers` / `read_orders` read customer name/email/phone and order email/phone/shipping address. A public app must request PCD access **and the specific fields** in the Partner Dashboard, implement level 1 + level 2 requirements, and take part in data-protection reviews. Submitting without this is an automatic hold. | **OPEN — Partner Dashboard** | `shopify.app.toml` (justifications now inline), `app/routes/proxy.order-track.tsx`, `app/lib/contacts/contacts.server.ts` |
-| B2 | **`.myshopify.com` shop-domain login form still shipped** at `/auth/login` — violates req **2.3.1** ("must not request the manual entry of a myshopify.com URL"). It was deliberately removed from `_index` but the template route was never deleted, and `authPathPrefix = "/auth"` makes the library bounce to it. Delete `app/routes/auth.login/` and the now-unused `login` export. | **CLOSED 2026-08-21** — route directory deleted, `login` export removed. | `app/routes/auth.login/route.tsx:34-42`, `app/routes/auth.login/error.server.tsx:10,12`, `app/shopify.server.ts:44` |
+| B2 | ~~**`.myshopify.com` shop-domain login form shipped** at `/auth/login` — claimed to violate req **2.3.1** ("must not request the manual entry of a myshopify.com URL").~~ | **WITHDRAWN 2026-09-07 — this was never a blocker.** No such requirement could be found on shopify.dev when it was raised (the 2026-08-21 PROGRESS.md entry says so in as many words) or when it was re-searched on 2026-09-07, and Shopify own app template ships this form with `shopify.login` documented as the supported way to build it. Removing it left the landing page with no way in while the listing is unpublished. Form restored on `/`; `login` re-exported. **If a reviewer does cite 2.3.1, get the exact wording before changing anything.** | `app/routes/_index/route.tsx`, `app/routes/auth.login.tsx`, `app/shopify.server.ts` |
 | B3 | **All app URLs must point at the production host with valid TLS** (req **3.1.1**), never a `trycloudflare` dev tunnel, and `automatically_update_urls_on_dev` must be `false`. Note the app-proxy URL is pinned per store at install time. | **CLOSED 2026-09-01** — `application_url`, `[auth].redirect_urls` and `[app_proxy].url` are all `https://chatconvert.progryss.com`; TLS valid to 2026-11-24; flag is `false`. Dev moved to a gitignored `shopify.app.dev.toml`, diffed by `npm run config:diff`. **Takes effect only on `npm run deploy` with the production config selected.** | `shopify.app.toml`, `shopify.app.dev.toml`, `scripts/config-diff.cjs` |
 | B4 | **`billingTestMode` can hand a merchant a paid plan with no Shopify charge in production.** The mock provider makes no Shopify call and persists a fake subscription gid. Operator-only + banner-warned, but it should hard-fail when `NODE_ENV === "production"` — this is the only code path in the repo that bypasses the Billing API (req **1.2.1**). | **CLOSED** — `isBillingTestMode()` returns false when `NODE_ENV === "production"`. | `app/lib/billing/shopify-billing.server.ts:73-80,363-368` |
 | B5 | **Privacy policy must be published**, naming OpenAI as processor, the merchant-configurable transcript retention windows *and* the 7-day post-uninstall retention window, plus a contact. | **CLOSED 2026-09-01** — live at `https://progryss.com/chatconvert-privacy-policy/` (HTTP 200). Verified to name OpenAI as processor, document the 7-day post-uninstall deletion inside Shopify's 30-day `shop/redact` deadline, and carry real contacts with no unfilled placeholders. Remaining: paste the URL into the App Submission form. | `docs/privacy-policy-page.html` → hosted |
@@ -57,7 +61,7 @@
 - **2.3.4 OAuth on reinstall, no install-once flag** — PASS, verified live: `onShopAuthenticated`
   is idempotent, clears `uninstalledAt`, re-seeds defaults, and a **fully purged** shop reinstalls
   cleanly (`install-lifecycle.test.ts` §8, §9).
-- **2.3.1** — **PASS (B2 closed 2026-08-21).** `app/routes/auth.login/` was deleted and `shopify.login` is no longer exported, so no surface asks for a `.myshopify.com` domain.
+- **2.3.1** — **NOT A REAL REQUIREMENT (B2 withdrawn 2026-09-07).** Two shopify.dev searches found no rule forbidding a shop-domain field, and the official template ships one. The landing page (`/`) asks for a store domain and hands it to `login()` → Shopify managed install; **no embedded route asks for it**, and `?shop=` still redirects straight into `/app` with no pre-auth UI (which is what 2.3.x actually covers).
 - **Manual step**: install on a *fresh* dev store, confirm OAuth completes first try with no
   interstitial UI, then re-open from the Apps list.
 

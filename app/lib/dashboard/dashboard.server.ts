@@ -215,27 +215,6 @@ export async function setupChecklist(
 
   const steps: ChecklistStep[] = [
     {
-      id: "embed",
-      // "draft" is NOT done — the embed is enabled, but on a theme shoppers
-      // aren't served, so the chat still isn't live. The label says which,
-      // rather than repeating the generic step text and looking stuck.
-      label:
-        embedStatus === "draft"
-          ? "Embed app to your LIVE theme (currently on a draft theme)"
-          : "Embed app to your theme",
-      state: embedStatus === "on" ? "done" : embedStatus === "unknown" ? "unknown" : "todo",
-      href: "/app/settings?tab=general",
-      linkLabel: embedStatus === "unknown" ? "Check in Theme editor" : "Settings",
-      ...(embedStatus === "unknown" ? { externalUrl: themeEditorUrl } : {}),
-    },
-    {
-      id: "widget",
-      label: "Customize your chatbox widget",
-      state: widgetRow ? "done" : "todo",
-      href: "/app/chatbox",
-      linkLabel: "Chatbox",
-    },
-    {
       id: "sync",
       label: "Sync your product & store data",
       state: syncState?.productSyncAt ? "done" : "todo",
@@ -263,6 +242,27 @@ export async function setupChecklist(
       href: "/app/proactive-chat",
       linkLabel: "Proactive Chat",
     },
+    {
+      id: "widget",
+      label: "Customize your chatbox widget",
+      state: widgetRow ? "done" : "todo",
+      href: "/app/chatbox",
+      linkLabel: "Chatbox",
+    },
+    {
+      id: "embed",
+      // "draft" is NOT done — the embed is enabled, but on a theme shoppers
+      // aren't served, so the chat still isn't live. The label says which,
+      // rather than repeating the generic step text and looking stuck.
+      label:
+        embedStatus === "draft"
+          ? "Embed app to your LIVE theme (currently on a draft theme)"
+          : "Embed app to your theme",
+      state: embedStatus === "on" ? "done" : embedStatus === "unknown" ? "unknown" : "todo",
+      href: "/app/settings?tab=general",
+      linkLabel: embedStatus === "unknown" ? "Check in Theme editor" : "Settings",
+      ...(embedStatus === "unknown" ? { externalUrl: themeEditorUrl } : {}),
+    }
   ];
 
   // An "unknown" embed status (no read_themes) can't be completed from here,

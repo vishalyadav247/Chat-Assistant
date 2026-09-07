@@ -121,6 +121,11 @@
     /* Clear the home indicator / gesture bar so the composer stays tappable. */
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
+  /* Keyboard up (a field in the panel holds focus): the gesture bar is behind
+     the keys, so that inset becomes a dead strip that floats the composer off
+     the top of the keyboard. .cw-kbd is toggled on focusin/focusout in
+     chat-widget.js. */
+  .cw-panel.cw-kbd { padding-bottom: 0; }
   /* A min-height on a flex child wins over `flex: 1` shrinking. With the
      keyboard up the visible area drops to ~250-300px, and a 240px floor plus
      the header and composer no longer fit — the column stops compressing and
@@ -171,6 +176,11 @@
   flex: 1;
   min-height: 240px;
   overflow-y: auto;
+  /* Reaching the end of the thread must not hand the scroll to the storefront
+     behind the panel: on iOS that chain is what rubber-bands the page, which
+     moves the visual viewport, which drags the panel with it. */
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   display: flex;
   flex-direction: column;
   gap: 12px;

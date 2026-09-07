@@ -108,6 +108,11 @@ Entry: the dev store's storefront with the app embed enabled.
 | B4.13 | Proactive campaign fires on its configured trigger |
 | B4.14 | Keyboard only: reach the launcher, open, type, send, close. Focus is visible throughout |
 | B4.15 | Mobile 390×844: panel fits, no horizontal scroll, keyboard does not cover the composer |
+| B4.15a | **Real iPhone, Safari** (not an emulator — see the note): tap the composer. The panel resizes to sit exactly on top of the keyboard and does **not** drift, jump, or slide up as the keyboard finishes animating |
+| B4.15b | **Real iPhone:** with the keyboard up, scroll the thread to the top and keep dragging. The storefront behind must not rubber-band, and the panel must not move |
+| B4.15c | **Real iPhone:** dismiss the keyboard. The panel returns to full height with no gap at the bottom |
+| B4.15d | **Real iPhone:** scroll the storefront halfway down, open the chat, close it. The page is where it was left — not scrolled back to the top |
+| B4.15e | **Real iPhone:** rotate to landscape with the panel open, rotate back. The panel still fills the screen and the composer is reachable |
 | B4.16 | Console clean on the storefront; the widget adds no page errors |
 | B4.17 | Lighthouse on the storefront page with and without the widget — record the delta |
 
@@ -186,6 +191,15 @@ plus the live storefront `jgw-check.myshopify.com`.
 - **True 390px mobile** — the extension cannot emulate a device, and Chrome refuses to
   render a window that narrow (viewport reports 0×0). The widget's mobile CSS fixes
   (min-height reset, `dvh`, `env(safe-area-inset-bottom)`) are source-verified only.
+- **The iOS soft keyboard (B4.15a–e) needs a REAL iPhone.** No emulator reproduces it,
+  and that is the whole difficulty: DevTools device mode, Chrome for Android and every
+  desktop browser either shrink the layout viewport for the keyboard or have no
+  keyboard at all, so B4.15 passed for months while real iPhones were broken. What
+  cannot be emulated is Safari shrinking the **visual** viewport and sliding it up
+  while the **layout** viewport stays full height — which is what moves a
+  `position: fixed` panel out from under the visible area. The invariants that fix it
+  are asserted statically by `scripts/qa/widget-viewport.test.ts` (area X), but the
+  behaviour itself is only ever proven on hardware.
 - **Keyboard activation** — synthetic key events were not delivered to the page at all
   (zero `keydown` reached a focused element), so Enter/Space activation could not be
   fired. The launcher is a native `<button>` in the tab order with a correct

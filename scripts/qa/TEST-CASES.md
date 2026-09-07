@@ -238,7 +238,7 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 | J-07 | Wrong HTTP method | Resource routes reject cleanly, no 500 | A |
 | J-08 | Logout is POST-only | GET must not log out (CSRF) — both web and admin | A |
 | J-09 | Nav integrity | Every `NAV` entry resolves; role filtering matches `can()` | H, S |
-| J-10 | No shop-domain login form | App Store req 2.3.1 — `_index` must never ask for `.myshopify.com` | A |
+| J-10 | Shop-domain login form | `_index` renders the field, posts it through `login()`, and rejects a bad domain in place; no *embedded* route asks for it | A |
 | J-11 | Embedded navigation | `Link`/`useSubmit`/`authenticate.admin`'s `redirect` — never raw `<a>` or react-router `redirect` | A |
 
 ## K. Sessions, auth, authorization & cookies (spec 18/19)
@@ -489,6 +489,7 @@ failure. The HTTP suites additionally require `npm run dev` to be running on `:3
 | `scripts/qa/ui-admin.test.ts` | T | **yes** |
 | `scripts/qa/storefront.test.ts` | U | **yes** |
 | `scripts/qa/agent-quality.test.ts` | W | no |
+| `scripts/qa/widget-viewport.test.ts` | X | no |
 | `scripts/qa/preflight.ts` | — (environment health, run first) | no |
 
 Seeding: `scripts/qa/seed-curated.ts` (curated fixtures), `scripts/qa/perf-seed.ts` (synthetic
@@ -560,3 +561,37 @@ and throwaway shops — and exits non-zero if the environment cannot be believed
 `--fix` puts back everything that is safe to put back (it never deletes shops,
 which could race a live run). **Run it before a campaign and after any
 interrupted suite.**
+
+---
+
+## X. Storefront widget — the iOS soft keyboard (`scripts/qa/widget-viewport.test.ts`)
+
+Static suite, 31 checks, no server and no DB. It reads
+`extensions/chat-widget/assets/chat-widget.{js,css}` and asserts the mobile
+keyboard contract, because the failure it guards is invisible on every desktop
+browser **and** on Chrome for Android — including a desktop DevTools device
+emulator, which is why B4.15 kept passing while real iPhones did not.
+
+iOS does not shrink the layout viewport for the keyboard; it shrinks the
+**visual** viewport and slides it up to reveal the focused field. `position:
+fixed` is laid out against the **layout** viewport, so a panel pinned with
+`inset: 0` stays where the screen used to be while the visible area moves out
+from under it. Three separate fixes here only ever wrote the panel's `height`,
+which resizes the box and moves it not at all.
+
+| Case | Assertion |
+|---|---|
+| X-1 | `syncViewport` reads `offsetTop`/`offsetLeft`, not only `height` |
+| X-2 | It writes `top`/`left`/`width`/`height` and releases `bottom`/`right` to `auto` (`inset: 0` + a height is over-constrained) |
+| X-3 | It clears all six properties when the panel is closed or off-phone — a stale inline `top` survives into the desktop layout after a rotate |
+| X-4 | The `visualViewport` **scroll** listener is bound to a handler that repositions (it was previously bound to a height-only function, so it was a no-op) |
+| X-5 | Writes are coalesced with `requestAnimationFrame`, and a pending frame is cancelled on unbind |
+| X-6 | The body scroll lock uses `position: fixed` — `overflow: hidden` is not a scroll lock on iOS — is phone-only, and restores the shopper's scroll offset on close |
+| X-7 | `closePanel` unbinds the listeners, releases the lock, restores the viewport meta, and clears `cw-kbd` |
+| X-8 | `cw-kbd` (toggled on `focusin`/`focusout`, using `relatedTarget`) drops the `safe-area-inset-bottom` padding, which is dead space once the keyboard covers the gesture bar |
+| X-9 | `.cw-body` sets `overscroll-behavior: contain` — the rubber-band chain moves the visual viewport, which drags the panel |
+| X-10 | `.cw-root` keeps `z-index: 2147483647` and has **no** `transform` (a transform makes it the containing block for its own fixed children) |
+
+The suite is written to fail loudly on regression: reverting any one of these
+turns the corresponding case red. Verified by mutation — replacing
+`vv.offsetTop` with a constant fails X-1 and nothing else.

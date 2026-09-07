@@ -219,41 +219,47 @@ async function main(): Promise<void> {
     ok(`${label} route modules present (${files.length})`, missing.length === 0, missing.join(", "));
   }
   ok("auth.$ present", existsSync(join(ROUTES_DIR, "auth.$.tsx")));
-  // /auth/login (the template's .myshopify.com shop-domain form) was removed
-  // for App Store req 2.3.1. It must be GONE — no route, no `login` export, no
-  // redirect_urls entry, and nothing anywhere that asks for a shop domain.
+  // Shop-domain login (J-10). Removed 2026-08-21 on an unverifiable reading of
+  // App Store req 2.3.1, restored 2026-09-07 — see the note in shopify.server.ts.
+  // The card lives on "/" (one form, one place); /auth/login stays as the path
+  // the library is configured to bounce to, and must never 500 on a public URL.
   {
     const toml = readFileSync(join(process.cwd(), "shopify.app.toml"), "utf-8");
-    ok("auth.login route directory is gone", !existsSync(join(ROUTES_DIR, "auth.login")));
+    ok("auth.login route present", existsSync(join(ROUTES_DIR, "auth.login.tsx")));
     ok(
-      "shopify.server.ts no longer exports `login`",
-      !/^\s*export\s+const\s+login\s*=/m.test(readFileSync(join(process.cwd(), "app", "shopify.server.ts"), "utf-8")),
+      "shopify.server.ts exports `login`",
+      /^\s*export\s+const\s+login\s*=/m.test(readFileSync(join(process.cwd(), "app", "shopify.server.ts"), "utf-8")),
     );
-    ok("/auth/login is no longer a declared redirect_url", !toml.includes("/auth/login"));
-    // No surviving route may render a shop-domain input (req 2.3.1).
+    ok("/auth/login is not a declared redirect_url", !toml.includes("/auth/login"));
+    // The form must live on the public landing page and nowhere else — an
+    // embedded admin route asking for a shop domain would be a real defect.
     const offenders: string[] = [];
     for (const file of readdirSync(ROUTES_DIR, { withFileTypes: true })) {
       if (!file.isFile() || !file.name.endsWith(".tsx")) continue;
       const src = readFileSync(join(ROUTES_DIR, file.name), "utf-8");
-      if (/name=["']shop["']|myshopify\.com["']?\s*\/?>/.test(src) && /<(input|s-text-field|s-email-field)/i.test(src)) {
+      if (/name=["']shop["']/.test(src) && /<(input|s-text-field|s-email-field)/i.test(src)) {
         offenders.push(file.name);
       }
     }
-    ok("no route renders a shop-domain input", offenders.length === 0, offenders.join(", "));
+    ok("no admin route renders a shop-domain input", offenders.length === 0, offenders.join(", "));
+    const landing = readFileSync(join(ROUTES_DIR, "_index", "route.tsx"), "utf-8");
+    ok('_index renders the shop-domain field', /name="shop"/.test(landing) && /<input/.test(landing));
+    ok('_index posts it through login()', /await login\(request\)/.test(landing));
 
+    // With ?shop=, /auth/login hands off to the managed-install screen rather
+    // than dead-ending a stale bookmark; either way it must not serve a page.
     const p = await probe("/auth/login?shop=dev-shop.myshopify.com");
     ok("/auth/login does not serve a page", p.status !== 200, String(p.status));
     ok(
       "/auth/login redirects instead of erroring",
-      p.status === 302 || p.status === 301 || p.status === 404,
+      p.status === 302 || p.status === 301,
       `${p.status} — ${p.body.slice(0, 160).replace(/\s+/g, " ")}`,
     );
-    if (p.status === 302 || p.status === 301) {
-      // auth.login.tsx redirects to "/" (install entry point). A 404 would
-      // dead-end a stale bookmark; a redirect keeps the flow alive WITHOUT
-      // rendering the template shop-domain form that req 2.3.1 forbids.
-      ok("/auth/login redirects to the install entry point", (p.location ?? "") === "/", p.location ?? "");
-    }
+    ok(
+      "/auth/login?shop= redirects to the Shopify install screen",
+      /oauth\/install/.test(p.location ?? ""),
+      p.location ?? "",
+    );
 
     // Every declared OAuth redirect URL must have a route behind it.
     const start = toml.indexOf("redirect_urls = [");

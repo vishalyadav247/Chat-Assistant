@@ -488,6 +488,7 @@
   var vvUnbind = null;
   var scrollUnlock = null;
   var viewportMetaRestore = null;
+  var vvFrame = null;
 
   function isPhone() {
     return Boolean(window.matchMedia && window.matchMedia("(max-width: 480px)").matches);
@@ -509,23 +510,61 @@
     };
   }
 
-  /** Safari fallback. Where the meta above is honoured the layout viewport has
-   *  already shrunk, so this writes the height the panel has anyway. */
+  /* Safari fallback — and the half that was missing every previous pass.
+   *
+   * iOS does not shrink the LAYOUT viewport for the keyboard. It shrinks the
+   * VISUAL viewport and then SLIDES it up to reveal the focused field, leaving
+   * the layout viewport at its full height. `position: fixed` is laid out
+   * against the LAYOUT viewport, so the panel stays where the screen used to
+   * be while the visible area moves out from under it — the panel appears to
+   * drift, and every settle / rubber-band of Safari's scroll drifts it again.
+   *
+   * Earlier versions wrote only the HEIGHT. That resizes the box and moves it
+   * not at all, which is why the composer kept surfacing behind the keys: the
+   * `visualViewport` scroll listener below was already bound, but syncViewport
+   * had nothing position-related to write, so it was a no-op. The OFFSET is
+   * the fix — pin the panel to the visual viewport's origin, not the page's. */
   function syncViewport() {
     if (!ui.panel) return;
+    var s = ui.panel.style;
     var vv = window.visualViewport;
-    ui.panel.style.height = vv && state.open && isPhone() ? vv.height + "px" : "";
+    if (!vv || !state.open || !isPhone()) {
+      s.top = s.left = s.right = s.bottom = s.width = s.height = "";
+      return;
+    }
+    // `inset: 0` leaves top AND bottom set; adding a height over-constrains the
+    // box and the browser silently drops one of the three. State the origin and
+    // the size, and let the other two edges go.
+    s.top = vv.offsetTop + "px";
+    s.left = vv.offsetLeft + "px";
+    s.right = "auto";
+    s.bottom = "auto";
+    s.width = vv.width + "px";
+    s.height = vv.height + "px";
+  }
+
+  /** visualViewport fires resize/scroll many times per keyboard animation —
+   *  coalesce to one write per frame so the panel never trails a paint behind
+   *  the viewport it is chasing (that lag is the visible "jitter"). */
+  function syncViewportFrame() {
+    if (vvFrame !== null) return;
+    vvFrame = requestAnimationFrame(function () {
+      vvFrame = null;
+      syncViewport();
+    });
   }
 
   /** The keyboard animates, and the last resize we see is not always the
-   *  settled size — re-measure once after the burst. */
+   *  settled size — re-measure once after the burst, and pull the newest
+   *  message back into view now that the thread is shorter. */
   var vvSettle = null;
   function syncViewportSettling() {
-    syncViewport();
+    syncViewportFrame();
     if (vvSettle) clearTimeout(vvSettle);
     vvSettle = setTimeout(function () {
       vvSettle = null;
       syncViewport();
+      if (state.screen === "chat") scroll();
     }, 300);
   }
 
@@ -533,27 +572,54 @@
     var vv = window.visualViewport;
     if (!vv || vvUnbind) return;
     vv.addEventListener("resize", syncViewportSettling);
-    vv.addEventListener("scroll", syncViewport);
+    vv.addEventListener("scroll", syncViewportFrame);
     vvUnbind = function () {
       vv.removeEventListener("resize", syncViewportSettling);
-      vv.removeEventListener("scroll", syncViewport);
+      vv.removeEventListener("scroll", syncViewportFrame);
       if (vvSettle) clearTimeout(vvSettle);
       vvSettle = null;
+      if (vvFrame !== null) cancelAnimationFrame(vvFrame);
+      vvFrame = null;
       vvUnbind = null;
     };
   }
 
-  /** Stop the storefront scrolling behind a full-screen panel. Deliberately
-   *  only `overflow`, not `position: fixed` on the body: the latter is the
-   *  stronger iOS lock but it discards the merchant's scroll position and
-   *  reflows their theme, which is too invasive to do inside someone's store. */
+  /** Stop the storefront scrolling behind a full-screen panel.
+   *
+   *  `overflow: hidden` on the body — all this used to do — is not a scroll
+   *  lock on iOS. Safari scrolls the document anyway to bring the focused
+   *  composer into view, and THAT scroll is what dragged the panel around.
+   *  Pinning the body is the lock that actually holds. It was avoided before
+   *  because it discards the merchant's scroll position; stashing the offset
+   *  in `top` and restoring it on close is what buys that back. */
   function lockBodyScroll() {
     if (scrollUnlock || !isPhone()) return;
     var body = document.body;
-    var previous = body.style.overflow;
+    var y = window.pageYOffset || document.documentElement.scrollTop || 0;
+    var prev = {
+      overflow: body.style.overflow,
+      position: body.style.position,
+      top: body.style.top,
+      left: body.style.left,
+      right: body.style.right,
+      width: body.style.width,
+    };
     body.style.overflow = "hidden";
+    body.style.position = "fixed";
+    body.style.top = -y + "px";
+    body.style.left = "0";
+    body.style.right = "0";
+    body.style.width = "100%";
     scrollUnlock = function () {
-      body.style.overflow = previous;
+      body.style.overflow = prev.overflow;
+      body.style.position = prev.position;
+      body.style.top = prev.top;
+      body.style.left = prev.left;
+      body.style.right = prev.right;
+      body.style.width = prev.width;
+      // Pinning the body parked the document at 0 — put the shopper back where
+      // they were, or closing the chat teleports them to the top of the page.
+      window.scrollTo(0, y);
       scrollUnlock = null;
     };
   }
@@ -621,8 +687,13 @@
     if (scrollUnlock) scrollUnlock();
     if (viewportMetaRestore) viewportMetaRestore();
     if (ui.panel) {
-      ui.panel.style.height = "";
-      ui.panel.style.display = "none";
+      // Every property syncViewport can write has to come back off, not just
+      // the height — a stale inline `top`/`width` would survive into the next
+      // open (and onto the desktop layout after a rotate).
+      var ps = ui.panel.style;
+      ps.top = ps.left = ps.right = ps.bottom = ps.width = ps.height = "";
+      ui.panel.classList.remove("cw-kbd");
+      ps.display = "none";
     }
     ui.launcher.style.display = "";
     ui.launcher.setAttribute("aria-expanded", "false");
@@ -664,6 +735,18 @@
 
     panel.appendChild(R.footer(config.showBranding));
 
+    // The home-indicator inset is dead space once the keyboard covers it — it
+    // lifts the composer off the top of the keys by ~34px, which reads as the
+    // panel sitting in the wrong place. Drop it while a field holds focus.
+    // `relatedTarget` keeps the padding from flashing back when focus moves
+    // between two fields (composer → pre-chat), where focusout precedes focusin.
+    panel.addEventListener("focusin", function (e) {
+      if (isTextField(e.target)) panel.classList.add("cw-kbd");
+    });
+    panel.addEventListener("focusout", function (e) {
+      if (!isTextField(e.relatedTarget)) panel.classList.remove("cw-kbd");
+    });
+
     panel.addEventListener("keydown", function (e) {
       if (e.key === "Escape") {
         e.stopPropagation();
@@ -675,6 +758,16 @@
 
     ui.root.insertBefore(panel, ui.launcher);
     ui.panel = panel;
+  }
+
+  /** A field that summons the soft keyboard. Buttons and checkboxes take focus
+   *  without one, so they must not claim the keyboard-open state. */
+  function isTextField(node) {
+    if (!node || !node.tagName) return false;
+    var tag = node.tagName.toLowerCase();
+    if (tag === "textarea") return true;
+    if (tag !== "input") return false;
+    return !/^(button|submit|reset|checkbox|radio|file|range|color|image)$/i.test(node.type || "text");
   }
 
   /** Focusable descendants of the panel that are actually rendered. */
