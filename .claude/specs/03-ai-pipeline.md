@@ -38,6 +38,20 @@ Implement the validated demo pipeline on production infrastructure. The LLM is t
      · off_topic is ignored when persona.scope is empty — with no STORE SCOPE line the model invented one
        and redirected "which bracelet is good for money and wealth".
 5. LANES:
+   detail   → (2026-09-07) a follow-up ABOUT a product already shown. Checked BEFORE buy, and only when this
+              conversation has already rendered cards — no cards, no check, no cost. One focused yes/no confirm
+              (`detailConfirmUser`, temp 0, 3 tokens, same shape as the curated/block confirms) draws the line:
+              FACTS about a settled product (material, size, contents, care, how it works, compatibility,
+              warranty) → detail; choosing among the shown products, narrowing by an attribute, or asking for
+              something different → still buy. Grounding is the shown set itself, re-read from the catalogue
+              (the stored card says WHICH product, never what is true of it): the lane retrieves nothing and
+              cannot introduce a product. `DETAIL: <id>` names the subject, code renders that one card;
+              `DETAIL: none` renders none and the reply asks which one. sourceLayer `detail`.
+              WHY: the router has only buy/question/chat and `question` means POLICY, so every product-shaped
+              message became `buy` — and buy always means retrieve-and-recommend. "What is this one made of?"
+              was re-run through hybrid search and answered with three DIFFERENT products.
+              Deliberately NOT a mode of the buy lane: that lane's tier/anchor/pick guards exist to decide
+              which of several retrieved products fit a request, which is not the question here.
    buy      → hybrid product search (below) → grounded recommend; the model's PICKS line decides the cards
    question → RAG: knowledge-search top k=3; if nothing grounded (no hit ≥ minMeaningScore 0.30, no discount /
               collection facts) → CATALOGUE RESCUE: hybridProductSearch over the shopper's own words; when the

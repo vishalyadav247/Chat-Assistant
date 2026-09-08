@@ -107,7 +107,7 @@ async function main(): Promise<void> {
   const deliver = (payload: unknown) => action({ request: webhookRequest(payload) } as any);
 
   try {
-    await savePlanConfig({ enforcement: "enforced" });
+    await savePlanConfig({});
 
     // ── ACTIVE grants the plan named by the VERIFIED subscription ───────────
     await setShop({

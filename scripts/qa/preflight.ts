@@ -12,8 +12,6 @@
  *
  *   · 14 curated answers left `draft` → storefront.test.ts failed three curated
  *     cases against a shop with no published curated answers.
- *   · `yearlyBilling: false` left in `admin:plans` → annual billing switched
- *     off for every tenant, and overage.test.ts failed its own restore check.
  *
  * Run this before a campaign and after any interrupted suite. `--fix` puts
  * everything back; without it the script only reports (exit 1 if anything is
@@ -62,15 +60,21 @@ async function main(): Promise<void> {
   );
 
   // ── 2. Plan config left mid-test ─────────────────────────────────────────
-  // `enforcement` and `yearlyBilling` are the two fields suites flip. Absent
-  // means the code default, which is what a clean environment looks like.
+  // The `enforcement` switch was REMOVED on 2026-09-08, so a stored value is
+  // now inert — but a row carrying one means an old suite (or an old build)
+  // touched this environment, and the quota overrides beside it are the ones
+  // that still bite. Flag it, and strip it under --fix.
   const planRow = await db.appSecret.findUnique({ where: { key: "admin:plans" } });
   const planConfig = planRow ? (JSON.parse(planRow.value) as Record<string, unknown>) : {};
   const planProblems: string[] = [];
-  if (planConfig.yearlyBilling === false) planProblems.push("yearlyBilling: false");
-  if (planConfig.enforcement === "open") planProblems.push('enforcement: "open"');
+  if (planConfig.enforcement !== undefined) {
+    planProblems.push(`stale enforcement: ${JSON.stringify(planConfig.enforcement)} (the switch no longer exists)`);
+  }
+  // Deliberately NOT flagging `plans` overrides: those are legitimate operator
+  // edits, not test residue, and nagging about them would train people to
+  // ignore this report.
   if (planProblems.length > 0 && FIX && planRow) {
-    const { yearlyBilling: _y, enforcement: _e, ...rest } = planConfig;
+    const { enforcement: _e, ...rest } = planConfig;
     await db.appSecret.update({ where: { key: "admin:plans" }, data: { value: JSON.stringify(rest) } });
   }
   report(

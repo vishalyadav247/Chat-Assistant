@@ -7,13 +7,11 @@
 import db from "../app/db.server";
 import { GATED_FEATURES } from "../app/lib/billing/plan-shared";
 import {
-  DEFAULT_ENFORCEMENT,
   DEFAULT_PLANS,
   getQuota,
   hasFeature,
   loadPlanConfig,
   PLAN_CONFIG_SECRET_KEY,
-  planEnforcementMode,
   PLANS,
 } from "../app/lib/billing/plans.server";
 import {
@@ -41,10 +39,9 @@ async function main() {
     // correctly falls back to the plan default instead of being gated off — so
     // omitting it here would assert pre-knownFeatures semantics that no longer exist.
     await savePlanConfig({
-      enforcement: "enforced",
+      
       plans: { basic: { quotas: { conversations: 123 }, features: ["exports"], knownFeatures: [...GATED_FEATURES] } },
     });
-    assert(planEnforcementMode() === "enforced", "enforcement flips to enforced");
     assert(PLANS.basic.quotas.conversations === 123, "PLANS.basic quota overridden in place");
     assert(getQuota("basic", "conversations") === 123, "getQuota reads override under enforcement");
     assert(hasFeature("basic", "exports") === true, "overridden feature list grants exports");
@@ -61,20 +58,19 @@ async function main() {
 
     // 3. Reset restores code defaults exactly
     await resetPlanConfig();
-    assert(planEnforcementMode() === DEFAULT_ENFORCEMENT, "reset returns enforcement to the code default");
     assert(
       JSON.stringify(PLANS) === JSON.stringify(DEFAULT_PLANS),
       "reset restores the full default matrix",
     );
 
     // 3b. Enforced mode reads the real matrix; open mode is unlimited + all-pass.
-    await savePlanConfig({ enforcement: "enforced" });
+    await savePlanConfig({ });
     assert(
       getQuota("basic", "conversations") === DEFAULT_PLANS.basic.quotas.conversations,
       "enforced mode = real matrix quotas",
     );
     assert(hasFeature("free", "exports") === false, "enforced mode gates a Free shop");
-    await savePlanConfig({ enforcement: "open" });
+    await savePlanConfig({ });
     assert(getQuota("basic", "conversations") === Number.MAX_SAFE_INTEGER, "open mode = unlimited quotas");
     assert(hasFeature("free", "exports") === true, "open mode grants every feature");
     await resetPlanConfig();

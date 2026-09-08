@@ -146,19 +146,19 @@ async function main() {
   const sub2 = await provider.createSubscription({
     shopDomain: TEST_DOMAIN,
     plan: "plus",
-    interval: "yearly",
+    interval: "monthly",
   });
   const url2 = new URL(sub2.confirmationUrl);
   const ret2 = await completeBillingReturn({
     shopDomain: TEST_DOMAIN,
     plan: "plus",
-    interval: "yearly",
+    interval: "monthly",
     chargeId: url2.searchParams.get("charge_id"),
   });
   check("completeBillingReturn ok", ret2.ok, ret2.error);
   row = await db.shop.findUniqueOrThrow({ where: { domain: TEST_DOMAIN } });
   check("Shop.plan = plus", row.plan === "plus", row.plan);
-  check("Shop.billingInterval = yearly", row.billingInterval === "yearly", row.billingInterval ?? "null");
+  check("Shop.billingInterval = monthly", row.billingInterval === "monthly", row.billingInterval ?? "null");
   check("Shop.planStatus = trial", row.planStatus === "trial", row.planStatus);
 
   // ── 3. overage reporting (mock logs) ──────────────────────────────────────
@@ -173,31 +173,34 @@ async function main() {
   });
   check("3 conversations owed before billing", (await unbilledOverage(shop.id, period)) === 3);
 
-  // The shop is on plus/YEARLY at this point (step 2). Shopify rejects usage
-  // lines on annual subscriptions (QA D1), so nothing may be billed and the
-  // debt must survive untouched.
-  const yearlyAttempt = await submitOverageRecords(shop.id, period);
-  check(
-    "a yearly subscription bills nothing and keeps the debt",
-    yearlyAttempt.accepted === 0 && (await unbilledOverage(shop.id, period)) === 3,
-    JSON.stringify(yearlyAttempt),
-  );
-
-  // Back to monthly with a usage line — now it must bill, exactly once.
-  await db.shop.update({
-    where: { id: shop.id },
-    data: { plan: "basic", billingInterval: "monthly", usageLineItemId: "gid://shopify/AppSubscriptionLineItem/mock-usage" },
-  });
+  // The shop is on plus/MONTHLY with a usage line at this point (step 2), which
+  // since annual was withdrawn (2026-09-07) is the only shape a paid
+  // subscription can have — so the debt must bill, and bill exactly once.
   const submitted = await submitOverageRecords(shop.id, period);
   check("all 3 were billed", submitted.accepted === 3 && submitted.owed === 0, JSON.stringify(submitted));
   check("nothing is owed afterwards", (await unbilledOverage(shop.id, period)) === 0);
   const again = await submitOverageRecords(shop.id, period);
   check("re-running bills NOTHING (no double charge)", again.accepted === 0, JSON.stringify(again));
 
-  // Restore the yearly subscription the next section expects.
+  // A subscription with no usage line still hard-caps: Free, or a row written
+  // before annual billing was withdrawn. Nothing may be billed, and any debt
+  // must survive rather than be silently cleared.
+  await db.planUsage.update({
+    where: { shopId_periodStart: { shopId: shop.id, periodStart: period } },
+    data: { overageCount: 5, overageReported: 0 },
+  });
+  await db.shop.update({ where: { id: shop.id }, data: { usageLineItemId: null } });
+  const noLine = await submitOverageRecords(shop.id, period);
+  check(
+    "no usage line bills nothing and keeps the debt",
+    noLine.accepted === 0 && (await unbilledOverage(shop.id, period)) === 5,
+    JSON.stringify(noLine),
+  );
+
+  // Restore the subscription the next section expects.
   await db.shop.update({
     where: { id: shop.id },
-    data: { plan: "plus", billingInterval: "yearly", usageLineItemId: null },
+    data: { plan: "plus", billingInterval: "monthly", usageLineItemId: "gid://shopify/AppSubscriptionLineItem/mock-usage" },
   });
 
   // ── 4. downgrade to Free (cancels subscription) ───────────────────────────
@@ -225,50 +228,32 @@ async function main() {
   // ── 5. plan copy is computed from the matrix, never hard-coded (QA D10) ───
   console.log("\n5. plan copy derives from the plan matrix");
   const { PLANS } = await import("../app/lib/billing/plans.server");
-  const { yearlySavingsPercent, savingsBadgeLabel, termsFor } = await import(
-    "../app/components/PlanCards"
-  );
+  const { termsFor } = await import("../app/components/PlanCards");
   const { faqItems } = await import("../app/components/PlanFaq");
-  const { yearlyTotal } = await import("../app/lib/billing/shopify-billing.server");
 
   const cardFor = (id: "basic" | "pro" | "plus") => ({
     id,
     name: PLANS[id].name,
     description: "",
     priceMonthly: PLANS[id].priceMonthly,
-    priceYearlyPerMonth: PLANS[id].priceYearlyPerMonth,
-    yearlyTotal: yearlyTotal(id),
     trialDays: PLANS[id].trialDays,
     overagePerConversation: PLANS[id].overagePerConversation,
     bullets: [],
     popular: false,
   });
   const basicCard = cardFor("basic");
-  const expectedBasic = Math.round(
-    (1 - basicCard.yearlyTotal / (basicCard.priceMonthly * 12)) * 100,
+  // Annual billing was withdrawn on 2026-09-07, so there is no yearly saving to
+  // compute any more. What still matters is that the copy quotes the MATRIX
+  // price rather than a literal — the original point of QA D10.
+  check(
+    "termsFor quotes the monthly price from the matrix",
+    termsFor(basicCard).includes(String(PLANS.basic.priceMonthly)),
+    termsFor(basicCard),
   );
   check(
-    "yearlySavingsPercent(basic) matches the matrix formula",
-    yearlySavingsPercent(basicCard) === expectedBasic,
-    `${yearlySavingsPercent(basicCard)}% vs ${expectedBasic}%`,
-  );
-  check(
-    "termsFor(yearly) quotes the computed saving",
-    termsFor(basicCard, "yearly").includes(`you save ${expectedBasic}%`),
-    termsFor(basicCard, "yearly"),
-  );
-  // Synthetic plan proves the % is computed, not the 18% literal it used to be.
-  const synthetic = { ...basicCard, priceMonthly: 10, yearlyTotal: 60 };
-  check("synthetic 10/mo vs 60/yr → 50%", yearlySavingsPercent(synthetic) === 50);
-  check(
-    "savingsBadgeLabel derives from the plans passed in",
-    savingsBadgeLabel([synthetic]) === "Save 50%",
-    String(savingsBadgeLabel([synthetic])),
-  );
-  check(
-    "badge label reflects the real matrix",
-    savingsBadgeLabel([cardFor("basic"), cardFor("pro"), cardFor("plus")])?.includes("%") === true,
-    String(savingsBadgeLabel([cardFor("basic"), cardFor("pro"), cardFor("plus")])),
+    "termsFor says monthly, never yearly",
+    termsFor(basicCard).includes("/month") && !/year/i.test(termsFor(basicCard)),
+    termsFor(basicCard),
   );
 
   const overageQ = (rate: number | null) => faqItems(rate)[1][1];

@@ -68,58 +68,81 @@ function fnBody(source: string, name: string): string {
 
 console.log("\nWidget mobile-viewport contract\n");
 
-// ── 1. the panel tracks the VISUAL viewport's origin, not just its size ─────
-const sync = fnBody(js, "syncViewport");
-ok("syncViewport exists", sync.length > 0);
+// ── 1. the panel's box is written from the VISUAL viewport ──────────────────
+const apply = fnBody(js, "applyViewport");
+ok("applyViewport exists", apply.length > 0);
 ok(
-  "syncViewport reads visualViewport.offsetTop",
-  /offsetTop/.test(sync),
-  "height alone does not move the panel — this is the bug that keeps coming back",
+  "it reads visualViewport width, height and both offsets",
+  /vv\.width/.test(apply) &&
+    /vv\.height/.test(apply) &&
+    /vv\.offsetLeft/.test(apply) &&
+    /vv\.offsetTop/.test(apply),
+  "height alone resizes the box and moves it not at all — the original bug",
 );
-ok("syncViewport reads visualViewport.offsetLeft", /offsetLeft/.test(sync));
-ok("syncViewport writes top", /\btop\s*=/.test(sync));
-ok("syncViewport writes left", /\bleft\s*=/.test(sync));
-ok("syncViewport writes height", /\bheight\s*=/.test(sync));
-ok("syncViewport writes width", /\bwidth\s*=/.test(sync));
+ok("it writes width and height", /\bwidth\s*=\s*w/.test(apply) && /\bheight\s*=\s*h/.test(apply));
 ok(
-  "syncViewport releases bottom/right",
-  /bottom\s*=\s*"auto"/.test(sync) && /right\s*=\s*"auto"/.test(sync),
+  "it releases bottom/right",
+  /bottom\s*=\s*"auto"/.test(apply) && /right\s*=\s*"auto"/.test(apply),
   "inset:0 plus an explicit height is over-constrained; the browser drops an edge",
 );
 ok(
-  "syncViewport clears every property when not applicable",
-  /s\.top\s*=\s*s\.left\s*=\s*s\.right\s*=\s*s\.bottom\s*=\s*s\.width\s*=\s*s\.height\s*=\s*""/.test(
-    sync,
+  "the offset is applied as a transform, not as top",
+  /transform\s*=\s*[^;]*translate3d/.test(apply) && /s\.top\s*=\s*"0px"/.test(apply),
+  "moving the layout box restarts Safari's own scroll-into-view — a feedback loop",
+);
+ok(
+  "it clears every property, transform included, when not applicable",
+  /s\.top\s*=\s*s\.left\s*=\s*s\.right\s*=\s*s\.bottom\s*=\s*s\.width\s*=\s*s\.height\s*=\s*s\.transform\s*=\s*""/.test(
+    apply,
   ),
   "a stale inline top/width survives into the desktop layout after a rotate",
 );
+ok(
+  "it writes only when the geometry actually changed",
+  /geometry === appliedGeometry\) return/.test(apply),
+  "a write every frame would thrash layout for no reason",
+);
+ok(
+  "it re-pins the thread only when the panel SHRANK",
+  /!grew && state\.screen === "chat"/.test(apply),
+  "scrolling on the way back out fights a shopper who scrolled up to read",
+);
 
-// ── 2. the visualViewport listeners have something to write ─────────────────
-const bind = fnBody(js, "bindViewport");
-ok("bindViewport binds resize", /addEventListener\("resize"/.test(bind));
+// ── 2. the geometry is READ every frame, never waited for ───────────────────
+// Two event-driven attempts failed on real hardware: Safari's resize can carry
+// mid-animation numbers and then stop, so the panel stayed wrong until the
+// shopper typed (the caret scroll finally produced a settled event). Reading
+// the viewport directly removes every timing assumption at once.
+const loop = fnBody(js, "startViewportLoop");
+ok("startViewportLoop exists", loop.length > 0);
 ok(
-  "bindViewport binds scroll",
-  /addEventListener\("scroll"/.test(bind),
-  "scroll is what changes offsetTop while Safari settles",
+  "the loop re-reads on every animation frame",
+  /requestAnimationFrame/.test(loop) && /applyViewport\(\)/.test(loop),
 );
 ok(
-  "the scroll handler repositions (not a no-op)",
-  /addEventListener\("scroll",\s*syncViewportFrame\)/.test(bind),
-  "it was previously bound to a height-only handler, so the listener did nothing",
+  "the loop is single-flighted",
+  /if \(vvLoop !== null\) return;/.test(loop),
+  "a second loop would double every write",
+);
+ok("the loop is cancellable", /cancelAnimationFrame/.test(fnBody(js, "stopViewportLoop")));
+ok(
+  "the loop starts when the panel opens",
+  /startViewportLoop\(\);/.test(fnBody(js, "openPanel")),
 );
 ok(
-  "listeners are removed on unbind",
-  /removeEventListener\("resize"/.test(bind) && /removeEventListener\("scroll"/.test(bind),
+  "the loop stops when the panel closes",
+  /stopViewportLoop\(\);/.test(fnBody(js, "closePanel")),
+  "an rAF loop must not outlive the modal that needs it",
 );
 ok(
-  "a pending animation frame is cancelled on unbind",
-  /cancelAnimationFrame/.test(bind),
-  "an in-flight frame would write a stale geometry after close",
+  "the panel's geometry does not depend on focus events",
+  !/watchKeyboard/.test(js),
+  "focus timing was the assumption that failed twice",
 );
 ok(
-  "writes are coalesced to one per frame",
-  /requestAnimationFrame/.test(fnBody(js, "syncViewportFrame")),
-  "unthrottled writes trail the viewport by a paint — the visible jitter",
+  "the diagnostic overlay is opt-in only",
+  /ccdebug=1/.test(js) && /if \(dbgEl \|\| !debugEnabled\(\)\) return;/.test(js),
+  "it must never render for a shopper",
 );
 
 // ── 3. the scroll lock has to hold on iOS ───────────────────────────────────
@@ -144,12 +167,16 @@ ok(
 // ── 4. teardown leaves no inline geometry behind ────────────────────────────
 const close = fnBody(js, "closePanel");
 ok(
-  "closePanel clears all six geometry properties",
-  /ps\.top\s*=\s*ps\.left\s*=\s*ps\.right\s*=\s*ps\.bottom\s*=\s*ps\.width\s*=\s*ps\.height\s*=\s*""/.test(
+  "closePanel clears all seven geometry properties",
+  /ps\.top\s*=\s*ps\.left\s*=\s*ps\.right\s*=\s*ps\.bottom\s*=\s*ps\.width\s*=\s*ps\.height\s*=\s*ps\.transform\s*=\s*""/.test(
     close,
   ),
 );
-ok("closePanel unbinds the viewport listeners", /vvUnbind\(\)/.test(close));
+ok(
+  "closePanel resets the applied-geometry memo",
+  /appliedGeometry = "";/.test(close),
+  "otherwise the next open sees its own stale value and skips the first write",
+);
 ok("closePanel releases the scroll lock", /scrollUnlock\(\)/.test(close));
 ok("closePanel restores the viewport meta", /viewportMetaRestore\(\)/.test(close));
 

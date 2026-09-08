@@ -261,6 +261,69 @@ async function main(): Promise<void> {
       p.location ?? "",
     );
 
+    // J-11 (2026-09-07, reported from the live app). Clicking the app name in
+    // the Shopify admin opened the MARKETING page — store-domain box and
+    // "Install from the Shopify App Store" band — to a merchant who already had
+    // the app installed, inside their own admin. The redirect above keys on
+    // `shop` alone, and that entry arrives with `host` instead. `host` is
+    // base64 of `admin.shopify.com/store/<store>`, so the shop is recoverable.
+    const b64 = (s: string) => Buffer.from(s).toString("base64");
+    const adminHost = b64("admin.shopify.com/store/dev-shop");
+    const fromAdmin = await probe(`/?host=${encodeURIComponent(adminHost)}&embedded=1`);
+    ok(
+      "/ with host but no shop redirects into the app",
+      fromAdmin.status === 302 && (fromAdmin.location ?? "").startsWith("/app"),
+      `${fromAdmin.status} → ${fromAdmin.location ?? "(none)"}`,
+    );
+    ok(
+      "…and recovers the shop from host",
+      /shop=dev-shop\.myshopify\.com/.test(fromAdmin.location ?? ""),
+      fromAdmin.location ?? "",
+    );
+    // Embedded with an unreadable host: still never the install card in an
+    // iframe — /app can authenticate from the session token by itself.
+    const badHost = await probe("/?host=zzz%21%21&embedded=1");
+    ok(
+      "/ embedded with an unreadable host still leaves the marketing page",
+      badHost.status === 302 && (badHost.location ?? "").startsWith("/app"),
+      `${badHost.status} → ${badHost.location ?? "(none)"}`,
+    );
+    // A host naming somewhere else must NOT yield a shop domain — that would
+    // send a merchant to another store's install screen.
+    const foreign = await probe(`/?host=${encodeURIComponent(b64("evil.example.com/store/x"))}`);
+    ok(
+      "a foreign host is not decoded into a shop",
+      foreign.status === 200 || !/shop=/.test(foreign.location ?? ""),
+      `${foreign.status} → ${foreign.location ?? "(none)"}`,
+    );
+    // The public page must still exist for real visitors.
+    const publicVisit = await probe("/");
+    ok("the marketing page still serves a plain visitor", publicVisit.status === 200, String(publicVisit.status));
+
+    // J-12. The APP NAME in the admin sidebar is itself a link, and per the App
+    // nav reference its target defaults to "/" — this app's public marketing
+    // page. Without a rel="home" override, clicking the app name took an
+    // installed merchant to the store-domain box and the "Install from the
+    // Shopify App Store" band, inside their own admin. This was the actual
+    // reported defect; the host-decoding redirect above does NOT cover it,
+    // because that click carries neither `shop` nor `host`.
+    const layout = readFileSync(join(ROUTES_DIR, "app.tsx"), "utf-8");
+    ok(
+      "the app nav declares a home link",
+      /rel:\s*"home"/.test(layout),
+      'without it the app name points at "/" — the marketing page',
+    );
+    ok(
+      "the home link targets /app",
+      /<s-link href="\/app" \{\.\.\.HOME_REL\}>/.test(layout),
+      "rel=home must name the app's real home route",
+    );
+    ok(
+      "only one home link exists",
+      (layout.match(/rel:\s*"home"/g) || []).length === 1,
+      'the App nav reference: "Only one link should have rel=\'home\'"',
+    );
+
     // Every declared OAuth redirect URL must have a route behind it.
     const start = toml.indexOf("redirect_urls = [");
     const block = start === -1 ? "" : toml.slice(start, toml.indexOf("]", start));

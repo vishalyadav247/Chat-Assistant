@@ -566,6 +566,45 @@ model PlanUsage {
   @@map("plan_usage")
 }
 
+/// Bonus quota granted to ONE shop by an operator (spec 15).
+///
+/// A LEDGER, not a counter on Shop. Rows so a grant can be audited (who, why,
+/// when), expired in batches, and granted twice without clobbering the first.
+///
+/// Spent AFTER the plan allowance and BEFORE overage: credits are free
+/// capacity, so consuming them after billing had started would charge a
+/// merchant for the conversations the grant was meant to cover.
+model QuotaGrant {
+  id     String @id @default(cuid())
+  shopId String
+  /// Which quota this tops up: "conversations", "products_synced", …
+  /// (QuotaDimension in plan-shared.ts).
+  ///
+  /// The two kinds behave differently and deliberately so: `conversations` is a
+  /// METER, so a grant is consumed one at a time and runs out. Every other
+  /// dimension is a CEILING ("at most N products synced"), so a grant simply
+  /// raises the cap for as long as it is live and never depletes.
+  dimension String @default("conversations")
+  /// Amount granted. Immutable — `remaining` is what moves.
+  amount Int
+  /// How much of this grant is still in force. For a METER it is decremented as
+  /// conversations are served past the plan quota. For a CEILING it stays at
+  /// `amount` until the grant is withdrawn or expires.
+  remaining Int
+  /// Operator-facing note: why this was granted. Shown in the admin list.
+  reason    String   @default("")
+  /// Who granted it (AdminUser email/label at grant time, not a live FK — the
+  /// record must survive the operator being removed).
+  grantedBy String   @default("")
+  /// Null = never expires. Past ⇒ ignored by every read, without deleting the
+  /// row, so the history stays auditable.
+  expiresAt DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([shopId, dimension, expiresAt])
+  @@map("quota_grants")
+}
+
 // Per-shop LLM token consumption, rolled up daily (spec 19 · admin usage
 // analytics). One row per shop × UTC day × model × purpose. Written
 // fire-and-forget from the LLM seam — never blocks a shopper's chat.

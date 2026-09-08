@@ -89,7 +89,7 @@ export async function usageBalance(shopId: string): Promise<UsageBalance> {
     select: { domain: true, plan: true, subscriptionId: true, usageLineItemId: true },
   });
   if (!shop?.usageLineItemId || !shop.subscriptionId) {
-    // No usage line at all (Free, yearly, or a subscription that predates the
+    // No usage line at all (Free, a legacy annual row, or a subscription that predates the
     // line). Nothing can be billed, so there is no headroom to report.
     const value: UsageBalance = { capped: 0, used: 0, remaining: 0, unknown: false };
     cache.set(id, { value, at: Date.now() });

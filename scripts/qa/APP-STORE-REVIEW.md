@@ -78,7 +78,7 @@
   `app_subscriptions/update` webhook derives the plan from the subscription name only).
   `admin.plans.tsx` edits the plan *matrix*, never `Shop.plan`, and is `requireAdminUser` +
   same-origin gated.
-- `test: true` is `NODE_ENV !== "production" || billingForceTestCharges` — correctly gated, not hardcoded.
+- `test: true` is `NODE_ENV !== "production" || ShopPlan.partnerDevelopment` (`shouldCreateTestCharge`) — derived per shop, never a global switch. The old `billingForceTestCharges` operator toggle was removed 2026-09-07: left on it created EVERY merchant subscription as a test charge and Shopify billed none of them, silently. Reviewers check the production app on a dev store, which the detection covers. Fails CLOSED (lookup error ⇒ real charge).
 - **1.2.2 accept/decline + resubscribe after reinstall** — PASS (code): decline returns to
   `/app/plan-usage?billing_error=1`; reinstall leaves the shop on Free with no stale
   `subscriptionId`, so the plan page offers a fresh charge (verified live, §8 of the lifecycle test).

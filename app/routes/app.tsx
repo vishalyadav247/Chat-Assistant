@@ -35,6 +35,21 @@ import appLoadingStylesHref from "../components/app-loading.css?url";
 /** Merchant-facing app name. Also what the admin calls the app (see meta). */
 export const APP_NAME = "ChatConvert";
 
+/**
+ * `rel="home"` for the app-name link, spread because it does not typecheck.
+ *
+ * `rel` is an APP BRIDGE attribute, read by `s-app-nav` and documented on the
+ * App nav reference. `@shopify/polaris-types` describes the POLARIS `s-link`,
+ * which has no `rel` — so the two disagree and `tsc` rejects the literal even
+ * though the attribute is correct and required.
+ *
+ * Spread as an untyped record instead. `s-link` is a custom element, and React
+ * forwards unknown string props to custom elements as plain attributes, so this
+ * is a types workaround only: the rendered DOM is `rel="home"` either way.
+ * Delete it if the Polaris types ever gain the property.
+ */
+const HOME_REL = { rel: "home" } as Record<string, string>;
+
 const NAV: Array<{ href: string; label: string; permission: Permission; icon: string }> = [
   { href: "/app", label: "Dashboard", permission: "dashboard", icon: "home" },
   { href: "/app/inbox", label: "Inbox", permission: "inbox", icon: "chat" },
@@ -171,6 +186,27 @@ export default function App() {
         <SurfaceProvider surface="admin">
           <DateTimeProvider prefs={data.dateTimePrefs}>
             <s-app-nav>
+              {/*
+                rel="home" is load-bearing, not decoration.
+
+                The app name in the admin sidebar is itself a link, and its
+                target defaults to "/" — this app's PUBLIC MARKETING PAGE. So
+                clicking the app name took an installed merchant to the
+                store-domain box and the "Install from the Shopify App Store"
+                band, inside their own admin.
+
+                Per the App nav reference: "The app name in the sidebar already
+                links to your app's home route, which defaults to /… If your
+                home page is at a different path (for example, /app), add an
+                s-link with rel='home' to override the default and hide it from
+                the rendered menu."
+
+                Hidden from the menu, so the visible "Dashboard" entry below
+                stays. Only one link may carry rel="home".
+              */}
+              <s-link href="/app" {...HOME_REL}>
+                {APP_NAME}
+              </s-link>
               {NAV.map((item) => (
                 <s-link key={item.href} href={item.href}>
                   {item.label}

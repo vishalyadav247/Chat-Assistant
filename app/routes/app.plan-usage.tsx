@@ -19,11 +19,9 @@ import {
   GATED_FEATURES,
   PLANS,
   QUOTA_DIMENSIONS,
-  displayQuota,
   isUnlimitedQuota,
   offeredPlans,
   overageRate,
-  yearlyBillingEnabled,
   type GatedFeature,
   type PlanDefinition,
   type QuotaDimension,
@@ -37,7 +35,6 @@ import {
   isPaidPlan,
   nextUsageCap,
   raiseUsageCap,
-  yearlyTotal,
 } from "../lib/billing/shopify-billing.server";
 import { QuotaMeter } from "../components/QuotaMeter";
 import {
@@ -209,8 +206,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     name: def.name,
     description: PLAN_DESCRIPTIONS[def.id] ?? "",
     priceMonthly: def.priceMonthly,
-    priceYearlyPerMonth: def.priceYearlyPerMonth,
-    yearlyTotal: def.id === "free" ? 0 : yearlyTotal(def.id),
     trialDays: trialDays[def.id] ?? 0,
     overagePerConversation: def.overagePerConversation,
     bullets: bulletsFor(def),
@@ -226,7 +221,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     activePromo,
     couponsEnabled: runtimeConfig().promoCodesEnabled,
     usage,
-    quota: displayQuota(plan, "conversations"),
+    // Plan allowance PLUS any live bonus grant — the SAME number the meter is
+    // held to. `status.quota` already sums them; reading the plan alone here is
+    // what made the count exclude a bonus the banner was announcing.
+    quota: status.quota,
     // Everything the merchant needs to understand metering: how close they are,
     // whether they are being charged, and whether the AI has stopped because
     // their approved spend limit is full (spec 15, 2026-09-03).
@@ -234,10 +232,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     // Computed here: nextUsageCap lives in a .server module and the banner is
     // client code.
     nextUsageCap: nextUsageCap(status.capped),
-    // Annual billing can be withdrawn from /admin/plans (yearly subscriptions
-    // can never carry overage — see plans.server.ts). A shop already ON annual
-    // still sees the toggle, so its own billing is not misrepresented.
-    yearlyEnabled: yearlyBillingEnabled() || shop?.billingInterval === "yearly",
     // FAQ copy reads the overage rate from the matrix, never a literal (D10).
     // It must reflect what this shop can ACTUALLY be billed, not just the
     // tier's headline rate: Shopify rejects usage line items on ANNUAL
@@ -300,13 +294,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const interval = String(formData.get("interval") ?? "monthly");
     if (!isBillingInterval(interval)) {
       return { ok: false as const, error: "Invalid billing interval." };
-    }
-    // THE guard for the yearly switch. Hiding the toggle is presentation; the
-    // interval is a form field, so a stale tab or a crafted POST would still
-    // reach appSubscriptionCreate with "yearly" and buy an annual plan the
-    // operator has withdrawn.
-    if (interval === "yearly" && !yearlyBillingEnabled()) {
-      return { ok: false as const, error: "Annual billing isn't available. Choose monthly." };
     }
     if (plan === "free") {
       const result = await downgradeToFree(shopDomain);
@@ -393,9 +380,6 @@ export default function PlanUsagePage() {
   const shopify = useAppBridge();
   const fetcher = useFetcher<typeof action>();
 
-  const [interval, setInterval] = useState<"monthly" | "yearly">(
-    data.billingInterval === "yearly" ? "yearly" : "monthly",
-  );
   const [subscribingPlan, setSubscribingPlan] = useState<string | null>(null);
   const [raisingCap, setRaisingCap] = useState(false);
   const [promo, setPromo] = useState<PlanPromo | null>(null);
@@ -443,11 +427,10 @@ export default function PlanUsagePage() {
       {
         intent: "subscribe",
         plan: planId,
-        interval,
         // Carry an already-redeemed code into the new subscription so an
-        // upgrade doesn't silently drop a "forever" discount and force the
+        // upgrade does not silently drop a "forever" discount and force the
         // merchant to retype it. The server re-validates it against the
-        // chosen plan+interval either way.
+        // chosen plan either way.
         code: promo?.code ?? data.activePromo?.code ?? "",
       },
       { method: "post" },
@@ -541,7 +524,8 @@ export default function PlanUsagePage() {
             label="conversations used"
           />
           <s-paragraph>
-            You&apos;re at <b>{pct}%</b> of the {data.planName} allowance.
+            You&apos;re at <b>{pct}%</b> of{" "}
+            {usage.credits > 0 ? "your allowance including bonus" : `the  allowance`}.
           </s-paragraph>
           {usage.overage > 0 ? (
             <s-paragraph>
@@ -550,6 +534,17 @@ export default function PlanUsagePage() {
               {usage.rate ? ` at $${usage.rate.toFixed(2)} each` : ""} — <b>${usage.spend.toFixed(2)}</b>{" "}
               of your ${usage.capped} limit for this billing cycle.
             </s-paragraph>
+          ) : null}
+          {/* A silent balance would make the merchant's own numbers look wrong:
+              they would pass their allowance and carry on working with nothing
+              on screen explaining why. */}
+          {usage.credits > 0 ? (
+            <s-banner tone="success">
+              The count above includes <b>{usage.credits.toLocaleString("en-US")}</b> bonus
+              conversation{usage.credits === 1 ? "" : "s"} on top of your {data.planName} plan, added
+              by the ChatConvert team. They are never charged, and your limit returns to the plan
+              amount if they are withdrawn.
+            </s-banner>
           ) : null}
         </s-section>
 
@@ -577,9 +572,6 @@ export default function PlanUsagePage() {
           <PlanCards
             plans={data.plans}
             currentPlan={data.plan}
-            interval={interval}
-            onIntervalChange={setInterval}
-            yearlyEnabled={data.yearlyEnabled}
             onSelect={
               data.billingManageable
                 ? selectPlan

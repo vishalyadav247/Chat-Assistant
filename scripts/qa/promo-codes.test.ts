@@ -51,9 +51,6 @@ async function main() {
   const { default: db } = await import("../../app/db.server");
   const promo = await import("../../app/lib/billing/promo-codes.server");
   const { PLANS } = await import("../../app/lib/billing/plans.server");
-  const { yearlyTotal } = await import(
-    "../../app/lib/billing/shopify-billing.server"
-  );
   const { promoPreviewFor, promoPriceFor } = await import(
     "../../app/components/PlanCards"
   );
@@ -80,7 +77,6 @@ async function main() {
   } = promo;
 
   const BASIC_MONTHLY = PLANS.basic.priceMonthly;
-  const PRO_YEARLY = yearlyTotal("pro");
 
   // ── fixtures ────────────────────────────────────────────────────────────
   async function cleanup() {
@@ -157,10 +153,10 @@ async function main() {
   });
   const inactive = await makeCode("INACTIVE", { active: false });
   const once = await makeCode("ONCE", { maxRedemptions: 1 });
-  const proYearly = await makeCode("PROYEAR", {
-    plans: ["pro"],
-    intervals: ["yearly"],
-  });
+  const proOnly = await makeCode("PROONLY", { plans: ["pro"] });
+  // Written before annual billing was withdrawn (2026-09-07). The column still
+  // exists, so rows like this survive — and must now match nothing at all.
+  const legacyYearly = await makeCode("LEGACYYEAR", { intervals: ["yearly"] });
   const tooBig = await makeCode("TOOBIG", {
     kind: "fixed",
     value: BASIC_MONTHLY + 5,
@@ -281,37 +277,39 @@ async function main() {
   check("validate without a shopId throws (tenancy guard)", threw);
 
   // ── 3. scope ────────────────────────────────────────────────────────────
-  console.log("\n3. scope: plan, interval, discount larger than the charge");
+  console.log("\n3. scope: plan, legacy interval, discount larger than the charge");
   resetPromoValidationThrottle();
   result = await validatePromoCode({
     shopId: shopA,
-    code: proYearly.code,
+    code: proOnly.code,
     plan: "basic",
-    interval: "yearly",
   });
   check(
     "wrong plan is refused, naming the allowed plan",
     !result.ok && result.error.includes(PLANS.pro.name),
     result.ok ? "accepted!" : result.error,
   );
+  resetPromoValidationThrottle();
   result = await validatePromoCode({
     shopId: shopA,
-    code: proYearly.code,
+    code: proOnly.code,
     plan: "pro",
-    interval: "monthly",
+  });
+  check("an in-scope plan is accepted", result.ok);
+  // Monthly is the only interval now, so a code scoped to "yearly" is dead. It
+  // must be REFUSED rather than treated as unscoped — the latter would hand
+  // every merchant a discount that was never meant for them.
+  resetPromoValidationThrottle();
+  result = await validatePromoCode({
+    shopId: shopA,
+    code: legacyYearly.code,
+    plan: "pro",
   });
   check(
-    "wrong interval is refused, naming the allowed term",
-    !result.ok && result.error.includes("yearly"),
+    "a legacy yearly-only code can no longer apply to anything",
+    !result.ok,
     result.ok ? "accepted!" : result.error,
   );
-  result = await validatePromoCode({
-    shopId: shopA,
-    code: proYearly.code,
-    plan: "pro",
-    interval: "yearly",
-  });
-  check("in-scope plan+interval is accepted", result.ok);
 
   resetPromoValidationThrottle();
   result = await validatePromoCode({
@@ -334,7 +332,6 @@ async function main() {
         shopId: shopB,
         code: tooBig.code,
         plan: "pro",
-        interval: "yearly",
       })
     ).ok,
   );
@@ -343,12 +340,10 @@ async function main() {
     promoApplicabilityProblem(
       { plans: ["pro"], intervals: [], kind: "percent", value: 20 },
       "basic",
-      "monthly",
     ) === "scope" &&
       promoApplicabilityProblem(
         { plans: [], intervals: [], kind: "fixed", value: BASIC_MONTHLY },
         "basic",
-        "monthly",
       ) === "too-large",
   );
 
@@ -376,12 +371,8 @@ async function main() {
     JSON.stringify(fixInput),
   );
   check(
-    "intervalPrice(basic, monthly) matches the plan matrix",
-    intervalPrice("basic", "monthly") === BASIC_MONTHLY,
-  );
-  check(
-    "intervalPrice(pro, yearly) is the yearly total",
-    intervalPrice("pro", "yearly") === PRO_YEARLY,
+    "intervalPrice(basic) matches the plan matrix",
+    intervalPrice("basic") === BASIC_MONTHLY,
   );
   check(
     "discountedPrice(20%, basic monthly) is 80% of the price",
@@ -394,8 +385,6 @@ async function main() {
     name: PLANS.basic.name,
     description: "",
     priceMonthly: BASIC_MONTHLY,
-    priceYearlyPerMonth: PLANS.basic.priceYearlyPerMonth,
-    yearlyTotal: yearlyTotal("basic"),
     trialDays: PLANS.basic.trialDays,
     overagePerConversation: PLANS.basic.overagePerConversation,
     bullets: [],
@@ -412,11 +401,11 @@ async function main() {
   };
   check(
     "card preview (monthly) matches discountedPrice",
-    promoPriceFor(card, "monthly", clientPromo) ===
+    promoPriceFor(card, clientPromo) ===
       discountedPrice(pct20Summary.promo, BASIC_MONTHLY),
-    String(promoPriceFor(card, "monthly", clientPromo)),
+    String(promoPriceFor(card, clientPromo)),
   );
-  const bigPreview = promoPreviewFor(card, "monthly", {
+  const bigPreview = promoPreviewFor(card, {
     ...clientPromo,
     kind: "fixed",
     value: BASIC_MONTHLY + 5,
@@ -431,12 +420,11 @@ async function main() {
     promoApplicabilityProblem(
       { plans: [], intervals: [], kind: "fixed", value: BASIC_MONTHLY + 5 },
       "basic",
-      "monthly",
     ) === "too-large",
   );
   check(
     "card preview returns not-applicable for an out-of-scope plan",
-    promoPreviewFor(card, "monthly", { ...clientPromo, plans: ["pro"] }).kind ===
+    promoPreviewFor(card, { ...clientPromo, plans: ["pro"] }).kind ===
       "not-applicable",
   );
 
@@ -539,7 +527,6 @@ async function main() {
     shopId: shopA,
     code: pct20.code,
     plan: "plus",
-    interval: "yearly",
   });
   check(
     "upgrading: the code is accepted again (defect 4 — used to be refused)",
@@ -551,7 +538,7 @@ async function main() {
     promoId: pct20.id,
     subscriptionId: subA2,
     plan: "plus",
-    interval: "yearly",
+    interval: "monthly",
   });
   check(
     "badge survives the in-flight upgrade (old subscription still discounted)",
@@ -566,7 +553,7 @@ async function main() {
     row.subscriptionId === subA2 &&
       row.status === "redeemed" &&
       row.plan === "plus" &&
-      row.interval === "yearly",
+      row.interval === "monthly",
     `${row.subscriptionId}/${row.status}/${row.plan}/${row.interval}`,
   );
   check(
@@ -724,7 +711,7 @@ async function main() {
   const stale2 = await db.promoRedemption.create({
     data: {
       shopId: shopF,
-      promoCodeId: proYearly.id,
+      promoCodeId: proOnly.id,
       plan: "pro",
       interval: "yearly",
       status: "pending",
@@ -736,7 +723,7 @@ async function main() {
   const oldRedeemed = await db.promoRedemption.create({
     data: {
       shopId: shopG,
-      promoCodeId: proYearly.id,
+      promoCodeId: proOnly.id,
       plan: "pro",
       interval: "yearly",
       status: "redeemed",

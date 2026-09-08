@@ -46,7 +46,10 @@ export function TrainingProductsTab(props: {
   metafieldSyncAt: string | null;
   /** products_synced quota (spec 15) — enforced during sync, shown here. */
   syncedUsed: number;
+  /** Plan cap PLUS any live bonus grant — what the sync actually enforces. */
   syncedQuota: number;
+  /** Of that, how much came from an operator grant (0 = none). */
+  syncedBonus: number;
   syncedNextPlan: string | null;
   /** Plan that raises the metafields_enabled cap, or null at the top tier. */
   metafieldNextPlan: string | null;
@@ -115,6 +118,16 @@ export function TrainingProductsTab(props: {
             label="products synced"
             nextPlan={props.syncedNextPlan}
           />
+{/* The meter above already COUNTS the bonus; this says where the extra
+              room came from. Same treatment as the conversations banner on Plan
+              & Usage, so the two screens explain a grant the same way. */}
+          {props.syncedBonus > 0 ? (
+            <s-banner tone="success">
+              Includes <b>{props.syncedBonus.toLocaleString("en-US")}</b> bonus product
+              {props.syncedBonus === 1 ? "" : "s"} on top of your plan, added by the ChatConvert
+              team. Your limit returns to the plan amount if they are withdrawn.
+            </s-banner>
+          ) : null}
           {props.syncedUsed >= props.syncedQuota ? (
             <PlanBanner
               plan={props.syncedNextPlan}

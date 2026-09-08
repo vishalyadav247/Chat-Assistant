@@ -35,6 +35,10 @@ export interface StoredMetafield {
   type: string;
   /** Raw Shopify value (string form), capped at RAW_VALUE_CAP chars. */
   value: string;
+  /** Rendered text of a resolved reference (metaobject displayName + fields),
+   *  set by resolveMetaobjectRefs at sync/apply time. Reference entries render
+   *  ONLY from this — never from the raw gid in `value`. */
+  resolved?: string;
 }
 
 /** Definition row as listed in the modal. */
@@ -57,10 +61,13 @@ const RENDERED_VALUE_CAP = 1500;
 const TEXT_CAP = 8000;
 
 /**
- * Metafield types the AI can learn from (rendered to plain text). Reference
- * types (product/file/metaobject/page…), JSON blobs and colors carry no
- * shopper-readable meaning without extra resolution and are listed as
- * "Not supported" (backlog: metaobject resolution).
+ * Metafield types the AI can learn from (rendered to plain text). Most
+ * reference types (product/file/page…) and JSON blobs carry no shopper-readable
+ * meaning without extra resolution and stay "Not supported".
+ * `metaobject_reference` (and its list form) IS supported since 2026-09-07:
+ * sync resolves the referenced metaobjects' fields into text
+ * (`resolveMetaobjectRefs`) and stores it on the entry (`StoredMetafield.resolved`)
+ * — a Specifications or Ingredients metaobject becomes learnable text.
  */
 const SUPPORTED_BASE_TYPES = new Set([
   "single_line_text_field",
@@ -81,6 +88,7 @@ const SUPPORTED_BASE_TYPES = new Set([
   "money",
   "link",
   "color", // hex → nearest colour name (+ hex), see colorName()
+  "metaobject_reference", // rendered from StoredMetafield.resolved (sync-time resolution)
 ]);
 
 /** Small palette for hex → shopper-language colour names (nearest RGB). */
@@ -124,6 +132,10 @@ export function isSupportedMetafieldType(type: string): boolean {
   return SUPPORTED_BASE_TYPES.has(base);
 }
 
+export function isMetaobjectReferenceType(type: string): boolean {
+  return type === "metaobject_reference" || type === "list.metaobject_reference";
+}
+
 export function metafieldKey(owner: MetafieldOwner, namespace: string, key: string): string {
   return `${owner}:${namespace}.${key}`;
 }
@@ -131,7 +143,12 @@ export function metafieldKey(owner: MetafieldOwner, namespace: string, key: stri
 // ── Rendering ───────────────────────────────────────────────────────────────
 
 /** Plain-text rendering of one metafield value ("" when nothing usable). */
-export function renderMetafieldValue(type: string, raw: string): string {
+export function renderMetafieldValue(type: string, raw: string, resolved?: string): string {
+  // A metaobject reference's raw value is a gid (or a JSON list of gids) —
+  // meaningless to a shopper. Only sync-time resolution produces its text.
+  if (isMetaobjectReferenceType(type)) {
+    return (resolved ?? "").slice(0, RENDERED_VALUE_CAP);
+  }
   const value = raw ?? "";
   if (value.trim().length === 0) return "";
   if (type.startsWith("list.")) {
@@ -263,7 +280,7 @@ export function buildMetafieldText(
   for (const entry of sorted) {
     const def = enabled.get(metafieldKey(entry.owner, entry.namespace, entry.key));
     if (!def || !isSupportedMetafieldType(def.type)) continue;
-    const text = renderMetafieldValue(entry.type || def.type, entry.value);
+    const text = renderMetafieldValue(entry.type || def.type, entry.value, entry.resolved);
     if (!text) continue;
     lines.push(
       entry.owner === "variant" && entry.variant
@@ -321,7 +338,136 @@ export function parseStoredMetafields(json: unknown): StoredMetafield[] {
       key: m.key as string,
       type: typeof m.type === "string" ? m.type : "single_line_text_field",
       value: typeof m.value === "string" ? m.value : "",
+      resolved: typeof m.resolved === "string" ? m.resolved : undefined,
     }));
+}
+
+// ── Metaobject reference resolution (2026-09-07) ────────────────────────────
+// A metaobject_reference metafield's VALUE is just a gid; the shopper-readable
+// content (a Specifications or Ingredients metaobject's fields) lives one hop
+// away. Sync collects the distinct referenced ids for ENABLED reference
+// definitions, resolves them in one batched nodes(ids:) query (metaobjects are
+// shared across products, so a page of 100 products usually needs a handful of
+// ids), and stores the rendered text on the entry — everything downstream
+// (embedding text, keyword index + lexicon, LLM snippet, offline re-render on
+// toggle) then works unchanged. Requires the read_metaobjects scope; a shop
+// that authorised before the scope was declared fails open: the entry stays
+// unresolved and renders nothing, never the gid.
+
+const METAOBJECT_GID = /^gid:\/\/shopify\/Metaobject\/\d+$/;
+const RESOLVE_CHUNK = 100;
+/** One metaobject's rendered text cap; a list entry joins several. */
+const METAOBJECT_TEXT_CAP = 500;
+
+const RESOLVE_METAOBJECTS_QUERY = `#graphql
+  query ResolveMetaobjects($ids: [ID!]!) {
+    nodes(ids: $ids) {
+      ... on Metaobject { id displayName fields { key value type } }
+    }
+  }
+`;
+
+interface MetaobjectNode {
+  id: string;
+  displayName?: string | null;
+  fields?: Array<{ key: string; value: string | null; type: string }>;
+}
+
+/** The metaobject gids one entry references ([] for non-reference types). */
+export function metaobjectIdsIn(entry: StoredMetafield): string[] {
+  if (!isMetaobjectReferenceType(entry.type)) return [];
+  if (entry.type === "metaobject_reference") {
+    const gid = entry.value.trim();
+    return METAOBJECT_GID.test(gid) ? [gid] : [];
+  }
+  const list = parseJson<unknown[]>(entry.value);
+  return Array.isArray(list)
+    ? list.filter((v): v is string => typeof v === "string" && METAOBJECT_GID.test(v))
+    : [];
+}
+
+/** "ingredient_name" → "ingredient name". */
+function humanizeKey(key: string): string {
+  return key.replace(/[_-]+/g, " ").trim();
+}
+
+/**
+ * One metaobject → shopper-readable text: "DisplayName (field: value; …)".
+ * Field values go through the same scalar pipeline as metafields; fields that
+ * are themselves references or unsupported types are skipped — one level deep
+ * only, by design.
+ */
+export function renderMetaobject(node: MetaobjectNode): string {
+  const name = collapse(String(node.displayName ?? ""));
+  const parts: string[] = [];
+  for (const field of node.fields ?? []) {
+    if (isMetaobjectReferenceType(field.type) || !isSupportedMetafieldType(field.type)) continue;
+    const text = renderMetafieldValue(field.type, String(field.value ?? ""));
+    if (!text) continue;
+    // The display name is usually one of the fields — don't repeat it.
+    if (name && text === name) continue;
+    parts.push(`${humanizeKey(field.key)}: ${text}`);
+  }
+  const body = parts.join("; ");
+  const rendered = name && body ? `${name} (${body})` : name || body;
+  return rendered.slice(0, METAOBJECT_TEXT_CAP);
+}
+
+/** Minimal Admin GraphQL client shape — what unauthenticated.admin() returns. */
+export interface AdminGraphqlClient {
+  graphql(
+    query: string,
+    options?: { variables?: Record<string, unknown> },
+  ): Promise<{ json(): Promise<unknown> }>;
+}
+
+/**
+ * Fill `resolved` on every ENABLED metaobject-reference entry across the given
+ * products' metafield lists. Mutates entries in place; `cache` carries
+ * gid → rendered text across the pages of one sync run. Fails open per chunk:
+ * on any error the affected entries stay unresolved.
+ */
+export async function resolveMetaobjectRefs(
+  admin: AdminGraphqlClient,
+  entryLists: (StoredMetafield[] | undefined)[],
+  enabled: Map<string, { name: string; type: string }>,
+  cache: Map<string, string> = new Map(),
+): Promise<void> {
+  const pending: StoredMetafield[] = [];
+  const wanted = new Set<string>();
+  for (const list of entryLists) {
+    for (const entry of list ?? []) {
+      if (!isMetaobjectReferenceType(entry.type) || entry.resolved !== undefined) continue;
+      if (!enabled.has(metafieldKey(entry.owner, entry.namespace, entry.key))) continue;
+      const ids = metaobjectIdsIn(entry);
+      if (ids.length === 0) continue;
+      pending.push(entry);
+      for (const id of ids) if (!cache.has(id)) wanted.add(id);
+    }
+  }
+  if (pending.length === 0) return;
+
+  const ids = [...wanted];
+  for (let start = 0; start < ids.length; start += RESOLVE_CHUNK) {
+    const chunk = ids.slice(start, start + RESOLVE_CHUNK);
+    try {
+      const response = await admin.graphql(RESOLVE_METAOBJECTS_QUERY, { variables: { ids: chunk } });
+      const body = (await response.json()) as { data?: { nodes?: Array<MetaobjectNode | null> } };
+      // A deleted metaobject comes back null — its entries simply stay unresolved.
+      for (const node of body.data?.nodes ?? []) {
+        if (node?.id) cache.set(node.id, renderMetaobject(node));
+      }
+    } catch (error) {
+      logWarn("metaobject_resolve_failed", String(error).slice(0, 200), { ids: chunk.length });
+    }
+  }
+
+  for (const entry of pending) {
+    const texts = metaobjectIdsIn(entry)
+      .map((id) => cache.get(id))
+      .filter((t): t is string => Boolean(t));
+    if (texts.length > 0) entry.resolved = texts.join(", ").slice(0, RENDERED_VALUE_CAP);
+  }
 }
 
 // ── Definitions catalog ─────────────────────────────────────────────────────
@@ -509,6 +655,46 @@ export async function applyMetafieldSelection(shopId: string): Promise<{ changed
       metafields: true, metafieldText: true, contentHash: true,
     },
   });
+
+  // Reference entries synced BEFORE their definition was enabled carry no
+  // resolved text, and the offline re-render below cannot produce it. Resolve
+  // them now (batched, via the shop's offline token) and persist the enriched
+  // JSON; on any failure the render simply proceeds without them — the next
+  // full product sync resolves again.
+  if ([...enabled.values()].some((d) => isMetaobjectReferenceType(d.type))) {
+    const needs = products
+      .map((p) => ({ p, entries: parseStoredMetafields(p.metafields) }))
+      .filter(({ entries }) =>
+        entries.some(
+          (e) =>
+            isMetaobjectReferenceType(e.type) &&
+            e.resolved === undefined &&
+            enabled.has(metafieldKey(e.owner, e.namespace, e.key)) &&
+            metaobjectIdsIn(e).length > 0,
+        ),
+      );
+    if (needs.length > 0) {
+      try {
+        const shop = await db.shop.findUnique({ where: { id: shopId }, select: { domain: true } });
+        if (shop?.domain) {
+          const { unauthenticated } = await import("../../shopify.server");
+          const { admin } = await unauthenticated.admin(shop.domain);
+          await resolveMetaobjectRefs(admin, needs.map((n) => n.entries), enabled);
+          for (const { p, entries } of needs) {
+            if (!entries.some((e) => e.resolved !== undefined)) continue;
+            await db.product.updateMany({
+              where: { id: p.id, shopId },
+              data: { metafields: entries as unknown as Prisma.InputJsonValue },
+            });
+            p.metafields = entries as unknown as typeof p.metafields;
+          }
+        }
+      } catch (error) {
+        logWarn("metaobject_resolve_apply_failed", String(error).slice(0, 200), { shopId });
+      }
+    }
+  }
+
   const toEmbed: { id: string; text: string; hash: string }[] = [];
   for (const p of products) {
     const metafieldText = buildMetafieldText(parseStoredMetafields(p.metafields), enabled);

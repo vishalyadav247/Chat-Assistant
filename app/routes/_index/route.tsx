@@ -1,4 +1,9 @@
-import type { ActionFunctionArgs, LoaderFunctionArgs, MetaFunction } from "react-router";
+import type {
+  ActionFunctionArgs,
+  HeadersFunction,
+  LoaderFunctionArgs,
+  MetaFunction,
+} from "react-router";
 import { Form, redirect, useActionData, useLoaderData, useNavigation } from "react-router";
 
 import { runtimeConfig } from "../../lib/admin/runtime-config.server";
@@ -19,6 +24,42 @@ import styles from "./styles.module.css";
 // into the embedded app — that redirect below is load-bearing, and has to stay
 // AHEAD of the card so an install already in flight is never shown a form.
 
+/**
+ * `host` → `<store>.myshopify.com`, or null if it is not a shape we recognise.
+ *
+ * The param is base64 (sometimes url-safe, sometimes unpadded) of either
+ * `admin.shopify.com/store/<store>` or the older `<store>.myshopify.com/admin`.
+ * Both forms are accepted; anything else returns null rather than guessing,
+ * because a wrong shop domain here would send a merchant to another store's
+ * install screen.
+ */
+function shopDomainFromHost(host: string): string | null {
+  let decoded: string;
+  try {
+    const normalized = host.replace(/-/g, "+").replace(/_/g, "/");
+    decoded = Buffer.from(normalized, "base64").toString("utf-8");
+  } catch {
+    return null;
+  }
+  const viaAdmin = /^admin\.shopify\.com\/store\/([a-zA-Z0-9][a-zA-Z0-9-]*)\/?$/.exec(decoded);
+  if (viaAdmin) return `${viaAdmin[1]}.myshopify.com`;
+  const legacy = /^([a-zA-Z0-9][a-zA-Z0-9-]*\.myshopify\.com)\/admin\/?$/.exec(decoded);
+  return legacy ? legacy[1] : null;
+}
+
+/**
+ * Never cached.
+ *
+ * This URL answers differently depending on the query it arrives with — a
+ * marketing page for a visitor, a redirect into the app for a merchant coming
+ * from the admin. With no Cache-Control header the browser is free to apply
+ * heuristic caching, and a merchant whose browser had already stored the 200
+ * kept being served the install card after the redirect shipped: the fix was
+ * live on the server and invisible in the admin. Cheap insurance on a page
+ * that is one small document.
+ */
+export const headers: HeadersFunction = () => ({ "Cache-Control": "no-store" });
+
 export const meta: MetaFunction = () => [
   { title: "ChatConvert — AI product recommendations & support chat for Shopify" },
   {
@@ -32,6 +73,29 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
 
   if (url.searchParams.get("shop")) {
+    throw redirect(`/app?${url.searchParams.toString()}`);
+  }
+
+  // Arriving from inside the Shopify admin without a `shop` param.
+  //
+  // The redirect above keys on `shop` alone, so any admin entry that omits it
+  // fell through to the marketing card — a merchant who already has the app
+  // installed being shown a store-domain box and an "Install from the Shopify
+  // App Store" band, inside their own admin. `host` is the reliable signal:
+  // Shopify sends it on every embedded load, base64 of
+  // `admin.shopify.com/store/<store>`, so the shop can be recovered from it
+  // and the merchant sent where they were going.
+  const host = url.searchParams.get("host");
+  const embedded = url.searchParams.get("embedded") === "1" || url.searchParams.has("id_token");
+  const shopFromHost = host ? shopDomainFromHost(host) : null;
+  if (shopFromHost) {
+    const params = new URLSearchParams(url.searchParams);
+    params.set("shop", shopFromHost);
+    throw redirect(`/app?${params.toString()}`);
+  }
+  // Embedded but the host is unreadable: still never show the install card in
+  // an iframe. /app can authenticate from the session token on its own.
+  if (embedded) {
     throw redirect(`/app?${url.searchParams.toString()}`);
   }
 

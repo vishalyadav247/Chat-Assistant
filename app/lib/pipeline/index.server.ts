@@ -32,7 +32,7 @@ import {
   splitActionStream,
   type ChatAction,
 } from "./actions.server";
-import { splitPicksStream } from "./picks.server";
+import { splitDetailStream, splitPicksStream } from "./picks.server";
 import { route } from "./router.server";
 import { shopperContext } from "./shopper.server";
 import {
@@ -42,9 +42,16 @@ import {
   CURATED_CONFIRM_SYSTEM,
   curatedConfirmUser,
   languageInstruction,
+  PRODUCT_DETAIL,
   PRODUCT_RECOMMEND,
   QUESTION_ANSWER,
 } from "./prompts";
+import {
+  DETAIL_CANDIDATES,
+  detailSnippet,
+  isDetailFollowUp,
+  shownProducts,
+} from "./detail.server";
 import { logError } from "../log.server";
 import { createTrace, type Trace, type TraceStep, type TraceSummary } from "./trace.server";
 
@@ -693,6 +700,33 @@ export async function* runPipeline(
   });
 
   if (routed.intent === "buy") {
+    // A question ABOUT a product already on screen is not a request for more
+    // products (spec 03 delta 2026-09-07). The router cannot tell the two apart
+    // — both are `buy` — so the distinction is drawn here, and only when this
+    // conversation has actually shown cards. No cards, no check, no cost.
+    const shown = config.settings.learn.products
+      ? await shownProducts(shopId, convo.id)
+      : [];
+    if (shown.length > 0) {
+      const isDetail = await isDetailFollowUp(shopId, message, shown.map((p) => p.title));
+      trace.countLlm("router");
+      trace.step(
+        "detail_confirm",
+        "Follow-up about a product already shown?",
+        isDetail ? "hit" : "miss",
+        {
+          rule: "yes ⇒ answer about that product only; no ⇒ the buy lane, unchanged",
+          shown: shown.map((p) => p.title),
+        },
+      );
+      if (isDetail) {
+        yield* detailLane({
+          shopId, convoId: convo.id, config, message, shown,
+          personaPrompt, generationHistory, meterPromise, routed, track, trace,
+        });
+        return;
+      }
+    }
     yield* buyLane({
       shopId, convoId: convo.id, config, message, queryEmbedding,
       keywords: routed.keywords, priceMax: routed.price_max,
@@ -772,6 +806,100 @@ export function configuredTopicNamedBy(reason: string, topics: string[]): string
     if (topicWords.some((tw) => reasonWords.some((rw) => stem(rw) === stem(tw)))) return topic;
   }
   return null;
+}
+
+// ── Detail lane ─────────────────────────────────────────────────────────────
+/**
+ * "What is this one made of?" — a question about a product already on screen.
+ *
+ * Deliberately NOT a mode of the buy lane. That lane's job is deciding which of
+ * several retrieved products fit a request, and it carries a lot of tuned
+ * machinery to do it (relevance tiers, lexical anchors, pick constraints).
+ * Here the product is already chosen and nothing is retrieved, so every one of
+ * those guards would be answering a question nobody asked.
+ *
+ * Grounding is the shown set itself: the model can only speak about products
+ * this conversation already put in front of this shopper, so it cannot wander
+ * into the catalogue, and one card — the one being discussed — is all that is
+ * rendered.
+ */
+async function* detailLane(args: {
+  shopId: string;
+  convoId: string;
+  config: ShopConfig;
+  message: string;
+  shown: ProductCandidate[];
+  personaPrompt: string;
+  generationHistory: ChatMessage[];
+  meterPromise: Promise<unknown>;
+  routed: unknown;
+  track: TrackFn;
+  trace: Trace;
+}): AsyncIterable<PipelineFrame> {
+  const allowList = args.shown.slice(0, DETAIL_CANDIDATES).map((c, i) => ({
+    id: i + 1,
+    title: c.title,
+    price: formatMoney(c.price, args.config.currency),
+    details: detailSnippet(c),
+  }));
+
+  args.trace.step("detail_allow_list", "Products already shown to this shopper", "info", {
+    contract:
+      "the model may only answer about these rows, from this data; it may not retrieve, compare or suggest anything else",
+    products: allowList.map((p) => p.title),
+  });
+
+  const stream = splitDetailStream(
+    getLlmProvider().chatStream(
+      [
+        { role: "system", content: `${args.personaPrompt}\n${PRODUCT_DETAIL}` },
+        ...args.generationHistory,
+        {
+          role: "user",
+          content: `Products already shown: ${JSON.stringify(allowList)}\n\nShopper: ${args.message}`,
+        },
+      ],
+      { shopId: args.shopId, purpose: "reply" },
+      // Roomier than the buy lane's 110: a specification answer is the content
+      // here, not a caption under cards the shopper is reading anyway.
+      { temperature: 0.3, maxTokens: 180 },
+    ),
+  );
+  args.trace.countLlm("reply");
+
+  const resolveCards = async (): Promise<ProductCard[]> => {
+    const { parsed, line } = stream.result();
+    // An id outside the allow-list is ignored exactly as a stray pick is: the
+    // model names a row, code decides what that means.
+    const chosen =
+      parsed?.kind === "id" && parsed.id >= 1 && parsed.id <= allowList.length
+        ? args.shown[parsed.id - 1]
+        : null;
+    args.trace.step("detail_subject", "Product answered about", chosen ? "hit" : "miss", {
+      detailLine: line,
+      parsed,
+      product: chosen?.title ?? null,
+      source: chosen
+        ? "model named a shown product"
+        : "no usable DETAIL line — answering without a card rather than guessing which product",
+    });
+    await args.track("detail_answered", { product: chosen?.title ?? null, resolved: Boolean(chosen) });
+    // No card when the subject is unresolved: the reply is asking WHICH product
+    // they mean, and showing one would answer that question wrongly.
+    return chosen ? [toCard(chosen)] : [];
+  };
+
+  yield* streamAndLog({
+    shopId: args.shopId,
+    convoId: args.convoId,
+    stream: stream.text,
+    sourceLayer: "detail",
+    intent: args.routed,
+    cards: resolveCards,
+    meterPromise: args.meterPromise,
+    track: args.track,
+    trace: args.trace,
+  });
 }
 
 // ── Buy lane ────────────────────────────────────────────────────────────────

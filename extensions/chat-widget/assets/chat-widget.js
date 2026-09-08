@@ -403,7 +403,12 @@
     // Deep links go in right after the launcher — the only thing they need —
     // rather than at the end of the chain, where a campaign failure would
     // silently take them down with it.
-    ensureCss().then(mountLauncher).then(initDeepLinks).then(initCampaigns).then(maybeRestoreOpen);
+    ensureCss()
+      .then(mountLauncher)
+      .then(mountDebug) // no-op unless the URL carries ccdebug=1
+      .then(initDeepLinks)
+      .then(initCampaigns)
+      .then(maybeRestoreOpen);
   });
 
   /** Reopen the panel after a page navigation when it was open on the last
@@ -483,15 +488,22 @@
    * file tried to derive the keyboard height from window.innerHeight and
    * visualViewport, and were wrong three times running.
    *
-   * Chrome 108+ and Firefox 132+ honour it. Safari does not, and that is the
-   * only reason syncViewport still exists. */
-  var vvUnbind = null;
+   * Chrome 108+ and Firefox 132+ honour it — Android needs no JavaScript here
+   * at all, and is confirmed working on device. Safari does not honour it, and
+   * that is the only reason applyViewport() below exists. */
   var scrollUnlock = null;
   var viewportMetaRestore = null;
-  var vvFrame = null;
+  var vvLoop = null;
 
+  /** `innerWidth` as well as the media query: they agree in every normal case,
+   *  but if a theme's viewport meta makes them disagree, the CSS full-bleed
+   *  layout is what matters and matchMedia is what decides it — so a mismatch
+   *  must not leave the panel full-bleed with nothing sizing it. */
   function isPhone() {
-    return Boolean(window.matchMedia && window.matchMedia("(max-width: 480px)").matches);
+    return Boolean(
+      (window.matchMedia && window.matchMedia("(max-width: 480px)").matches) ||
+        window.innerWidth <= 480,
+    );
   }
 
   /** Set while the panel is open on a phone, restored on close. Skipped when
@@ -510,78 +522,177 @@
     };
   }
 
-  /* Safari fallback — and the half that was missing every previous pass.
+  /* THE SPLIT, and why this is a frame loop rather than event handlers.
    *
-   * iOS does not shrink the LAYOUT viewport for the keyboard. It shrinks the
-   * VISUAL viewport and then SLIDES it up to reveal the focused field, leaving
-   * the layout viewport at its full height. `position: fixed` is laid out
-   * against the LAYOUT viewport, so the panel stays where the screen used to
-   * be while the visible area moves out from under it — the panel appears to
-   * drift, and every settle / rubber-band of Safari's scroll drifts it again.
+   * Android works with no JavaScript at all: Chrome honours
+   * `interactive-widget=resizes-content` (set above), which shrinks the LAYOUT
+   * viewport for the keyboard, so `inset: 0` already means "the area above the
+   * keys" and the CSS alone is correct.
    *
-   * Earlier versions wrote only the HEIGHT. That resizes the box and moves it
-   * not at all, which is why the composer kept surfacing behind the keys: the
-   * `visualViewport` scroll listener below was already bound, but syncViewport
-   * had nothing position-related to write, so it was a no-op. The OFFSET is
-   * the fix — pin the panel to the visual viewport's origin, not the page's. */
-  function syncViewport() {
-    if (!ui.panel) return;
-    var s = ui.panel.style;
+   * iOS honours none of it. Safari leaves the layout viewport at full height
+   * and shrinks the VISUAL viewport instead, so a `position: fixed` panel keeps
+   * its full height and the composer ends up behind the keys. The panel's
+   * geometry therefore has to be written by hand — and the only source for it
+   * is `window.visualViewport`.
+   *
+   * Two attempts drove that from `visualViewport`'s own resize/scroll events
+   * and BOTH failed on real hardware, in the same way: the panel stayed the
+   * wrong size until the shopper typed, because typing makes Safari scroll the
+   * caret into view and that finally produced an event carrying settled
+   * numbers. Which event to trust, and when, turned out to be unanswerable —
+   * every guess was wrong on the device even when it was right on paper.
+   *
+   * So stop subscribing and start reading. While the panel is open on a phone,
+   * measure the viewport every animation frame and write only when it changed.
+   * There is no event to miss, no settle timer to mistune, and no ordering to
+   * get wrong. It costs one property read per frame while a full-screen modal
+   * is up — nothing is animating behind it — and the write is skipped on the
+   * overwhelming majority of frames because the geometry is unchanged. */
+  var appliedGeometry = "";
+
+  function applyViewport() {
+    var p = ui.panel;
+    if (!p) return;
+    var s = p.style;
     var vv = window.visualViewport;
+
     if (!vv || !state.open || !isPhone()) {
-      s.top = s.left = s.right = s.bottom = s.width = s.height = "";
+      if (appliedGeometry === "") return; // already clear — do not touch layout
+      appliedGeometry = "";
+      s.top = s.left = s.right = s.bottom = s.width = s.height = s.transform = "";
       return;
     }
+
+    var w = Math.round(vv.width);
+    var h = Math.round(vv.height);
+    var x = Math.round(vv.offsetLeft);
+    var y = Math.round(vv.offsetTop);
+    var geometry = w + "x" + h + "@" + x + "," + y;
+    if (geometry === appliedGeometry) return;
+    var grew = appliedGeometry !== "" && h > parseInt(appliedGeometry.split("x")[1], 10);
+    appliedGeometry = geometry;
+
     // `inset: 0` leaves top AND bottom set; adding a height over-constrains the
     // box and the browser silently drops one of the three. State the origin and
     // the size, and let the other two edges go.
-    s.top = vv.offsetTop + "px";
-    s.left = vv.offsetLeft + "px";
+    s.top = "0px";
+    s.left = "0px";
     s.right = "auto";
     s.bottom = "auto";
-    s.width = vv.width + "px";
-    s.height = vv.height + "px";
+    s.width = w + "px";
+    s.height = h + "px";
+    // The offset is applied as a TRANSFORM, not as `top`. Moving the layout box
+    // makes Safari re-run its own "scroll the focused field into view" against
+    // the new position, which moves the visual viewport again, which moves the
+    // panel again — a loop that settles somewhere wrong. A transform moves only
+    // what is painted, so Safari's measurement stays put and the loop cannot
+    // start. Usually a no-op: with the body pinned, the offset is 0.
+    s.transform = x || y ? "translate3d(" + x + "px," + y + "px,0)" : "";
+
+    // The thread just changed height. Keep the newest message against the
+    // composer — but only when the panel SHRANK (the keyboard opening). On the
+    // way back out there is new room below, and yanking the scroll then would
+    // fight a shopper who had deliberately scrolled up to read.
+    if (!grew && state.screen === "chat") scroll();
   }
 
-  /** visualViewport fires resize/scroll many times per keyboard animation —
-   *  coalesce to one write per frame so the panel never trails a paint behind
-   *  the viewport it is chasing (that lag is the visible "jitter"). */
-  function syncViewportFrame() {
-    if (vvFrame !== null) return;
-    vvFrame = requestAnimationFrame(function () {
-      vvFrame = null;
-      syncViewport();
-    });
+  function startViewportLoop() {
+    if (vvLoop !== null) return;
+    var step = function () {
+      applyViewport();
+      vvLoop = requestAnimationFrame(step);
+    };
+    vvLoop = requestAnimationFrame(step);
   }
 
-  /** The keyboard animates, and the last resize we see is not always the
-   *  settled size — re-measure once after the burst, and pull the newest
-   *  message back into view now that the thread is shorter. */
-  var vvSettle = null;
-  function syncViewportSettling() {
-    syncViewportFrame();
-    if (vvSettle) clearTimeout(vvSettle);
-    vvSettle = setTimeout(function () {
-      vvSettle = null;
-      syncViewport();
-      if (state.screen === "chat") scroll();
-    }, 300);
+  function stopViewportLoop() {
+    if (vvLoop === null) return;
+    cancelAnimationFrame(vvLoop);
+    vvLoop = null;
   }
 
+  // ── on-device diagnostic (?ccdebug=1) ────────────────────────────────────
+  /* Never rendered for a shopper: it mounts only when the URL carries
+   * `ccdebug=1`. It exists because the iOS keyboard geometry cannot be
+   * reproduced on any emulator or desktop browser, so the only way to see what
+   * Safari actually reports — rather than what the spec says it should — is to
+   * read it off the phone. `heights` is the important line: it records every
+   * DISTINCT visualViewport height with the millisecond it arrived, which
+   * answers the one question guesswork cannot, namely whether the settled
+   * height is ever reported at all, and if so how late. */
+  var dbg = { resize: 0, scroll: 0, frames: 0, heights: [], t0: Date.now() };
+  var dbgEl = null;
+
+  function debugEnabled() {
+    try {
+      return /[?&]ccdebug=1/.test(window.location.search);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function mountDebug() {
+    if (dbgEl || !debugEnabled()) return;
+    dbgEl = document.createElement("pre");
+    // Appended AFTER .cw-root, so an equal z-index still paints it on top; the
+    // panel is what we are measuring, so it must not cover the readout.
+    dbgEl.style.cssText =
+      "position:fixed;top:0;left:0;right:0;z-index:2147483647;margin:0;padding:5px 7px;" +
+      "font:10.5px/1.32 ui-monospace,Menlo,Consolas,monospace;white-space:pre;" +
+      "background:rgba(0,0,0,.85);color:#8ef5a8;pointer-events:none;";
+    document.body.appendChild(dbgEl);
+    debugTick();
+  }
+
+  function debugTick() {
+    if (!dbgEl) return;
+    dbg.frames++;
+    var vv = window.visualViewport;
+    var p = ui.panel;
+    var cs = p ? getComputedStyle(p) : null;
+    var meta = document.querySelector('meta[name="viewport"]');
+    var px = function (v) { return Math.round(parseFloat(v) || 0); };
+
+    if (vv) {
+      var h = Math.round(vv.height);
+      var lastSeen = dbg.heights.length ? dbg.heights[dbg.heights.length - 1].h : -1;
+      if (h !== lastSeen) {
+        dbg.heights.push({ h: h, t: Date.now() - dbg.t0 });
+        if (dbg.heights.length > 6) dbg.heights.shift();
+      }
+    }
+
+    dbgEl.textContent = [
+      vv
+        ? "vv    " + Math.round(vv.width) + "x" + Math.round(vv.height) +
+          "  off " + Math.round(vv.offsetLeft) + "," + Math.round(vv.offsetTop) +
+          "  pageTop " + Math.round(vv.pageTop) +
+          "  scale " + Math.round(vv.scale * 100) / 100
+        : "vv    ABSENT",
+      "win   " + window.innerWidth + "x" + window.innerHeight +
+        "  scrollY " + Math.round(window.pageYOffset || 0),
+      "inline t=" + ((p && p.style.top) || "-") + " h=" + ((p && p.style.height) || "-") +
+        " w=" + ((p && p.style.width) || "-"),
+      "real   t=" + (cs ? px(cs.top) : "-") + " h=" + (cs ? px(cs.height) : "-") +
+        " padB=" + (cs ? px(cs.paddingBottom) : "-"),
+      "flags  phone=" + (isPhone() ? 1 : 0) + " open=" + (state.open ? 1 : 0) +
+        " kbd=" + (p && p.classList.contains("cw-kbd") ? 1 : 0) +
+        " body=" + (document.body.style.position || "static") +
+        " loop=" + (vvLoop === null ? 0 : 1) + " applied=" + (appliedGeometry || "-"),
+      "meta   " + (meta ? (meta.getAttribute("content") || "").slice(-38) : "NONE"),
+      "ev     resize " + dbg.resize + "  scroll " + dbg.scroll + "  frames " + dbg.frames,
+      "heights " + dbg.heights.map(function (e) { return e.h + "@" + e.t; }).join(" "),
+    ].join("\n");
+    requestAnimationFrame(debugTick);
+  }
+
+  /** Counters for the diagnostic only — the panel no longer depends on these
+   *  events for anything, which is the entire point of the frame loop. */
   function bindViewport() {
     var vv = window.visualViewport;
-    if (!vv || vvUnbind) return;
-    vv.addEventListener("resize", syncViewportSettling);
-    vv.addEventListener("scroll", syncViewportFrame);
-    vvUnbind = function () {
-      vv.removeEventListener("resize", syncViewportSettling);
-      vv.removeEventListener("scroll", syncViewportFrame);
-      if (vvSettle) clearTimeout(vvSettle);
-      vvSettle = null;
-      if (vvFrame !== null) cancelAnimationFrame(vvFrame);
-      vvFrame = null;
-      vvUnbind = null;
-    };
+    if (!vv || !dbgEl) return;
+    vv.addEventListener("resize", function () { dbg.resize++; });
+    vv.addEventListener("scroll", function () { dbg.scroll++; });
   }
 
   /** Stop the storefront scrolling behind a full-screen panel.
@@ -667,9 +778,10 @@
     state.open = true;
     store(sessionStorage, OPEN_KEY, "1");
     lockInteractiveWidget(); // before the first measurement — it resizes it
-    bindViewport();
+    bindViewport(); // diagnostic counters only
     lockBodyScroll();
-    syncViewport();
+    applyViewport(); // first frame now, rather than waiting for the loop
+    startViewportLoop();
     var focusChat = config.widget.chatFocusMode && config.widget.liveChat;
     showScreen(focusChat ? "chat" : state.screen === "chat" ? "chat" : "home");
     if (state.pollTimer === null && state.conversationId) startPolling();
@@ -683,15 +795,16 @@
   }
 
   function closePanel() {
-    if (vvUnbind) vvUnbind();
+    stopViewportLoop();
     if (scrollUnlock) scrollUnlock();
     if (viewportMetaRestore) viewportMetaRestore();
     if (ui.panel) {
-      // Every property syncViewport can write has to come back off, not just
-      // the height — a stale inline `top`/`width` would survive into the next
-      // open (and onto the desktop layout after a rotate).
+      // Every property applyViewport can write has to come back off, not just
+      // the height — a stale inline `top`/`width`/`transform` would survive
+      // into the next open (and onto the desktop layout after a rotate).
       var ps = ui.panel.style;
-      ps.top = ps.left = ps.right = ps.bottom = ps.width = ps.height = "";
+      ps.top = ps.left = ps.right = ps.bottom = ps.width = ps.height = ps.transform = "";
+      appliedGeometry = "";
       ui.panel.classList.remove("cw-kbd");
       ps.display = "none";
     }
@@ -740,6 +853,9 @@
     // panel sitting in the wrong place. Drop it while a field holds focus.
     // `relatedTarget` keeps the padding from flashing back when focus moves
     // between two fields (composer → pre-chat), where focusout precedes focusin.
+    // Only the safe-area class is driven from focus now. The panel's geometry
+    // is not: the frame loop is already watching, so there is no moment to
+    // catch and nothing here that can be mistimed.
     panel.addEventListener("focusin", function (e) {
       if (isTextField(e.target)) panel.classList.add("cw-kbd");
     });

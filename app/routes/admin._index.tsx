@@ -7,7 +7,7 @@ import { StatGrid, StatTile } from "../components/ui/StatTile";
 import { SPACE } from "../components/ui/tokens";
 import { requireAdminUser } from "../lib/admin/admin-auth.server";
 import { getEffectiveAiConfig } from "../lib/admin/admin-settings.server";
-import { planEnforcementMode, PLANS } from "../lib/billing/plans.server";
+import { PLANS } from "../lib/billing/plans.server";
 import { PLAN_IDS } from "../lib/billing/plan-shared";
 
 // Admin overview (spec 19). Cross-tenant aggregates BY DESIGN — this is the
@@ -60,7 +60,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     })),
     effectiveChatModel: ai.effectiveChatModel,
     chatModelOverridden: Boolean(ai.overrides.chatModel),
-    enforcement: planEnforcementMode(),
   };
 };
 
@@ -86,13 +85,6 @@ export default function AdminOverview() {
               icon="wand"
               tone="success"
               sub={data.chatModelOverridden ? "Dashboard override" : "Environment default"}
-            />
-            <StatTile
-              label="Plan enforcement"
-              value={data.enforcement === "enforced" ? "Enforced" : "Open"}
-              icon="lock"
-              tone={data.enforcement === "enforced" ? "success" : "warning"}
-              sub={data.enforcement === "enforced" ? "Gates active" : "Everything free on every plan"}
             />
           </StatGrid>
 

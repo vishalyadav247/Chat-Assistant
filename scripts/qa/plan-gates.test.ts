@@ -78,8 +78,8 @@ async function main(): Promise<void> {
   };
 
   try {
-    await savePlanConfig({ enforcement: "enforced" });
-    ok("enforcement is enforced for this run", plans.planEnforcementMode() === "enforced");
+    // Gates are always live now; pin the matrix to defaults for the run.
+    await savePlanConfig({});
 
     // ── B-10 quota bites: curated_answers on Free (quota 5) ────────────────
     await setPlan("free");
@@ -276,8 +276,20 @@ async function main(): Promise<void> {
       plans.GATED_FEATURES.includes("inbox_cart_view") && plans.hasFeature("free", "inbox_cart_view") === false,
     );
 
-    // ── B-05 open mode makes every gate pass ──────────────────────────────
-    await savePlanConfig({ enforcement: "open" });
+    // ── B-05 a BONUS GRANT lifts the quota for one shop ───────────────────
+    // Successor to the old "open mode makes every gate pass" case: that switch
+    // was global, this is per-shop, and it is what an operator uses now.
+    // curated_answers is NOT grantable: nothing reads the bonus at its check
+    // site, so offering it would be a silent no-op. The grant must be refused
+    // rather than saved and ignored.
+    const grantsMod = await import("../../app/lib/billing/quota-grants.server");
+    let refusedDimension = false;
+    try {
+      await grantsMod.grantQuota(shopId, { dimension: "curated_answers", amount: 50, reason: "qa" });
+    } catch {
+      refusedDimension = true;
+    }
+    ok("a grant for an unwired dimension is refused, not silently ignored", refusedDimension);
     const openCreate = await saveCuratedAnswer(shopId, {
       question: "gate probe question OPEN MODE",
       synonyms: [],
@@ -286,8 +298,11 @@ async function main(): Promise<void> {
       status: "draft",
       priority: "normal",
     });
-    ok("open mode lifts the quota", openCreate.ok === true);
-    ok("open mode grants every feature", plans.hasFeature("free", "custom_recommendations") === true);
+    ok("…so the curated quota still bites", openCreate.ok === false);
+    // FEATURES are not grantable — a grant tops up a NUMBER, never unlocks a
+    // gated capability. Upgrading is the only way to get those.
+    ok("…but features stay gated by plan", plans.hasFeature("free", "custom_recommendations") === false);
+    for (const g of await grantsMod.listGrants(shopId)) await grantsMod.revokeGrant(shopId, g.id);
   } finally {
     // Remove the fixture shop and restore the operator's stored plan config.
     await db.curatedAnswer.deleteMany({ where: { shopId } });

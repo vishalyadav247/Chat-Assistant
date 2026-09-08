@@ -8,7 +8,7 @@ import { PLANS, type PlanId } from "./plans.server";
 // means the trial restarts on any of these:
 //
 //   • uninstall → reinstall           • Basic → Pro (or Pro → Basic)
-//   • downgrade to Free → resubscribe • monthly → yearly
+//   • downgrade to Free → resubscribe • repeated plan switches
 //
 // i.e. a merchant can stay on a paid tier forever without ever being charged.
 // Shopify DOES protect against this, but only for Shopify App Pricing (managed

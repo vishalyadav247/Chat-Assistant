@@ -3,6 +3,7 @@ import db from "../../db.server";
 import { unauthenticated } from "../../shopify.server";
 import { recordEvent } from "../analytics/events.server";
 import { getQuota } from "../billing/plans.server";
+import { bonusQuota } from "../billing/quota-grants.server";
 import { productEmbeddingText } from "../embeddings/embedding.server";
 import { requireShopId } from "../tenancy.server";
 import {
@@ -12,6 +13,7 @@ import {
   loadEnabledMetafields,
   parseStoredMetafields,
   refreshMetafieldUsage,
+  resolveMetaobjectRefs,
   syncMetafieldDefinitions,
   toStoredMetafield,
   type StoredMetafield,
@@ -143,8 +145,17 @@ export async function fullCatalogSync(shopDomain: string): Promise<void> {
 
   try {
     const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
-    const cap = getQuota(shop?.plan ?? "free", "products_synced");
+    // products_synced is a CEILING, so an operator grant raises the cap while it
+    // is live rather than being consumed per product (quota-grants.server.ts).
+    const cap =
+      getQuota(shop?.plan ?? "free", "products_synced") +
+      (await bonusQuota(shopId, "products_synced"));
     const { admin } = await unauthenticated.admin(shopDomain);
+    // Metaobject-reference metafields resolve to text at sync time (spec 07,
+    // 2026-09-07); the cache carries gid → rendered text across pages, so a
+    // metaobject shared by many products is fetched once per run.
+    const enabledMetafields = await loadEnabledMetafields(shopId);
+    const metaobjectCache = new Map<string, string>();
     let cursor: string | null = null;
     let total = 0;
     let capped = false;
@@ -218,6 +229,12 @@ export async function fullCatalogSync(shopDomain: string): Promise<void> {
           })),
           metafields: collectMetafields(node.metafields.nodes, node.variants.nodes),
         }),
+      );
+      await resolveMetaobjectRefs(
+        admin,
+        products.map((p) => p.metafields),
+        enabledMetafields,
+        metaobjectCache,
       );
       await upsertProducts(shopId, products);
       for (const product of products) seenIds.add(product.shopifyProductId);
@@ -310,7 +327,9 @@ export async function upsertProductFromWebhook(shopDomain: string, payload: unkn
   });
   if (!existing) {
     const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
-    const cap = getQuota(shop?.plan ?? "free", "products_synced");
+    const cap =
+      getQuota(shop?.plan ?? "free", "products_synced") +
+      (await bonusQuota(shopId, "products_synced"));
     const count = await db.product.count({ where: { shopId } });
     if (count >= cap) {
       console.log(`product_webhook_create_capped ${shopDomain} count=${count} cap=${cap}`);
@@ -352,6 +371,7 @@ export async function upsertProductFromWebhook(shopDomain: string, payload: unkn
         body.data.product.metafields.nodes,
         body.data.product.variants.nodes,
       );
+      await resolveMetaobjectRefs(admin, [metafields], await loadEnabledMetafields(shopId));
     }
   } catch (error) {
     logError("product_webhook_metafield_refetch_failed", error, { shopId });

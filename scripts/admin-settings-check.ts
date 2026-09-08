@@ -19,6 +19,10 @@ import { emailConfigured } from "../app/lib/email/email.server";
 import { isBillingTestMode } from "../app/lib/billing/shopify-billing.server";
 import { webBaseUrl } from "../app/lib/team/team.server";
 
+/** Mirrors envBool() in runtime-config.server.ts. */
+const envBoolLike = (raw: string | undefined): boolean | undefined =>
+  raw === undefined || raw === "" ? undefined : raw === "1" || raw.toLowerCase() === "true";
+
 function assert(cond: boolean, label: string) {
   if (!cond) throw new Error(`FAIL: ${label}`);
   console.log(`ok: ${label}`);
@@ -64,11 +68,44 @@ async function main() {
     await saveRuntimeConfig({ emailProvider: "log" });
     assert(emailConfigured() === false, "emailConfigured() false for log provider");
 
-    // 4. Operational flags reach their consumers
-    await saveRuntimeConfig({ billingTestMode: true });
-    assert(isBillingTestMode() === true, "billing test mode flips the billing provider flag");
-    await saveRuntimeConfig({ billingTestMode: false });
-    assert(isBillingTestMode() === false, "billing test mode turns back off");
+    // 4. Operational flags reach their consumers.
+    //
+    // Billing test mode: operator-settable, defaults ON outside production and
+    // OFF in production, and hard-ignored in production whatever is stored.
+    // The env var is cleared for the duration or a developer who happens to set
+    // BILLING_TEST_MODE would see these pass for the wrong reason.
+    const savedEnv = process.env.BILLING_TEST_MODE;
+    const savedNodeEnv = process.env.NODE_ENV;
+    delete process.env.BILLING_TEST_MODE;
+    try {
+      await saveRuntimeConfig({ billingTestMode: true });
+      assert(isBillingTestMode() === true, "billing test mode can be switched on outside production");
+      await saveRuntimeConfig({ billingTestMode: false });
+      assert(
+        isBillingTestMode() === false,
+        "…and off again, so the dev default does not override an explicit choice",
+      );
+      // The one that matters: production ignores it however it is stored.
+      await saveRuntimeConfig({ billingTestMode: true });
+      Object.defineProperty(process.env, "NODE_ENV", {
+        value: "production",
+        configurable: true,
+        writable: true,
+        enumerable: true,
+      });
+      assert(
+        isBillingTestMode() === false,
+        "PRODUCTION ignores a stored billingTestMode — merchants can always be charged",
+      );
+    } finally {
+      Object.defineProperty(process.env, "NODE_ENV", {
+        value: savedNodeEnv,
+        configurable: true,
+        writable: true,
+        enumerable: true,
+      });
+      if (savedEnv !== undefined) process.env.BILLING_TEST_MODE = savedEnv;
+    }
     await saveRuntimeConfig({ embedStatusEnabled: true });
     assert(runtimeConfig().embedStatusEnabled === true, "embed-status flag applied");
 
@@ -85,7 +122,14 @@ async function main() {
     // 7. Reset → env fallback everywhere
     await resetRuntimeConfig();
     assert(runtimeConfig().openaiApiKey === envKey, "reset restores the env key");
-    assert(runtimeConfig().billingTestMode === (process.env.BILLING_TEST_MODE === "1"), "reset restores env billing flag");
+    // Nothing stored, and BILLING_TEST_MODE unset in this environment: the code
+    // default takes over — ON outside production, so a fresh clone can switch
+    // plans on the dev app without configuring anything.
+    assert(
+      runtimeConfig().billingTestMode ===
+        (envBoolLike(process.env.BILLING_TEST_MODE) ?? process.env.NODE_ENV !== "production"),
+      "reset falls back to env, else the environment-derived default",
+    );
     assert((await db.appSecret.findUnique({ where: { key: RUNTIME_SECRET_KEY } })) === null, "reset deletes the row");
 
     console.log("\nadmin-settings-check PASS");

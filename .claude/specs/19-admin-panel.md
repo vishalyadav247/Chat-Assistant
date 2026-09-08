@@ -57,7 +57,7 @@ tenancy-auditor should verify the guard (`requireAdminUser`) instead.
 Reuse the existing global KV table (`AppSecret`), zod-validated on read & write:
 
 - `admin:ai` → `{ chatModel?: string; temperature?: number|null; maxTokens?: number|null }`
-- `admin:plans` → `{ enforcement?: "open"|"enforced"; plans?: Partial<Record<PlanId, PlanDefinition-shaped partial>> }`
+- `admin:plans` → `{ plans?: Partial<Record<PlanId, PlanDefinition-shaped partial>> }` (the `enforcement` switch was removed 2026-09-08 — gates are always live; a stored value is inert and stripped by `qa:preflight --fix`)
 
 Blank/absent field = fall back to the code/env default. Corrupt JSON = ignored
 (fail open to defaults, log once).
@@ -66,7 +66,7 @@ Blank/absent field = fall back to the code/env default. Corrupt JSON = ignored
 
 1. **`/admin` (overview)** — shop count, breakdown by plan × planStatus,
    recent installs (domain, plan, installed date), currently effective AI model +
-   enforcement mode, nav to the settings pages.
+   nav to the settings pages.
 2. **`/admin/ai` (AI model settings)** —
    - Chat model: preset select (gpt-4o-mini, gpt-4o, gpt-4.1-mini, gpt-4.1) +
      "Custom…" free-text. Blank override = env `CHAT_MODEL`.
@@ -81,7 +81,7 @@ Blank/absent field = fall back to the code/env default. Corrupt JSON = ignored
    - Enforcement mode switch (`open` ↔ `enforced`) with an explanatory banner —
      replaces the "edit ENFORCEMENT const in plans.server.ts" step from spec 15
      (PROGRESS pending-manual item 10 updated).
-   - Per-plan editor (tab per tier): monthly price, yearly-per-month price, trial
+   - Per-plan editor (tab per tier): monthly price, trial
      days, overage per conversation (blank = AI stops at cap), all 9 quota
      dimensions, all 10 gated-feature checkboxes.
    - "Reset all to code defaults" (deletes the override row).
@@ -235,9 +235,9 @@ AI override unreachable from merchant/shopper input, no cross-surface leakage).
    to env `CHAT_MODEL`. ✅ save/clear round-trip via `scripts/admin-check.ts`.
 4. Editing a plan's quota/feature/price on `/admin/plans` is visible to
    merchant surfaces (plan-usage page reads the new matrix) and to
-   `getQuota`/`hasFeature` once enforcement is on; values persist across restart.
+   `getQuota`/`hasFeature` immediately (gates are always live); values persist across restart.
    ✅ `scripts/admin-check.ts` (12/12: in-place PLANS mutation, persistence
-   reload, gating under enforcement, untouched tiers keep defaults).
+   reload, gating applied, untouched tiers keep defaults).
 5. Enforcement switch flips `planEnforcementMode()` app-wide without code edits. ✅
 6. Reset restores code defaults exactly (deep-equal vs `DEFAULT_PLANS`). ✅
 7. `npm run typecheck && npm run lint && npm run build` green + `npm run smoke`
@@ -278,7 +278,7 @@ and make it glassmorphism ui and the ui should be mobile first."*
   frosted rail).
 - **One switch, one button (user, 2026-09-03).** Every on/off in the console is
   Polaris `<s-switch label details checked onInput>` — the shape the plan
-  enforcement switch already used — and every in-page button is `<s-button>`.
+  visibility switch already used — and every in-page button is `<s-button>`.
   A custom `AdminToggle` was written first and then deleted: two switch designs
   on one surface is exactly the "basic" look this redesign was meant to fix.
   `.cca-btn` survives only for the rail's sign-out, where a Polaris button
