@@ -117,9 +117,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     if (intent === "flags") {
       await saveRuntimeConfig({
-        billingTestMode: bool("billingTestMode"),
-        billingForceTestCharges: bool("billingForceTestCharges"),
         embedStatusEnabled: bool("embedStatusEnabled"),
+        // Accepted whatever the environment: isBillingTestMode() discards it in
+        // production anyway, so storing it there is inert rather than dangerous.
+        billingTestMode: bool("billingTestMode"),
       });
       return { ok: true as const, error: null, note: "Flags saved." };
     }
@@ -172,9 +173,8 @@ export default function AdminSettings() {
   const [smtpSecure, setSmtpSecure] = useState(data.smtpSecure);
   const [webAppUrl, setWebAppUrl] = useState(data.webAppUrl);
   const [appStoreHandle, setAppStoreHandle] = useState(data.appStoreHandle);
-  const [billingTestMode, setBillingTestMode] = useState(data.billingTestMode);
-  const [forceTestCharges, setForceTestCharges] = useState(data.billingForceTestCharges);
   const [embedStatus, setEmbedStatus] = useState(data.embedStatusEnabled);
+  const [billingTestMode, setBillingTestMode] = useState(data.billingTestMode);
 
   const submit = (values: Record<string, string>) => fetcher.submit(values, { method: "post" });
 
@@ -356,27 +356,25 @@ export default function AdminSettings() {
           <AdminCard heading="Operational flags">
             <s-stack gap="base">
               <s-text color="subdued">Runtime switches that used to need an .env edit and a redeploy.</s-text>
-              <s-switch
-                label="Billing test mode"
-                details="Uses the mock billing provider — no Shopify charges are created at all. Never enable in production."
-                checked={billingTestMode}
-                onInput={(e) => setBillingTestMode(e.currentTarget.checked)}
-              />
-              <s-switch
-                label="Force test charges"
-                details="Creates real Shopify subscriptions flagged test:true. Needed for App Store review and partner test stores."
-                checked={forceTestCharges}
-                onInput={(e) => setForceTestCharges(e.currentTarget.checked)}
-              />
+              {/* Dev only, and rendered only there. The switch is discarded in
+                  production by isBillingTestMode(), so showing it live would be a
+                  control that looks connected and is not — which is exactly what
+                  it was before, under a banner claiming merchants could not be
+                  charged while they were being charged normally. */}
+              {data.nodeEnv === "production" ? null : (
+                <s-switch
+                  label="Billing test mode"
+                  details="Uses the mock billing provider — no Shopify call at all. REQUIRED to switch plans on the dev app, which is a custom app: Shopify refuses appSubscriptionCreate for those. Ignored in production, which is why this switch is not shown there."
+                  checked={billingTestMode}
+                  onInput={(e) => setBillingTestMode(e.currentTarget.checked)}
+                />
+              )}
               <s-switch
                 label="Theme embed detection"
                 details="Queries the published theme to detect whether the app embed is enabled. Needs the read_themes scope, declared since 2026-08-26. Storefront traffic already proves the embed is ON without this; the theme read is what can prove it is OFF. Turn off if Shopify throttles the themes API."
                 checked={embedStatus}
                 onInput={(e) => setEmbedStatus(e.currentTarget.checked)}
               />
-              {billingTestMode && data.nodeEnv === "production" ? (
-                <s-banner tone="critical">Billing test mode is ON in production — merchants cannot be charged.</s-banner>
-              ) : null}
               <s-stack direction="inline" gap="base">
                 <s-button
                   variant="primary"
@@ -384,9 +382,8 @@ export default function AdminSettings() {
                   onClick={() =>
                     submit({
                       intent: "flags",
-                      billingTestMode: String(billingTestMode),
-                      billingForceTestCharges: String(forceTestCharges),
                       embedStatusEnabled: String(embedStatus),
+                      billingTestMode: String(billingTestMode),
                     })
                   }
                 >

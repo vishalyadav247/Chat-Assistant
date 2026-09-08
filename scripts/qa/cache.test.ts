@@ -210,18 +210,21 @@ async function main(): Promise<void> {
       await adminSettings.savePlanConfig(priorPlanConfig);
     });
 
-    const priorMode = plans.planEnforcementMode();
+    // The enforcement switch was removed on 2026-09-08, so the in-process apply
+    // is proved with a quota override instead — the same seam, and it exercises
+    // the path an operator actually uses now.
+    const priorQuota = plans.getQuota("free", "conversations");
     await adminSettings.savePlanConfig({
       ...priorPlanConfig,
-      enforcement: priorMode === "enforced" ? "open" : "enforced",
+      plans: { ...priorPlanConfig.plans, free: { quotas: { conversations: priorQuota + 7 } } },
     });
     ok(
       "savePlanConfig applies immediately in-process (awaits loadPlanConfig)",
-      plans.planEnforcementMode() !== priorMode,
-      `${priorMode} -> ${plans.planEnforcementMode()}`,
+      plans.getQuota("free", "conversations") === priorQuota + 7,
+      `${priorQuota} -> ${plans.getQuota("free", "conversations")}`,
     );
     await adminSettings.savePlanConfig(priorPlanConfig);
-    ok("plan config restored", plans.planEnforcementMode() === priorMode);
+    ok("plan config restored", plans.getQuota("free", "conversations") === priorQuota);
     console.log(
       "  INFO plans cache state is module-level (not globalThis) and refreshed lazily:" +
         " a config change made by ANOTHER process is visible only after the 30s TTL" +

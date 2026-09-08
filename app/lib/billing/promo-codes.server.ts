@@ -6,7 +6,6 @@ import { PLANS } from "./plans.server";
 import { runtimeConfig } from "../admin/runtime-config.server";
 import {
   isPaidPlan,
-  yearlyTotal,
   type BillingIntervalId,
   type PaidPlanId,
 } from "./shopify-billing.server";
@@ -102,12 +101,10 @@ function toSummary(row: PromoRow): PromoSummary {
   };
 }
 
-/** Recurring price Shopify will be asked to charge per interval. */
-export function intervalPrice(
-  plan: PaidPlanId,
-  interval: BillingIntervalId,
-): number {
-  return interval === "yearly" ? yearlyTotal(plan) : PLANS[plan].priceMonthly;
+/** Recurring price Shopify will be asked to charge. Monthly is the only
+ *  interval since annual was withdrawn (2026-09-07). */
+export function intervalPrice(plan: PaidPlanId): number {
+  return PLANS[plan].priceMonthly;
 }
 
 /** Price after the promo for one billing interval (what the approval page shows). */
@@ -130,23 +127,21 @@ export function discountedPrice(promo: PromoSummary, price: number): number {
 export function promoApplicabilityProblem(
   promo: Pick<PromoSummary, "plans" | "intervals" | "kind" | "value">,
   plan: PaidPlanId,
-  interval: BillingIntervalId,
 ): "scope" | "too-large" | null {
   if (promo.plans.length && !promo.plans.includes(plan)) return "scope";
-  if (promo.intervals.length && !promo.intervals.includes(interval))
-    return "scope";
-  if (promo.kind === "fixed" && promo.value >= intervalPrice(plan, interval))
-    return "too-large";
+  // A code stored against "yearly" before annual was withdrawn can no longer
+  // apply to anything — the only interval now is monthly.
+  if (promo.intervals.length && !promo.intervals.includes("monthly")) return "scope";
+  if (promo.kind === "fixed" && promo.value >= intervalPrice(plan)) return "too-large";
   return null;
 }
 
-/** Does the code cover this plan + interval? (empty lists = any). */
+/** Does the code cover this plan? (empty lists = any). */
 export function promoAppliesTo(
   promo: Pick<PromoSummary, "plans" | "intervals" | "kind" | "value">,
   plan: PaidPlanId,
-  interval: BillingIntervalId,
 ): boolean {
-  return promoApplicabilityProblem(promo, plan, interval) === null;
+  return promoApplicabilityProblem(promo, plan) === null;
 }
 
 // ── Code-enumeration throttle ─────────────────────────────────────────────
@@ -360,18 +355,14 @@ export async function validatePromoCode(args: {
   }
 
   const promo = toSummary(row);
-  if (args.plan && args.interval) {
-    const applicability = promoApplicabilityProblem(
-      promo,
-      args.plan,
-      args.interval,
-    );
+  if (args.plan) {
+    const applicability = promoApplicabilityProblem(promo, args.plan);
     if (applicability === "too-large") {
-      return fail(promoTooLargeMessage(promo, args.plan, args.interval));
+      return fail(promoTooLargeMessage(promo, args.plan));
     }
     if (applicability === "scope") return fail(promoScopeMessage(promo));
 
-    const reserved = await reserveSlot(shopId, row, args.plan, args.interval);
+    const reserved = await reserveSlot(shopId, row, args.plan, "monthly");
     if (reserved === "limit") {
       return fail("That code has reached its redemption limit.");
     }
@@ -383,14 +374,9 @@ function money(value: number): string {
   return `$${value % 1 === 0 ? value.toFixed(0) : value.toFixed(2)}`;
 }
 
-function promoTooLargeMessage(
-  promo: PromoSummary,
-  plan: PaidPlanId,
-  interval: BillingIntervalId,
-): string {
-  const price = intervalPrice(plan, interval);
-  const term = interval === "yearly" ? "yearly" : "monthly";
-  return `This code takes ${money(promo.value)} off, which is more than the ${PLANS[plan].name} ${term} price (${money(price)}). Choose a plan or term that costs more than the discount.`;
+function promoTooLargeMessage(promo: PromoSummary, plan: PaidPlanId): string {
+  const price = intervalPrice(plan);
+  return `This code takes ${money(promo.value)} off, which is more than the ${PLANS[plan].name} monthly price (${money(price)}). Choose a plan that costs more than the discount.`;
 }
 
 function promoScopeMessage(promo: PromoSummary): string {

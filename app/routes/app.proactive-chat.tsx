@@ -5,7 +5,7 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
 import {
-  displayQuota,
+  getQuota,
   hasFeature,
   nextPlanNameForQuota,
   requiredPlanName,
@@ -111,7 +111,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     // instead of meeting it as a save error.
     activeQuota: {
       used: campaigns.filter((c) => c.status === "active").length,
-      quota: displayQuota(plan, "active_campaigns"),
+      quota: getQuota(plan, "active_campaigns"),
       nextPlan: nextPlanNameForQuota(plan, "active_campaigns"),
     },
     productMeta,

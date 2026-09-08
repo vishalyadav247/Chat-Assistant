@@ -335,11 +335,9 @@ async function main() {
   // exportConversationsCsv/exportAnalyticsCsv call requirePlan(plan, "exports")
   // via requireExports(). The calls above already prove it passes on Plus;
   // here we drop the same shop to Free and prove the identical call is refused,
-  // then restore it. (Before 2026-08-21 enforcement defaulted to "open" and this
-  // section could only assert the mode constant.)
-  const { hasFeature, planEnforcementMode } = await import("../app/lib/billing/plans.server");
-  const enforced = planEnforcementMode() === "enforced";
-  check("enforcement is live", enforced, planEnforcementMode());
+  // then restore it. Gates are unconditionally live since 2026-09-08 — the
+  // open/enforced switch was removed, so there is no mode to assert.
+  const { hasFeature } = await import("../app/lib/billing/plans.server");
   check("plus has exports", hasFeature("plus", "exports"));
 
   await db.shop.update({ where: { id: shopId }, data: { plan: "free" } });
@@ -349,7 +347,7 @@ async function main() {
   } catch (error) {
     refused = (error as Error).message === "plan_gate:exports";
   }
-  check("free shop is refused the conversations export", enforced ? refused : !refused);
+  check("free shop is refused the conversations export", refused);
 
   let refusedAnalytics = false;
   try {
@@ -357,7 +355,7 @@ async function main() {
   } catch (error) {
     refusedAnalytics = (error as Error).message === "plan_gate:exports";
   }
-  check("free shop is refused the analytics export", enforced ? refusedAnalytics : !refusedAnalytics);
+  check("free shop is refused the analytics export", refusedAnalytics);
   await db.shop.update({ where: { id: shopId }, data: { plan: "plus" } });
 
   // ── Cleanup ───────────────────────────────────────────────────────────────

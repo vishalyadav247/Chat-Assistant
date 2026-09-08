@@ -52,7 +52,6 @@ async function main(): Promise<void> {
   const cap = await import("../../app/lib/billing/usage-cap.server");
   const plans = await import("../../app/lib/billing/plans.server");
   const billing = await import("../../app/lib/billing/shopify-billing.server");
-  const adminSettings = await import("../../app/lib/admin/admin-settings.server");
 
   const shopIds: string[] = [];
   const period = usage.currentPeriodStart();
@@ -95,7 +94,8 @@ async function main(): Promise<void> {
     }
 
     section("0. Matrix");
-    ok("enforcement is 'enforced' — nothing meters in open mode", plans.planEnforcementMode() === "enforced", plans.planEnforcementMode());
+    // Gates are always live since 2026-09-08 — there is no enforcement switch
+    // left to leave in the wrong position before a run.
     ok("Free has NO overage rate", plans.PLANS.free.overagePerConversation === null);
     for (const id of ["basic", "pro", "plus"] as const) {
       ok(`${id} has an overage rate`, typeof plans.PLANS[id].overagePerConversation === "number", String(plans.PLANS[id].overagePerConversation));
@@ -196,76 +196,44 @@ async function main(): Promise<void> {
     await setUsage(free.id, plans.PLANS.free.quotas.conversations - 1, 0, 0);
     ok("below the cap the AI answers", (await usage.aiAllowed(free.id)) === true);
 
-    section("8. Yearly hard-caps — Shopify rejects usage lines on annual subs (D1)");
-    const yearly = await mkShop("yearly", {
-      plan: "basic",
-      planStatus: "active",
-      billingInterval: "yearly",
-      subscriptionId: "gid://shopify/AppSubscription/yearly",
-      usageLineItemId: "gid://shopify/AppSubscriptionLineItem/yearly-usage",
-    });
-    ok("overageBillable is false even WITH a usage line", usage.overageBillable({ plan: "basic", billingInterval: "yearly", usageLineItemId: "gid://line" }) === false);
-    await setUsage(yearly.id, quota + 5, 5, 0);
-    ok("aiAllowed is false at the cap", (await usage.aiAllowed(yearly.id)) === false);
-    ok("submitting bills nothing", (await records.submitOverageRecords(yearly.id, period)).accepted === 0);
-    ok("the debt is not silently cleared", (await usageRow(yearly.id)).overageReported === 0);
+    // Annual billing was withdrawn entirely on 2026-09-07 (there is no interval
+    // to choose any more), so the old "yearly hard-caps" section is gone. The
+    // legacy guard it covered survives in overageBillable as a safety net for
+    // any row that still carries billingInterval="yearly" — asserted here so a
+    // future cleanup cannot quietly start billing those shops.
+    section("8. A legacy annual row is still never billed overage");
+    ok(
+      "overageBillable stays false for billingInterval=yearly, usage line or not",
+      usage.overageBillable({ plan: "basic", billingInterval: "yearly", usageLineItemId: "gid://line" }) === false,
+    );
 
     section("9. A monthly plan with no usage line hard-caps too");
     const noLine = await mkShop("noline", { plan: "basic", planStatus: "active", billingInterval: "monthly", subscriptionId: "gid://n" });
     await setUsage(noLine.id, quota, 0, 0);
     ok("aiAllowed is false at the cap", (await usage.aiAllowed(noLine.id)) === false);
 
-    section("10. Open enforcement = the top tier, NOT unlimited");
-    const storedPlans = await adminSettings.getStoredPlanConfig();
-    await adminSettings.savePlanConfig({ ...storedPlans, enforcement: "open" });
-    await plans.loadPlanConfig();
-    const topPlan = plans.PLANS[plans.OPEN_MODE_PLAN];
-    ok("a Basic shop is granted the top tier's quota", plans.getQuota("basic", "conversations") === topPlan.quotas.conversations, `${plans.getQuota("basic", "conversations")}`);
-    ok("the quota is a real number, not MAX_SAFE_INTEGER", !plans.isUnlimitedQuota(plans.getQuota("basic", "conversations")));
-    ok("a Free shop is granted the top tier's features", plans.hasFeature("free", "exports") === true);
-    ok("open mode is never a downgrade for the top tier itself", plans.getQuota("plus", "conversations") === topPlan.quotas.conversations);
-    ok("a genuinely unlimited dimension stays unlimited", plans.isUnlimitedQuota(plans.getQuota("free", "active_campaigns")) === plans.isUnlimitedQuota(topPlan.quotas.active_campaigns));
-    // Between its own cap and the top tier's, a Basic shop is served and not billed.
-    await setUsage(meter.id, quota + 50, 0, 0);
-    ok("above its OWN quota the AI keeps answering", (await usage.aiAllowed(meter.id)) === true);
-    const openConvo = await mkConvo(meter.id);
-    const openTick = await usage.tickConversation({ shopId: meter.id, conversationId: openConvo.id, previousLastMessageAt: openConvo.lastMessageAt });
-    ok("and nothing is billed there", openTick.overageRecorded === false && openTick.withinQuota === true);
-    // Past the TOP tier's cap the ceiling is real again.
-    await setUsage(meter.id, topPlan.quotas.conversations, 0, 0);
-    const cappedConvo = await mkConvo(meter.id);
-    const cappedTick = await usage.tickConversation({ shopId: meter.id, conversationId: cappedConvo.id, previousLastMessageAt: cappedConvo.lastMessageAt });
-    ok("past the TOP tier's quota there IS a ceiling", cappedTick.withinQuota === false, `${cappedTick.conversationCount}/${topPlan.quotas.conversations}`);
-    await adminSettings.savePlanConfig(storedPlans);
-    await plans.loadPlanConfig();
-    ok("enforcement restored", plans.planEnforcementMode() === "enforced");
-    ok("quotas are back to the shop's own plan", plans.getQuota("basic", "conversations") === quota, `${plans.getQuota("basic", "conversations")}`);
 
-    section("11. Annual billing can be withdrawn");
-    ok("annual billing is offered by default", plans.yearlyBillingEnabled() === true);
-    const beforeYearly = await adminSettings.getStoredPlanConfig();
-    await adminSettings.savePlanConfig({ ...beforeYearly, yearlyBilling: false });
-    await plans.loadPlanConfig();
-    ok("the switch takes effect", plans.yearlyBillingEnabled() === false);
-    // The card hiding its toggle is presentation; THIS is the guard, because the
-    // interval arrives in a form field.
-    const planUsageSrc = readFileSync(join(process.cwd(), "app", "routes", "app.plan-usage.tsx"), "utf-8");
-    ok(
-      "the subscribe action refuses a yearly interval when it is off",
-      /interval === "yearly" && !yearlyBillingEnabled\(\)/.test(planUsageSrc),
-    );
-    ok(
-      "the card is told, so the toggle disappears too",
-      /yearlyEnabled=\{data\.yearlyEnabled\}/.test(planUsageSrc) &&
-        /yearlyBillingEnabled\(\) \|\| shop\?\.billingInterval === "yearly"/.test(planUsageSrc),
-    );
-    ok(
-      "a shop already on annual still sees its own interval",
-      /shop\?\.billingInterval === "yearly"/.test(planUsageSrc),
-    );
-    await adminSettings.savePlanConfig(beforeYearly);
-    await plans.loadPlanConfig();
-    ok("annual billing restored", plans.yearlyBillingEnabled() === true);
+    // Section 10 used to prove "open enforcement grants the top tier". That
+    // switch is gone (2026-09-08) — per-shop bonus grants replaced it, which do
+    // the same job without being global. This is its successor, driven through
+    // the real meter rather than the matrix.
+    section("10. A bonus grant raises THIS shop's cap and nothing is billed inside it");
+    const grants = await import("../../app/lib/billing/quota-grants.server");
+    await setUsage(meter.id, quota, 0, 0);
+    ok("at its own cap, a billable shop is past quota", (await usage.aiAllowed(meter.id)) === true);
+    await grants.grantQuota(meter.id, { amount: 50, reason: "qa" });
+    ok("the grant raises the effective cap", (await usage.usageStatus(meter.id)).quota === quota + 50, `${(await usage.usageStatus(meter.id)).quota}`);
+    const bonusConvo = await mkConvo(meter.id);
+    const bonusTick = await usage.tickConversation({ shopId: meter.id, conversationId: bonusConvo.id, previousLastMessageAt: bonusConvo.lastMessageAt });
+    ok("a conversation inside the bonus is NOT billed", bonusTick.overageRecorded === false && bonusTick.withinQuota === true);
+    // Past plan + bonus the ceiling is real again and overage resumes.
+    await setUsage(meter.id, quota + 50, 0, 0);
+    const pastConvo = await mkConvo(meter.id);
+    const pastTick = await usage.tickConversation({ shopId: meter.id, conversationId: pastConvo.id, previousLastMessageAt: pastConvo.lastMessageAt });
+    ok("past plan + bonus it IS billed again", pastTick.overageRecorded === true, `withinQuota=${pastTick.withinQuota}`);
+    // Withdrawing drops the cap straight back.
+    for (const g of await grants.listGrants(meter.id)) await grants.revokeGrant(meter.id, g.id);
+    ok("withdrawing the grant restores the plan cap", (await usage.usageStatus(meter.id)).quota === quota);
 
     section("12. The period key is the 1st of the month, UTC");
     const jan = usage.currentPeriodStart(new Date("2026-01-31T23:59:59Z"));

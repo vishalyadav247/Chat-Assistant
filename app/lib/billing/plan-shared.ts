@@ -43,7 +43,6 @@ export type QuotaDimension =
  * rather than in plans.server so the admin UI can name the plan without
  * importing a server module.
  */
-export const OPEN_MODE_PLAN: PlanId = "plus";
 
 export const UNLIMITED_QUOTA = Number.MAX_SAFE_INTEGER;
 
@@ -86,7 +85,6 @@ export interface PlanDefinition {
   id: PlanId;
   name: string;
   priceMonthly: number;
-  priceYearlyPerMonth: number;
   trialDays: number;
   overagePerConversation: number | null; // null = AI stops at cap
   quotas: Record<QuotaDimension, number>;
@@ -95,4 +93,25 @@ export interface PlanDefinition {
    *  already ON the plan keeps every quota and still sees it as its current
    *  plan — hiding withdraws an OFFER, it never downgrades anyone. */
   hidden: boolean;
+}
+
+/**
+ * Dimensions a per-shop bonus grant actually AFFECTS.
+ *
+ * Deliberately not "every QuotaDimension": a grant only does something where the
+ * enforcement site adds `bonusQuota()` to the plan cap, and today that is
+ * `conversations` (usage.server.ts) and `products_synced` (catalog-sync.server.ts).
+ * Offering the rest in the admin picker would let an operator grant 500 curated
+ * answers, see it saved, and have nothing change — a silent no-op is worse than
+ * an absent option. Adding one is two lines: read the bonus at that quota's own
+ * check site, then list it here.
+ *
+ * Lives here rather than in quota-grants.server.ts because the admin picker is
+ * client code, and a `.server` import from a component fails the BUILD (tsc does
+ * not catch it) — the same trap that moved OPEN_MODE_PLAN here before it.
+ */
+export const GRANTABLE_DIMENSIONS = ["conversations", "products_synced"] as const;
+
+export function isGrantableDimension(dimension: string): boolean {
+  return (GRANTABLE_DIMENSIONS as readonly string[]).includes(dimension);
 }

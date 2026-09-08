@@ -139,3 +139,38 @@ export function splitPicksStream(source: AsyncIterable<string>): PicksStream {
     },
   };
 }
+
+// ── Detail lane: `DETAIL: <id>` ─────────────────────────────────────────────
+// Same contract shape as PICKS and for the same reason — the model chooses
+// among rows code already fetched, and code renders anything the shopper sees.
+// One id, not a list: the whole point of the lane is that the subject is
+// already settled.
+
+export type Detail = { kind: "id"; id: number } | { kind: "none" };
+
+const DETAIL_LINE = /^[\s*#>_-]*detail\b[\s*_]*(?:[:=-]+[\s*_]*)?(.*)$/i;
+const DETAIL_SEPARATOR = /^[\s*#>_-]*detail\b[\s*_]*[:=-]/i;
+
+/**
+ * Parse one line of model output. `null` = not a detail line (leave the text
+ * alone). As with picks, an unreadable line means "no opinion" and the caller
+ * falls back — never a broken reply.
+ */
+export function parseDetailLine(line: string): Detail | null {
+  const trimmed = line.trim();
+  const match = DETAIL_LINE.exec(trimmed);
+  if (!match) return null;
+  // Without a separator, only a bare id or a bare none-word counts — prose
+  // that opens with the word "Detail" must survive untouched.
+  if (!DETAIL_SEPARATOR.test(trimmed)) return null;
+  const body = match[1].replace(/[*_`[\]()]/g, "").trim();
+  if (NONE_BODY.test(body)) return { kind: "none" };
+  const first = /\d+/.exec(body);
+  if (!first) return null;
+  const id = Number(first[0]);
+  return id > 0 ? { kind: "id", id } : null;
+}
+
+export function splitDetailStream(source: AsyncIterable<string>): LeadingLineStream<Detail> {
+  return splitLeadingLine(source, parseDetailLine);
+}

@@ -422,8 +422,6 @@ async function main(): Promise<void> {
     // ── 4. Plan gates degrade, never crash ──────────────────────────────────
     section("4. Pages render on plan=free AND plan=plus (gates degrade, never crash)");
     {
-      const { planEnforcementMode } = await import("../../app/lib/billing/plans.server");
-      note(`plan enforcement mode = ${planEnforcementMode()}`);
       planRestore = { id: host.id, plan: host.plan };
       for (const plan of ["free", "plus"] as const) {
         await db.shop.update({ where: { id: host.id }, data: { plan } });

@@ -157,11 +157,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         intent,
       };
     const plans = form.getAll("plans").map(String).filter(isPaidPlan);
-    const intervalsRaw = String(form.get("intervals") ?? "both");
-    const intervals =
-      intervalsRaw === "monthly" || intervalsRaw === "yearly"
-        ? [intervalsRaw]
-        : [];
+    // Monthly is the only billing interval since annual was withdrawn
+    // (2026-09-07), so a code is never scoped by interval any more. The column
+    // stays for the rows written before that; empty means "any".
+    const intervals: string[] = [];
 
     const existing = await db.promoCode.findUnique({ where: { code } });
     if (existing)
@@ -236,9 +235,6 @@ export default function AdminPromoCodes() {
   const [maxRedemptions, setMaxRedemptions] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
   const [plans, setPlans] = useState<string[]>([]);
-  const [intervals, setIntervals] = useState<"both" | "monthly" | "yearly">(
-    "both",
-  );
   const [removing, setRemoving] = useState<{ id: string; code: string } | null>(
     null,
   );
@@ -252,7 +248,6 @@ export default function AdminPromoCodes() {
     setMaxRedemptions("");
     setExpiresAt("");
     setPlans([]);
-    setIntervals("both");
   };
 
   const handled = useRef<unknown>(null);
@@ -469,7 +464,7 @@ export default function AdminPromoCodes() {
           <s-stack direction="inline" gap="base">
             <s-number-field
               label="Duration (billing cycles)"
-              details="Blank = forever. Yearly plans: 1 cycle = 1 year."
+              details="Blank = forever. One cycle = one month."
               min={1}
               step={1}
               value={duration}
@@ -492,19 +487,6 @@ export default function AdminPromoCodes() {
               value={expiresAt}
               onInput={(e) => setExpiresAt(e.currentTarget.value)}
             />
-            <s-select
-              label="Billing interval"
-              value={intervals}
-              onInput={(e) =>
-                setIntervals(
-                  e.currentTarget.value as "both" | "monthly" | "yearly",
-                )
-              }
-            >
-              <s-option value="both">Monthly and yearly</s-option>
-              <s-option value="monthly">Monthly only</s-option>
-              <s-option value="yearly">Yearly only</s-option>
-            </s-select>
           </s-stack>
           <s-stack gap="small-300">
             <s-text type="strong">Plans</s-text>
@@ -538,7 +520,6 @@ export default function AdminPromoCodes() {
             form.set("durationIntervals", duration);
             form.set("maxRedemptions", maxRedemptions);
             form.set("expiresAt", expiresAt);
-            form.set("intervals", intervals);
             plans.forEach((p) => form.append("plans", p));
             fetcher.submit(form, { method: "post" });
           }}

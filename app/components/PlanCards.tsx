@@ -1,4 +1,5 @@
-// Plan tier cards + Monthly|Yearly billing toggle (spec 15, design plan-usage.html).
+// Plan tier cards (spec 15, design plan-usage.html). Monthly only — annual
+// billing was withdrawn entirely on 2026-09-07, so there is no interval to pick.
 // All numbers/prices arrive serialized from the server plan matrix — never
 // hard-coded here. CTA labels derive from tier order (Current / Upgrade to X /
 // Downgrade to X) — the design's all-"Downgrade" buttons are a known design bug.
@@ -10,8 +11,6 @@ export interface PlanCardData {
   name: string;
   description: string;
   priceMonthly: number;
-  priceYearlyPerMonth: number;
-  yearlyTotal: number;
   trialDays: number;
   /** Per extra conversation. null = this plan never bills overage (Free).
    *  Only shown on the card in MONTHLY mode — see the render. */
@@ -48,15 +47,14 @@ export type PromoPreview =
 
 export function promoPreviewFor(
   plan: PlanCardData,
-  interval: "monthly" | "yearly",
   promo: PlanPromo | null | undefined,
 ): PromoPreview {
   const none = { kind: "not-applicable" } as const;
   if (!promo || plan.priceMonthly <= 0) return none;
   if (promo.plans.length && !promo.plans.includes(plan.id)) return none;
-  if (promo.intervals.length && !promo.intervals.includes(interval))
-    return none;
-  const charge = interval === "yearly" ? plan.yearlyTotal : plan.priceMonthly;
+  // A code stored for "yearly only" can never apply now that annual is gone.
+  if (promo.intervals.length && !promo.intervals.includes("monthly")) return none;
+  const charge = plan.priceMonthly;
   if (promo.kind === "fixed" && promo.value >= charge)
     return { kind: "too-large" };
   const after =
@@ -66,36 +64,21 @@ export function promoPreviewFor(
   if (after <= 0) return { kind: "too-large" };
   return {
     kind: "discounted",
-    price: Number((interval === "yearly" ? after / 12 : after).toFixed(2)),
+    price: Number(after.toFixed(2)),
   };
 }
 
-/** Per-month price after the promo, or null when the code doesn't cover this plan/interval. */
+/** Per-month price after the promo, or null when the code does not cover this plan. */
 export function promoPriceFor(
   plan: PlanCardData,
-  interval: "monthly" | "yearly",
   promo: PlanPromo | null | undefined,
 ): number | null {
-  const preview = promoPreviewFor(plan, interval, promo);
+  const preview = promoPreviewFor(plan, promo);
   return preview.kind === "discounted" ? preview.price : null;
 }
 
 function money(value: number): string {
   return `$${value % 1 === 0 ? value.toFixed(0) : value.toFixed(2)}`;
-}
-
-/** Yearly discount computed from the plan matrix — never a hard-coded %. */
-export function yearlySavingsPercent(plan: PlanCardData): number {
-  if (plan.priceMonthly <= 0 || plan.yearlyTotal <= 0) return 0;
-  return Math.round((1 - plan.yearlyTotal / (plan.priceMonthly * 12)) * 100);
-}
-
-/** Toggle badge copy. One shared saving → "Save N%", mixed → "Save up to N%". */
-export function savingsBadgeLabel(plans: PlanCardData[]): string | null {
-  const savings = plans.map(yearlySavingsPercent).filter((pct) => pct > 0);
-  if (savings.length === 0) return null;
-  const max = Math.max(...savings);
-  return new Set(savings).size === 1 ? `Save ${max}%` : `Save up to ${max}%`;
 }
 
 /**
@@ -112,21 +95,9 @@ export function trialPhraseFor(plan: PlanCardData): string {
   return `${plan.trialDays}-day free trial, then `;
 }
 
-export function termsFor(
-  plan: PlanCardData,
-  interval: "monthly" | "yearly",
-): string {
+export function termsFor(plan: PlanCardData): string {
   if (plan.priceMonthly === 0) return "Free forever — no subscription needed.";
   const trial = trialPhraseFor(plan);
-  if (interval === "yearly") {
-    const saving = yearlySavingsPercent(plan);
-    const billed =
-      saving > 0
-        ? `billed ${money(plan.yearlyTotal)}/year — you save ${saving}%.`
-        : `billed ${money(plan.yearlyTotal)}/year.`;
-    // Sentence-case the first word when no trial phrase precedes it.
-    return trial ? `${trial}${billed}` : `${billed.charAt(0).toUpperCase()}${billed.slice(1)}`;
-  }
   return trial
     ? `${trial}${money(plan.priceMonthly)}/month, billed by Shopify.`
     : `${money(plan.priceMonthly)}/month, billed by Shopify.`;
@@ -151,87 +122,12 @@ export function ctaFor(
 export function PlanCards(props: {
   plans: PlanCardData[];
   currentPlan: string;
-  interval: "monthly" | "yearly";
-  onIntervalChange: (interval: "monthly" | "yearly") => void;
   onSelect: (planId: string) => void;
   subscribingPlan: string | null;
   promo?: PlanPromo | null;
-  /** false = annual billing withdrawn by the operator: no toggle, monthly only. */
-  yearlyEnabled?: boolean;
 }) {
-  const savingsLabel = savingsBadgeLabel(props.plans);
-  const showToggle = props.yearlyEnabled !== false;
   return (
     <s-stack gap="base">
-      {showToggle ? (
-      <div
-        style={{
-          padding: `${SPACE.xs}px 0`,
-          display: "flex",
-          justifyContent: "center",
-        }}
-      >
-        <div
-          role="radiogroup"
-          aria-label="Billing interval"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            padding: SPACE.xs,
-            gap: SPACE.xs,
-            background: "var(--s-color-bg-surface-secondary, #f1f1f1)",
-            border: "1px solid var(--s-color-border, #e3e3e3)",
-            borderRadius: RADIUS.pill * 2,
-          }}
-        >
-          {(["monthly", "yearly"] as const).map((interval) => {
-            const active = props.interval === interval;
-            return (
-              <button
-                key={interval}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                onClick={() => props.onIntervalChange(interval)}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: SPACE.sm,
-                  padding: `${SPACE.sm}px ${SPACE.base}px`,
-                  border: "none",
-                  borderRadius: RADIUS.pill * 2,
-                  cursor: "pointer",
-                  fontSize: 14,
-                  fontWeight: 600,
-                  lineHeight: "20px",
-                  color: active ? "#fff" : "var(--s-color-text, #303030)",
-                  background: active ? BRAND.gradient : "transparent",
-                  boxShadow: active ? "0 1px 3px rgba(0,0,0,0.18)" : "none",
-                  transition: "background 150ms ease, color 150ms ease",
-                }}
-              >
-                {interval === "monthly" ? "Monthly" : "Yearly"}
-                {interval === "yearly" && savingsLabel ? (
-                  <span
-                    style={{
-                      fontSize: 11,
-                      fontWeight: 700,
-                      lineHeight: "16px",
-                      padding: "0 6px",
-                      borderRadius: RADIUS.pill,
-                      background: active ? "rgba(255,255,255,0.22)" : "#dcfce7",
-                      color: active ? "#fff" : "#15803d",
-                    }}
-                  >
-                    {savingsLabel}
-                  </span>
-                ) : null}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-      ) : null}
 
       <div
         className="cc-plan-carousel"
@@ -247,12 +143,9 @@ export function PlanCards(props: {
       >
         {props.plans.map((plan) => {
           const cta = ctaFor(plan.id, props.currentPlan, plan.name);
-          const price =
-            props.interval === "yearly"
-              ? plan.priceYearlyPerMonth
-              : plan.priceMonthly;
+          const price = plan.priceMonthly;
           const subscribing = props.subscribingPlan === plan.id;
-          const preview = promoPreviewFor(plan, props.interval, props.promo);
+          const preview = promoPreviewFor(plan, props.promo);
           const promoPrice =
             preview.kind === "discounted" ? preview.price : null;
           return (
@@ -334,7 +227,7 @@ export function PlanCards(props: {
                   than this plan costs, so it can&apos;t be used here.
                 </s-text>
               ) : null}
-              <s-text color="subdued">{termsFor(plan, props.interval)}</s-text>
+              <s-text color="subdued">{termsFor(plan)}</s-text>
               {/* MONTHLY PAID PLANS ONLY — the only case that can actually be
                   billed, so the only case a card may promise it (2026-09-03).
                   Free has no subscription and Shopify rejects usage lines on
@@ -342,7 +235,7 @@ export function PlanCards(props: {
                   used to print this line from the matrix alone and advertised a
                   charge the app would never make on two of its four tiers.
                   Same predicate as overageBillable() on the server. */}
-              {props.interval === "monthly" && plan.overagePerConversation !== null ? (
+              {plan.overagePerConversation !== null ? (
                 <s-text color="subdued">
                   ${plan.overagePerConversation.toFixed(2)} per additional AI conversation
                 </s-text>

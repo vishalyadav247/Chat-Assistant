@@ -311,7 +311,7 @@ async function main(): Promise<void> {
 
   const db = (await import("../../app/db.server")).default;
   const { defaultShopSettings, defaultWidgetSettings } = await import("../../app/lib/settings/schemas");
-  const { planEnforcementMode, hasFeature, getQuota, loadPlanConfig } = await import("../../app/lib/billing/plans.server");
+  const { hasFeature, getQuota, loadPlanConfig } = await import("../../app/lib/billing/plans.server");
   await loadPlanConfig();
 
   const testStart = new Date();
@@ -418,8 +418,7 @@ async function main(): Promise<void> {
       (await db.planUsage.findUnique({ where: { shopId_periodStart: { shopId: shopAId, periodStart } } }))
         ?.conversationCount ?? null;
 
-    const enforcement = planEnforcementMode();
-    console.log(`  … plan enforcement = ${enforcement}; conversations quota (free) = ${getQuota("free", "conversations")}`);
+    console.log(`  … conversations quota (free) = ${getQuota("free", "conversations")}`);
 
     // Tenant B — same plan as A so plan gates never mask a tenancy hole.
     const shopB = await makeShop("tenant-b", { plan: "plus", aiEnabled: false });
@@ -992,11 +991,8 @@ async function main(): Promise<void> {
     const surveyFreeShop = await makeShop("survey-free", { plan: "free" });
     const freeConvo = await db.conversation.create({ data: { shopId: surveyFreeShop.shopId, sessionId: sessA } });
     const surveyGated = await post("/proxy/survey", surveyFreeShop.domain, { conversationId: freeConvo.id, sessionId: sessA, rating: 5 });
-    if (enforcement === "enforced") {
-      ok("survey is plan-gated server-side on Free", surveyGated.status === 403, `status ${surveyGated.status}`);
-    } else {
-      skip("survey is plan-gated server-side on Free", `plan enforcement is "${enforcement}"`);
-    }
+    // Gates are always live since 2026-09-08 — no enforcement mode to skip for.
+    ok("survey is plan-gated server-side on Free", surveyGated.status === 403, `status `);
 
     // ── 11. handover-form ───────────────────────────────────────────────────
     section("11. handover-form");
@@ -1107,7 +1103,7 @@ async function main(): Promise<void> {
 
     // ── 14. quota + rate-limit gates ────────────────────────────────────────
     section("14. Plan quota + abuse gates");
-    if (enforcement === "enforced") {
+    {
       const quotaShop = await makeShop("quota", { plan: "free" });
       const cap = getQuota("free", "conversations") + 5;
       await db.planUsage.upsert({
@@ -1123,10 +1119,6 @@ async function main(): Promise<void> {
       ok("widget-config reports aiAvailable=false at the conversation cap", quotaCfg.json?.aiAvailable === false, `aiAvailable=${quotaCfg.json?.aiAvailable}`);
       ok("chat refuses at the conversation cap (no LLM call)", String(quotaChat.frames.at(-1)?.outcome) === "ai_unavailable", `outcome=${quotaChat.frames.at(-1)?.outcome}`);
       ok("the cap reply is merchant-safe copy, not an error", /leave your email/i.test(String(quotaChat.frames.find((f) => f.type === "message")?.text ?? "")), String(quotaChat.frames.find((f) => f.type === "message")?.text).slice(0, 80));
-    } else {
-      skip("conversation quota gate bites at the plan limit", `plan enforcement is "${enforcement}"`);
-      skip("widget-config reports aiAvailable=false at the cap", `plan enforcement is "${enforcement}"`);
-      skip("the cap reply is merchant-safe copy", `plan enforcement is "${enforcement}"`);
     }
 
     // Per-session chat rate limit (10/min). Run it on a shop with the AI

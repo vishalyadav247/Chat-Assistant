@@ -5,7 +5,7 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
 import { isUnlimitedQuota } from "../lib/billing/plan-shared";
-import { displayQuota, nextPlanNameForQuota } from "../lib/billing/plans.server";
+import { getQuota, nextPlanNameForQuota } from "../lib/billing/plans.server";
 import { currentPeriodStart } from "../lib/billing/usage.server";
 import {
   deleteCuratedAnswer,
@@ -109,7 +109,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   return {
     plan: shop?.plan ?? "free",
-    quota: displayQuota(shop?.plan ?? "free", "curated_answers"),
+    quota: getQuota(shop?.plan ?? "free", "curated_answers"),
     // Tier that raises the ceiling — shown once the meter turns warning.
     quotaNextPlan: nextPlanNameForQuota(shop?.plan ?? "free", "curated_answers"),
     answers,

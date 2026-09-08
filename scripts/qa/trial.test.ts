@@ -196,7 +196,7 @@ async function main() {
     await db.shop.create({ data: { domain: TEST_DOMAIN } });
     const provider = getBillingProvider();
 
-    const subscribe = async (plan: "basic" | "pro" | "plus", interval: "monthly" | "yearly") => {
+    const subscribe = async (plan: "basic" | "pro" | "plus", interval: "monthly") => {
       const { confirmationUrl } = await provider.createSubscription({
         shopDomain: TEST_DOMAIN,
         plan,

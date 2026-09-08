@@ -21,8 +21,8 @@
 | ID | Case | Steps | Expected | Scenarios |
 |---|---|---|---|---|
 | A-01 | Subscribe to each paid tier, monthly | For basic/pro/plus: `intent=subscribe`, interval=monthly → approve → callback | `Shop.plan`, `planStatus=trial`, `subscriptionId`, `billingInterval=monthly`, `trialEndsAt=+7d`, `usageLineItemId` all set; one `plan_changed` event | H, P |
-| A-02 | Subscribe to each paid tier, yearly | Same with interval=yearly | `billingInterval=yearly`; **no usage line item** (Shopify rejects usage lines on ANNUAL); price = `priceYearlyPerMonth × 12` | H, B |
-| A-03 | Yearly hard-caps at quota | Yearly Basic shop exceeds `conversations` quota | AI stops at cap — no overage billed, because there is no usage line. Merchant-facing copy must not promise overage | B |
+| A-02 | Monthly is the ONLY interval | Try to subscribe with anything but monthly | Impossible by construction — annual billing was removed 2026-09-07, `BillingIntervalId` is `"monthly"` alone, and every paid subscription carries a usage line so overage works | H, B |
+| A-03 | A legacy annual row still never bills | A pre-removal row with `billingInterval="yearly"` exceeds quota | `overageBillable()` stays false (Shopify rejects usage lines on ANNUAL), so it hard-caps rather than being charged for records Shopify would refuse | B |
 | A-04 | Upgrade | basic → pro | New subscription created; Shopify cancels + prorates the old one; plan updates; old subscription id replaced | H |
 | A-05 | Downgrade paid → paid | plus → basic | Same as A-04; over-quota data **kept**, new creates blocked, banner shown. No deletions | H, B |
 | A-06 | Downgrade to Free | `intent=subscribe` plan=free | `appSubscriptionCancel` called; all subscription fields reset; data kept | H |
@@ -341,6 +341,7 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 | Q-02 | Catalog sync (02) | Products/collections/discounts mirrored; webhooks enqueue-only; daily reconcile **prunes deleted items**; product cap per plan | H, B, P |
 | Q-03 | Chatbox settings (06) | All three tabs save; live preview has storefront parity | H |
 | Q-04 | AI training (07) | All five tabs; metafield opt-in quota; unresolved-question queue → FAQ/Q&A/curated prefill | H, P |
+| Q-04b | Metaobject-reference metafields (07, MR1–MR4 in `features.test.ts`) | Sync resolves enabled `metaobject_reference` / list refs to the metaobject's fields as text (batched `nodes(ids:)`, needs `read_metaobjects`); a reference entry renders ONLY resolved text (never the gid); deleted metaobjects and disabled definitions are skipped; toggle-apply resolves refs synced before enabling | B |
 | Q-05 | AI instructions (08) | Persona, guardrails, recommendation rules, handover config all persist and take effect | H |
 | Q-06 | Curated answers (09) | CRUD; quota; draft never served; published-without-embedding never matches; HTML stripped from talking points | H, B, P |
 | Q-07 | Analytics (14) | Series/donut/CSAT/funnel/top questions; test chats excluded; rollup idempotent; range gated by plan; exports gated | H, B, P |
@@ -375,7 +376,7 @@ route files exist, never that their loaders run or their pages paint.
 | R-01 | Every `/app/*` loader runs | Resolves without throwing, for all 16 pages | H |
 | R-02 | Loader payload matches what the component destructures | No missing key (a missing key is a render crash, not a warning) | H |
 | R-03 | Every loader query is shop-scoped | `shopId` present on every query in the loader body | T |
-| R-04 | Renders on `free` **and** on `plus` with enforcement ON | Gates degrade; no page throws | P |
+| R-04 | Renders on `free` **and** on `plus` (gates always live) | Gates degrade; no page throws | P |
 | R-05 | Empty-data shop | No page throws with zero conversations/products/knowledge | B |
 | R-06 | Every action: valid input | Succeeds and persists | H |
 | R-07 | Every action: missing/invalid input | Rejected with a useful message; nothing persisted | B |
@@ -490,6 +491,8 @@ failure. The HTTP suites additionally require `npm run dev` to be running on `:3
 | `scripts/qa/storefront.test.ts` | U | **yes** |
 | `scripts/qa/agent-quality.test.ts` | W | no |
 | `scripts/qa/widget-viewport.test.ts` | X | no |
+| `scripts/qa/detail-lane.test.ts` | Y | no |
+| `scripts/qa/quota-grants.test.ts` | Z | no |
 | `scripts/qa/preflight.ts` | — (environment health, run first) | no |
 
 Seeding: `scripts/qa/seed-curated.ts` (curated fixtures), `scripts/qa/perf-seed.ts` (synthetic
@@ -544,11 +547,10 @@ Result 2026-09-04: **26/26 pass.**
    match. Republished; storefront then passed 226/1.
 
 4. **`yearlyBilling: false` was left in `admin:plans`** — the same failure mode,
-   one step worse. `overage.test.ts` withdraws annual billing to prove the
-   subscribe action refuses a yearly interval, and restores the snapshot in a
-   `finally`; an interrupted run had left it off, which switches annual billing
-   off for **every tenant** and made the suite fail its own restore assertion.
-   Removed the field (absent = the code default, on); overage then passed 60/0.
+   one step worse: a suite flipped a GLOBAL operator setting and an interrupted
+   run never restored it. (The setting itself is gone — annual billing was
+   removed entirely on 2026-09-07 — but the lesson stands for `enforcement`,
+   which `preflight.ts` still checks.)
 
 ### Preflight — `npm run qa:preflight`
 
@@ -556,7 +558,7 @@ Notes 3 and 4 are the same bug twice: a suite mutates global state, restores it
 in a `finally`, and a `finally` does not run when the process is killed. Rather
 than trust memory, `scripts/qa/preflight.ts` checks the four pieces of shared
 state any suite can leave dirty — parked curated fixtures, `admin:plans`
-overrides (`yearlyBilling`, `enforcement`), `platform:ai` temperature/maxTokens,
+overrides (`enforcement`), `platform:ai` temperature/maxTokens,
 and throwaway shops — and exits non-zero if the environment cannot be believed.
 `--fix` puts back everything that is safe to put back (it never deletes shops,
 which could race a live run). **Run it before a campaign and after any
@@ -566,7 +568,7 @@ interrupted suite.**
 
 ## X. Storefront widget — the iOS soft keyboard (`scripts/qa/widget-viewport.test.ts`)
 
-Static suite, 31 checks, no server and no DB. It reads
+Static suite, 38 checks, no server and no DB. It reads
 `extensions/chat-widget/assets/chat-widget.{js,css}` and asserts the mobile
 keyboard contract, because the failure it guards is invisible on every desktop
 browser **and** on Chrome for Android — including a desktop DevTools device
@@ -590,8 +592,101 @@ which resizes the box and moves it not at all.
 | X-7 | `closePanel` unbinds the listeners, releases the lock, restores the viewport meta, and clears `cw-kbd` |
 | X-8 | `cw-kbd` (toggled on `focusin`/`focusout`, using `relatedTarget`) drops the `safe-area-inset-bottom` padding, which is dead space once the keyboard covers the gesture bar |
 | X-9 | `.cw-body` sets `overscroll-behavior: contain` — the rubber-band chain moves the visual viewport, which drags the panel |
+| X-11 | `watchKeyboard` polls the viewport across frames on **both** focus edges, stops after three identical frames, has a hard deadline, and is cancelled on unbind — iOS can fire its last `resize` mid-animation and send nothing after, which left the composer under the keys until the first keystroke (whose caret scroll fired the event that finally reported settled metrics) |
 | X-10 | `.cw-root` keeps `z-index: 2147483647` and has **no** `transform` (a transform makes it the containing block for its own fixed children) |
 
 The suite is written to fail loudly on regression: reverting any one of these
 turns the corresponding case red. Verified by mutation — replacing
 `vv.offsetTop` with a constant fails X-1 and nothing else.
+
+---
+
+## Y. Product-detail follow-ups (`scripts/qa/detail-lane.test.ts`)
+
+32 checks, dev Postgres only — no dev server, no LLM key.
+
+**The defect.** A shopper is shown three bracelets, asks *"what is this one made
+of?"*, and receives a fresh recommendation — three DIFFERENT products, with
+prose about them. Reported from the production app, 2026-09-07.
+
+**Why it happened.** The router has three intents and `question` means POLICY
+(shipping, returns, sizing, payment, warranty, care). So every product-shaped
+message lands in `buy`, and `buy` always means retrieve-and-recommend. A
+question *about* a product had no lane: it was re-run through hybrid search,
+whose query ("what is it made of") matches roughly arbitrary rows, and the model
+recommended them. Structural, not a tuning miss.
+
+| ID | Case | Expected |
+|---|---|---|
+| Y-1 | `DETAIL:` control line | id / `none` / markdown noise / lowercase parse; prose starting "Detailed…" is left alone; a `PICKS:` line is not a `DETAIL:` line; only the first id is taken (the lane answers about ONE product) |
+| Y-2 | Line stripping | The control line never reaches the shopper; the parsed subject survives |
+| Y-3 | Prompt contract | `PRODUCT_DETAIL` says *that product only*, forbids inventing a material or measurement, and explicitly forbids recommending, mentioning or comparing any other product — the exact production complaint |
+| Y-4 | Shown-product recovery | Cards from earlier turns are recovered, deduplicated across turns, most-recently-shown first |
+| Y-5 | Freshness | Products are re-read from the catalogue, never trusted from the stored card — the card is a snapshot and price/stock move underneath it |
+| Y-6 | Tenancy | Another shop sees nothing of the conversation; a blank `shopId` is rejected outright |
+| Y-7 | Fail-safe | No shown products ⇒ no confirm call at all (a first-turn shopper pays nothing); a confirm error keeps the buy lane |
+| Y-8 | Observability | Its own `sourceLayer: "detail"`, so a detail turn is distinguishable from a recommendation in analytics |
+| Y-9 | Additive | The buy lane still runs when the answer is no; `Learn products` off disables the lane with the rest of the catalogue |
+
+**The boundary, and how it was found.** The first version of the confirm
+question asked only "is this about a product above, rather than a request for
+different products?" The **golden set caught what that lets through**: after
+*"show me some jackets" → "under $100"*, the follow-up *"the waterproof one?"*
+was classified as a detail question. It is not — the shopper is CHOOSING among
+what they were shown, which is still browsing, and the buy lane's tuned
+selection behaviour has to keep it. The question was narrowed to facts about a
+settled product (material, size, contents, care, how it works, compatibility,
+warranty), with narrowing, comparing and picking all explicitly `no`.
+
+That is the case worth remembering: the lane must be narrow. A detail lane that
+swallows selection turns is a worse bug than the one it fixes, because it breaks
+shopping rather than an answer.
+
+---
+
+## Z. Bonus quota grants (`scripts/qa/quota-grants.test.ts`)
+
+42 checks, dev Postgres only — no dev server, no LLM key, no Shopify call.
+
+**One rule: a live grant RAISES that store.s cap.** Effective limit = plan
+allowance + live grants; nothing is consumed one at a time. Withdrawing or
+expiring a grant drops the cap back, and nothing already created under the
+higher cap is deleted — only new work stops.
+
+**Only `conversations` and `products_synced` are grantable.** A grant does
+something only where the check site adds `bonusQuota()`; `grantQuota()` refuses
+any other dimension rather than storing a no-op an operator would never see fail.
+
+**Why the feature exists.** Free plans hard-cap at their quota: Shopify permits
+usage charges on monthly cycles only, so there is nothing to bill and the AI
+simply stops. Until now the only way to help a specific merchant who ran out was
+to hand-edit their plan.
+
+**Z-3 is the case that matters:** a conversation inside the bonus is served and
+NOT billed, and past plan + bonus overage resumes. This also replaced the global
+open/enforced enforcement switch — same goal (give more), but targeted at one
+store instead of every merchant at once.
+
+| ID | Case | Expected |
+|---|---|---|
+| Z-1 | Grant + balance | A second grant ADDS rather than replacing; the ledger records amount, remaining, reason, grantedBy, createdAt |
+| Z-2 | Validation | 0, negative and fractional amounts refused; a single grant capped at 100,000 so a typo cannot uncap a shop |
+| Z-3 | **Ordering** | A billable shop one conversation past quota spends a credit and records **zero** overage |
+| Z-4 | Exhaustion | Falls through to normal behaviour; a spent grant stays on the ledger with `remaining = 0` for audit |
+| Z-5 | Expiry | An expired grant counts for nothing and cannot be spent, but stays visible marked expired; a **dated grant is spent before an open-ended one**, so credits that would be lost are used first |
+| Z-6 | `aiAllowed` | A Free shop at its cap is stopped → a grant starts it answering → withdrawing the grant stops it again |
+| Z-7 | Tenancy | One shop's credits never reach another; revoke cannot cross shops; a blank `shopId` is rejected |
+| Z-7b | **Dimensions are independent** | A `products_synced` grant never touches the conversations balance, and vice versa |
+| Z-8 | Source guard | `consumeQuota` appears **before** the `overageCount` increment in `usage.server.ts`; overage is skipped when a credit paid; `aiAllowed` checks credits before any billing path; the product cap adds the bonus in **both** enforcement sites (bulk sync AND the webhook create path — QA D7) |
+
+Z-8 exists because Z-3 can be broken by a refactor that still passes every
+behavioural test on a shop that happens to have no credits. The source order is
+the invariant.
+
+**Concurrency:** `consumeCredit` decrements with a conditional `updateMany`
+guarded on `remaining > 0`, so two conversations arriving together cannot both
+spend the last credit — the loser sees `count 0` and tries the next row.
+
+**Fails closed:** any error in the credits path returns "no credit spent" and
+the caller falls through to its normal quota handling. A broken credits table
+must never serve free conversations that nothing is tracking.

@@ -5,7 +5,6 @@ import { z } from "zod";
 import db from "../db.server";
 import type { Prisma } from "@prisma/client";
 import {
-  displayQuota,
   getQuota,
   hasFeature,
   nextPlanNameForQuota,
@@ -13,6 +12,7 @@ import {
   requirePlan,
   PlanGateError,
 } from "../lib/billing/plans.server";
+import { bonusQuota } from "../lib/billing/quota-grants.server";
 import { loadShopSettings } from "../lib/settings/save.server";
 import { shopSettingsSchema } from "../lib/settings/schemas";
 import { invalidateShopConfig } from "../lib/config/shop-config.server";
@@ -226,6 +226,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     ]);
 
   const plan = shop?.plan ?? "free";
+  const productBonus = await bonusQuota(shopId, "products_synced");
   // The FAQ bridge source (type=faq, spec 04) is managed from the FAQs tab —
   // hide it from the Custom knowledge table so it can't be deleted by accident.
   const knowledgeSources = sources.filter((s) => s.type !== "faq");
@@ -298,7 +299,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     // Manage metafields modal (spec 07): catalog rows + plan cap on enabled ones.
     metafields: {
       rows: metafieldRows,
-      quota: displayQuota(plan, "metafields_enabled"),
+      quota: getQuota(plan, "metafields_enabled"),
       lastSyncedAt: syncState?.metafieldSyncAt?.toISOString() ?? null,
     },
     collections: collections as CollectionRow[],
@@ -325,16 +326,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       chunkTotal: knowledgeSources.reduce((sum, s) => sum + s.chunkCount, 0),
       csvRowCap: CSV_ROW_CAP,
       quotas: {
-        crawlPages: { used: crawlUsed, quota: displayQuota(plan, "crawl_pages") },
+        crawlPages: { used: crawlUsed, quota: getQuota(plan, "crawl_pages") },
         manualQas: {
           used: knowledgeSources.filter((s) => s.type === "manual").length,
-          quota: displayQuota(plan, "manual_qas"),
+          quota: getQuota(plan, "manual_qas"),
         },
         fileUploads: {
           used: knowledgeSources.filter((s) => s.type === "file").length,
-          quota: displayQuota(plan, "file_uploads"),
+          quota: getQuota(plan, "file_uploads"),
         },
-        policyPages: { used: pagesUsed, quota: displayQuota(plan, "policy_pages") },
+        policyPages: { used: pagesUsed, quota: getQuota(plan, "policy_pages") },
       },
     },
     // Plan gate (spec 15) — in open enforcement mode hasFeature() passes for
@@ -368,7 +369,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       fileUpload: hasFeature(plan, "file_upload") ? null : requiredPlanName("file_upload"),
       productsSynced: {
         used: products.length,
-        quota: displayQuota(plan, "products_synced"),
+        // Plan cap PLUS any live bonus grant, matching what catalog-sync.server
+        // actually enforces. Showing the plan number alone would tell a granted
+        // merchant they were full at 200 while the sync happily ran to 700 —
+        // the same display-vs-enforce split that was just removed for
+        // conversations.
+        quota: getQuota(plan, "products_synced") + productBonus,
+        bonus: productBonus,
         nextPlan: nextPlanNameForQuota(plan, "products_synced"),
       },
       metafieldsNext: nextPlanNameForQuota(plan, "metafields_enabled"),
@@ -428,7 +435,7 @@ async function productDetailMetafields(
     .map((m) => {
       const def = byKey.get(`${m.owner}:${m.namespace}.${m.key}`);
       const name = def?.name ?? `${m.namespace}.${m.key}`;
-      const value = renderMetafieldValue(m.type, m.value) || m.value.slice(0, 200);
+      const value = renderMetafieldValue(m.type, m.value, m.resolved) || m.value.slice(0, 200);
       return {
         label: m.owner === "variant" && m.variant ? `${name} (${m.variant})` : name,
         value: value.length > 400 ? `${value.slice(0, 400)}…` : value,
@@ -976,7 +983,7 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
             selectedTypes: Array.isArray(existingTypes)
               ? existingTypes.filter((t): t is string => typeof t === "string")
               : [],
-            quota: displayQuota(shop?.plan ?? "free", "policy_pages"),
+            quota: getQuota(shop?.plan ?? "free", "policy_pages"),
           },
         };
       }
@@ -1095,6 +1102,7 @@ export default function TrainingDataPage() {
             metafieldSyncAt={data.metafields.lastSyncedAt}
             syncedUsed={data.planSignals.productsSynced.used}
             syncedQuota={data.planSignals.productsSynced.quota}
+            syncedBonus={data.planSignals.productsSynced.bonus}
             syncedNextPlan={data.planSignals.productsSynced.nextPlan}
           />
         ) : null}

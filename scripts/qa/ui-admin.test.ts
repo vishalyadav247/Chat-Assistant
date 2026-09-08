@@ -628,13 +628,12 @@ async function plansSection({ db, COOKIE, snapshot }: any): Promise<void> {
   const readRow = async () => (await db.appSecret.findUnique({ where: { key: KEY } }))?.value ?? null;
 
   const plansLib = await import("../../app/lib/billing/plans.server");
-  const { loadPlanConfig, getQuota, hasFeature, displayQuota, planEnforcementMode, PLANS, DEFAULT_PLANS, GATED_FEATURES, QUOTA_DIMENSIONS, PLAN_IDS } = plansLib;
+  const { loadPlanConfig, getQuota, hasFeature, PLANS, DEFAULT_PLANS, GATED_FEATURES, QUOTA_DIMENSIONS, PLAN_IDS } = plansLib;
   const { getStoredPlanConfig } = await import("../../app/lib/admin/admin-settings.server");
 
   /** Rebuild the exact payload the plans page submits for one tier. */
   const payloadFor = (plan: any, patch: any = {}) => ({
     priceMonthly: plan.priceMonthly,
-    priceYearlyPerMonth: plan.priceYearlyPerMonth,
     trialDays: plan.trialDays,
     overagePerConversation: plan.overagePerConversation,
     quotas: Object.fromEntries(QUOTA_DIMENSIONS.map((d: string) => [d, plan.quotas[d]])),
@@ -647,33 +646,21 @@ async function plansSection({ db, COOKIE, snapshot }: any): Promise<void> {
 
   try {
   const live = await loaderData("/admin/plans", "admin.plans", COOKIE);
-  ok("loader exposes the live matrix, the defaults and the enforcement mode", Boolean(live.plans?.free && live.defaults?.free && live.enforcement), `enforcement=${live.enforcement}`);
-  const originalEnforcement: "open" | "enforced" = live.enforcement;
+  ok("loader exposes the live matrix and the defaults", Boolean(live.plans?.free && live.defaults?.free));
 
-  // 4a. Enforcement switch (B-05).
+  // 4a. The enforcement switch was REMOVED (2026-09-08): gates are always live,
+  // and one store is given more with a per-shop bonus grant instead. Asserted
+  // here so the global switch cannot quietly return.
   {
-    const flipped = originalEnforcement === "enforced" ? "open" : "enforced";
-    const r = await submit("/admin/plans", "admin.plans", { intent: "enforcement", mode: flipped }, COOKIE);
-    ok("POST enforcement toggle succeeds", r.data.ok === true, JSON.stringify(r.data));
-    const d = await loaderData("/admin/plans", "admin.plans", COOKIE);
-    ok("fresh GET shows the flipped enforcement mode", d.enforcement === flipped, d.enforcement);
     const html = await get("/admin/plans", COOKIE);
-    ok("rendered page reflects the flipped mode", flipped === "open" ? html.body.includes("Enforcement is OFF") : !html.body.includes("Enforcement is OFF"));
-    const ov = await loaderData("/admin", "admin._index", COOKIE);
-    ok("overview tile agrees with the new mode", ov.enforcement === flipped, ov.enforcement);
-    ok("persisted in app_secrets", JSON.parse((await readRow())!).enforcement === flipped);
-
-    await loadPlanConfig();
-    ok("in-process planEnforcementMode() follows", planEnforcementMode() === flipped, planEnforcementMode());
-    if (flipped === "open") {
-      ok("open mode: every gate passes", GATED_FEATURES.every((f: any) => hasFeature("free", f)));
-      ok("open mode: every quota is unlimited", QUOTA_DIMENSIONS.every((d: any) => getQuota("free", d) === Number.MAX_SAFE_INTEGER), String(getQuota("free", "conversations")));
-      ok("open mode: displayQuota still shows the real matrix value", displayQuota("free", "conversations") === PLANS.free.quotas.conversations, String(displayQuota("free", "conversations")));
-    }
-
-    const back = await submit("/admin/plans", "admin.plans", { intent: "enforcement", mode: originalEnforcement }, COOKIE);
-    await loadPlanConfig();
-    ok("enforcement restored", back.data.ok === true && planEnforcementMode() === originalEnforcement, planEnforcementMode());
+    ok("no enforcement card is rendered", !html.body.includes("Enforcement is OFF"));
+    const r = await submit("/admin/plans", "admin.plans", { intent: "enforcement", mode: "open" }, COOKIE);
+    ok("the old enforcement intent is refused", r.data.ok === false, JSON.stringify(r.data));
+    const row = await readRow();
+    ok(
+      "…and nothing enforcement-shaped was stored",
+      !row || JSON.parse(row.value).enforcement === undefined,
+    );
   }
 
   // 4b. Quota + feature edit on the Free tier (which the page renders by
@@ -1279,13 +1266,13 @@ async function settingsSection({ db, COOKIE, snapshot }: any): Promise<void> {
   // 9b. Operational flags round-trip.
   {
     const flip = !before.embedStatusEnabled;
-    const r = await submit(P, R, { intent: "flags", billingTestMode: String(before.billingTestMode), billingForceTestCharges: String(before.billingForceTestCharges), embedStatusEnabled: String(flip) }, COOKIE);
+    const r = await submit(P, R, { intent: "flags", embedStatusEnabled: String(flip) }, COOKIE);
     ok("POST flags succeeds", r.data.ok === true, JSON.stringify(r.data));
     const d = await loaderData(P, R, COOKIE);
     ok("fresh GET shows the flipped flag", d.embedStatusEnabled === flip, String(d.embedStatusEnabled));
-    ok("the other flags were not disturbed", d.billingTestMode === before.billingTestMode && d.billingForceTestCharges === before.billingForceTestCharges);
+    ok("no billing switches remain to disturb", !("billingTestMode" in d) && !("billingForceTestCharges" in d));
     ok("persisted in app_secrets", (await storedJson()).embedStatusEnabled === flip);
-    await submit(P, R, { intent: "flags", billingTestMode: String(before.billingTestMode), billingForceTestCharges: String(before.billingForceTestCharges), embedStatusEnabled: String(before.embedStatusEnabled) }, COOKIE);
+    await submit(P, R, { intent: "flags", embedStatusEnabled: String(before.embedStatusEnabled) }, COOKIE);
     ok("flags restored", (await loaderData(P, R, COOKIE)).embedStatusEnabled === before.embedStatusEnabled);
   }
 

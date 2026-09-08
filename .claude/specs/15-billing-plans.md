@@ -8,7 +8,6 @@
 | | Free | Basic | Pro (Most popular) | Plus |
 |---|---|---|---|---|
 | Monthly | $0 | $19.99 | $49.99 | $99.99 |
-| Yearly (per-mo, −18%) | $0 | $16.39 ($196.68/yr) | $40.99 ($491.88/yr) | $81.99 ($983.88/yr) |
 | Trial | none | 7-day | 7-day | 7-day |
 | AI conversations / mo | 75 | 200 | 500 | 1,000 |
 | Overage | — (AI stops) | $0.4/conv | $0.4/conv | $0.4/conv |
@@ -30,9 +29,6 @@
 
 **No literal plan numbers in UI copy (QA D10).** Everything above is a *default* the
 operator can change from `/admin/plans`, so the UI must recompute, never quote:
-- the yearly discount is `Math.round((1 - yearlyTotal / (priceMonthly × 12)) × 100)`
-  (`yearlySavingsPercent` / `savingsBadgeLabel` in `app/components/PlanCards.tsx`) —
-  the toggle badge and the yearly terms line both read it, so "18%" is derived, not typed;
 - the overage rate in the FAQ comes from `overageRate(plan)` via the loader
   (`PlanFaq` prop `overagePerConversation`; `null` ⇒ "AI pauses at the cap" copy);
 - the "(50 rows)" CSV figure is **not** modelled as a quota dimension
@@ -42,7 +38,7 @@ operator can change from `/admin/plans`, so the UI must recompute, never quote:
 
 ## Billing integration (Shopify Billing API)
 
-- `appSubscriptionCreate` (GraphQL) with RecurringPricing (30-day interval; yearly = ANNUAL interval) + **UsagePricing** line (capped amount for overage, terms "$0.4 per extra AI conversation") for Basic+.
+- `appSubscriptionCreate` (GraphQL) with RecurringPricing (30-day interval — the only interval) + **UsagePricing** line (capped amount for overage, terms "$0.4 per extra AI conversation") for Basic+.
 - Trial 7 days via trialDays; Free = no subscription object ("Free forever").
 - Confirmation URL redirect flow from embedded app (top-level redirect via App Bridge); return URL → verify active → store plan + planStatus on Shop.
 - Plan change: create new subscription (Shopify auto-cancels/prorates — FAQ #6: immediate, prorated by Shopify).
@@ -65,10 +61,8 @@ hand-crafted into the row — the single enforcement point, since every reader
 goes through the live matrix. Reason: a $0.50 rate was once set on FREE, a plan
 that can never be billed because charging needs a Shopify usage line and a Free
 shop has no subscription, and the plan card then advertised a charge the app
-would never make. The card prints the overage line ONLY in monthly mode on a plan that has a rate
-— the same predicate as `overageBillable()` — because Shopify rejects usage
-lines on annual subscriptions, so every yearly card was making the same
-unkeepable promise. Overage is disclosed only where it is true: the Shopify approval page
+would never make. The card prints the overage line ONLY on a plan that has a rate — the same
+predicate as `overageBillable()`. Overage is disclosed only where it is true: the Shopify approval page
 (`usageTermsFor`, part of the usage line the merchant approves) and the Plan &
 Usage FAQ, which asks `overageBillable()` first.
 
@@ -109,9 +103,46 @@ the allowance** (warning, says what happens next), **past the allowance**
 (critical + "Raise limit to $X"). `overageCount` used to be written and never
 read anywhere — a merchant could be billed with nothing on screen to explain it.
 
-**Never billable, by design:** Free (no subscription, no usage line) and every
-YEARLY subscription (Shopify rejects usage lines on annual plans — QA D1), plus
-any monthly shop whose `usageLineItemId` is missing. All three hard-cap instead,
+**Enforcement switch: REMOVED (2026-09-08).** Plan gates and quotas are ALWAYS
+live. The open/enforced operator switch existed only while the tiers were being
+decided; it was global, so leaving it open served every merchant the top tier
+for free, silently. To give ONE store more, grant it bonus quota (below) — same
+goal, targeted, and visible on that store.
+
+**Bonus quota (per store, 2026-09-07/08).** A `QuotaGrant` LEDGER
+(rows, not a counter on Shop: auditable, expirable in batches, additive) topping
+up ANY quota dimension for ONE shop, from Admin -> Usage -> that store.
+
+ONE RULE: a live grant RAISES that shop.s cap. Effective limit = plan allowance
++ live grants; nothing is consumed one at a time. (A consumable model was built
+first and replaced the same day: the displayed limit shrank as it was spent, and
+it needed a hand-maintained "spend the credit before recording overage" rule
+that a refactor could silently reverse into billing a merchant for the very
+conversations the grant covered. A cap raise has no ordering to get wrong.)
+Withdrawing or expiring a grant drops the cap back; nothing already created
+under the higher cap is deleted, only new work stops.
+
+GRANTABLE_DIMENSIONS is `conversations` + `products_synced` — and only those,
+because a grant does something only where the check site adds `bonusQuota()`.
+Offering the rest would let an operator grant 500 curated answers, see it saved,
+and have nothing change. `grantQuota()` REFUSES an unwired dimension rather than
+storing a no-op. Adding one is two lines: read the bonus at that quota.s check
+site, then list it. FEATURES are never grantable — a grant tops up a number, it
+does not unlock a capability; upgrading is the only way to those. Spent AFTER
+the plan allowance and BEFORE overage — the ordering is the whole feature, since
+spending them later would bill the merchant for exactly what the grant was meant
+to cover. `aiAllowed()` checks the balance before any billing path, so a granted
+Free shop keeps answering past its cap (the only mechanism that can do this:
+Free has no usage line, so it can never be billed overage instead). Soonest-
+expiring grant is spent first; an expired or withdrawn grant stays on the ledger
+with `remaining = 0` for audit. Shown to the merchant on Plan & Usage — a silent
+balance would make their own numbers look wrong. Suite: `quota-grants.test.ts` (42 checks,
+TEST-CASES area Z).
+
+**Never billable, by design:** Free (no subscription, no usage line) and any
+shop whose `usageLineItemId` is missing — including a legacy row still marked
+`billingInterval: "yearly"`, since Shopify rejects usage lines on ANNUAL
+subscriptions (QA D1). All of them hard-cap instead,
 and the FAQ copy derives from the same predicate so it cannot promise overage
 that cannot be charged (QA D-15).
 
@@ -123,13 +154,13 @@ test charges and push it past quota before trusting the first real invoice.
 
 `requirePlan(shopId, feature)` helper — server-side check on every gated mutation/config read; UI reads the same matrix for locks/meters. Gates listed above; quota creates (curated, sources, products cap) enforced at write time.
 
-**Annual billing switch** (`/admin/plans`, stored with the matrix as `yearlyBilling`; code default ON). Off = the Monthly/Yearly toggle disappears from Plan & Usage AND the subscribe action refuses `interval=yearly` — the card is presentation, the interval is a form field, so the action is the guard. Existing annual subscriptions are never touched, and a shop already on annual still sees its own interval so its billing is not misrepresented. Why it exists: Shopify allows usage charges on monthly cycles only, so a yearly subscriber can never be billed for extra conversations — they hard-cap at the quota, and on the top tier there is not even an upgrade left to sell. Withdrawing annual makes every paying shop monthly, the only interval where the overage path works end to end. Note that simply zeroing the yearly PRICE does not do this: the toggle stays, the cards read "$0/year" and the subscribe button still works.
+**Annual billing: REMOVED (2026-09-07).** There is no yearly interval, no Monthly/Yearly toggle, no yearly price in the matrix, and no operator switch — the app offers monthly subscriptions only. Why: Shopify allows usage charges on monthly cycles only, so a yearly subscriber could never be billed for extra conversations. They hard-capped at their quota, and on the top tier there was not even an upgrade left to sell — the merchant paying the most, up front, got the worst outcome. Monthly-only makes the overage path work for every paid tier. `Shop.billingInterval` survives as a column and `overageBillable()` still refuses `"yearly"`, purely as a safety net for rows written before the removal.
 
 **Enforcement switch** (`/admin/plans`, stored with the matrix). `enforced` = every gate and quota applies. `open` = every store is served the TOP TIER's entitlements — `OPEN_MODE_PLAN`, currently Plus — **not unlimited** (changed 2026-09-03: `getQuota` used to return `MAX_SAFE_INTEGER`, which meant no ceiling at all and meters reading "0 of 9,007,199,254,740,991"). Open mode is `max(top tier, the shop's own plan)` per dimension and the union of both feature lists, so it can only ever be an upgrade even if the matrix is mis-edited. Consequence worth knowing: a monthly paid shop that passes the TOP tier's conversation cap in open mode is billed overage at its own rate — open mode is generous, not free-for-all.
 
 ## Plan & Usage page (`/app/plan-usage`, per design)
 
-Usage card (meter, resets-on-1st copy); Your-plan card (name + status badge incl. "No active subscription"); Monthly|Yearly toggle (Save 18%) rewriting prices/terms; 4 plan cards (feature bullets from matrix, trial copy, overage note, CTA Current/Upgrade/Downgrade); discount code card; **Done-for-you card** ("Progryss builds your curated-answer library…" → contact link); FAQ accordion (6 items, verbatim policy copy from design).
+Usage card (meter, resets-on-1st copy); Your-plan card (name + status badge incl. "No active subscription"); 4 plan cards (feature bullets from matrix, trial copy, overage note, CTA Current/Upgrade/Downgrade); discount code card; **Done-for-you card** ("Progryss builds your curated-answer library…" → contact link); FAQ accordion (6 items, verbatim policy copy from design).
 
 ## Business rules
 
@@ -139,7 +170,7 @@ Usage card (meter, resets-on-1st copy); Your-plan card (name + status badge incl
 
 ## Acceptance criteria
 
-1. Each tier subscribe flow completes on dev store (test charges), incl. yearly + trial; plan lands on Shop; UI badges correct (Current/Upgrade/Downgrade).
+1. Each tier subscribe flow completes on dev store (test charges), incl. trial; plan lands on Shop; UI badges correct (Current/Upgrade/Downgrade).
 2. Meter: scripted sessions tick correctly (30-min boundary tested); reset job on the 1st; no rollover.
 3. Free at cap → AI stops, widget fallback, banner; Basic at cap → usage records created at $0.4.
 4. Every gate in the matrix enforced server-side (test per feature: branding, exports, templates, auto-detect, quotas, discounts sync, cart view).

@@ -23,12 +23,9 @@ import {
   DEFAULT_PLANS,
   loadPlanConfig,
   PLANS,
-  planEnforcementMode,
-  yearlyBillingEnabled,
 } from "../lib/billing/plans.server";
 import {
   GATED_FEATURES,
-  OPEN_MODE_PLAN,
   PLAN_IDS,
   QUOTA_DIMENSIONS,
   type GatedFeature,
@@ -78,9 +75,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     adminEmail: session.admin.email,
     plans: PLANS,
     defaults: DEFAULT_PLANS,
-    enforcement: planEnforcementMode(),
-    yearlyBilling: yearlyBillingEnabled(),
-    hasOverrides: Boolean(stored.enforcement || stored.plans),
+    hasOverrides: Boolean(stored.plans),
   };
 };
 
@@ -91,18 +86,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = String(form.get("intent") ?? "");
 
   try {
-    if (intent === "enforcement") {
-      const stored = await getStoredPlanConfig();
-      const mode = String(form.get("mode")) === "enforced" ? ("enforced" as const) : ("open" as const);
-      await savePlanConfig({ ...stored, enforcement: mode });
-      return { ok: true as const, error: null };
-    }
-
-    if (intent === "yearly-billing") {
-      const stored = await getStoredPlanConfig();
-      await savePlanConfig({ ...stored, yearlyBilling: form.get("enabled") === "true" });
-      return { ok: true as const, error: null };
-    }
 
     if (intent === "save-plan") {
       const planId = String(form.get("planId")) as PlanId;
@@ -111,7 +94,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         hidden: boolean;
         overagePerConversation: number | null;
         priceMonthly: number;
-        priceYearlyPerMonth: number;
         trialDays: number;
         quotas: Record<string, number>;
         features: string[];
@@ -144,7 +126,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 interface PlanDraft {
   hidden: boolean;
   priceMonthly: string;
-  priceYearlyPerMonth: string;
   trialDays: string;
   /** "" = null = this plan hard-caps instead of billing. Paid tiers only. */
   overage: string;
@@ -156,7 +137,6 @@ function toDraft(plan: PlanDefinition): PlanDraft {
   return {
     hidden: plan.hidden,
     priceMonthly: String(plan.priceMonthly),
-    priceYearlyPerMonth: String(plan.priceYearlyPerMonth),
     trialDays: String(plan.trialDays),
     overage: plan.overagePerConversation === null ? "" : String(plan.overagePerConversation),
     quotas: Object.fromEntries(
@@ -208,8 +188,7 @@ export default function AdminPlans() {
         payload: JSON.stringify({
           hidden: draft.hidden,
           priceMonthly: num(draft.priceMonthly, defaults.priceMonthly),
-          priceYearlyPerMonth: num(draft.priceYearlyPerMonth, defaults.priceYearlyPerMonth),
-          trialDays: Math.floor(num(draft.trialDays, defaults.trialDays)),
+              trialDays: Math.floor(num(draft.trialDays, defaults.trialDays)),
           // Free is filtered server-side too (applyConfig ignores a rate for it),
           // but do not even send one — the field is not rendered for that tier.
           overagePerConversation:
@@ -227,8 +206,6 @@ export default function AdminPlans() {
     );
   };
 
-  const setEnforcement = (mode: "open" | "enforced") =>
-    fetcher.submit({ intent: "enforcement", mode }, { method: "post" });
 
   const resetAll = () => {
     fetcher.submit({ intent: "reset" }, { method: "post" });
@@ -239,55 +216,6 @@ export default function AdminPlans() {
     <AdminShell adminEmail={data.adminEmail}>
       <AdminPage heading="Plans" subheading="The live plan matrix for every store — quotas, prices, and gated features. Merchant pages and gates pick changes up within ~30 seconds.">
         <s-stack gap="base">
-          <AdminCard heading="Enforcement">
-            <s-stack gap="base">
-              <s-switch
-                label={
-                  data.enforcement === "enforced"
-                    ? "Plan gates enforced"
-                    : `Open mode — every store gets the ${data.plans[OPEN_MODE_PLAN].name} plan`
-                }
-                details={`Enforced: every gate and quota below is applied server-side. Open: every store gets ${data.plans[OPEN_MODE_PLAN].name}'s features and limits instead of its own — generous, but still a real plan with a ceiling. Meters keep showing each store's own matrix values.`}
-                checked={data.enforcement === "enforced"}
-                onInput={(e) => setEnforcement(e.currentTarget.checked ? "enforced" : "open")}
-              />
-              {data.enforcement === "open" ? (
-                <s-banner tone="warning">
-                  Enforcement is OFF: every store is being served {data.plans[OPEN_MODE_PLAN].name} limits and features,
-                  whatever they pay — so nothing is billed or blocked until a store passes{" "}
-                  {data.plans[OPEN_MODE_PLAN].name}&apos;s own limits. Flip the switch when the tiers below are final.
-                </s-banner>
-              ) : null}
-
-              <s-divider />
-
-              {/* Annual billing is a BILLING-MODEL switch, not a discount one:
-                  Shopify rejects usage lines on annual subscriptions, so a
-                  yearly subscriber can never be charged for extra conversations
-                  and simply hard-caps — with no upgrade left to sell on the top
-                  tier. Switching this off makes every paying shop monthly,
-                  which is the only interval where overage works end to end. */}
-              <s-switch
-                label="Offer annual billing"
-                details="Off: the Monthly/Yearly toggle disappears from Plan & Usage and the server refuses a yearly subscribe. Existing annual subscriptions keep running untouched — this only decides what is offered from here on. Note that a yearly subscriber can never be billed for extra conversations (Shopify allows usage charges on monthly cycles only), so they stop at their quota instead."
-                checked={data.yearlyBilling}
-                onInput={(e) =>
-                  fetcher.submit(
-                    { intent: "yearly-billing", enabled: String(e.currentTarget.checked) },
-                    { method: "post" },
-                  )
-                }
-              />
-              {data.yearlyBilling ? null : (
-                <s-banner tone="info">
-                  Annual billing is withdrawn: new subscriptions are monthly only, so every paid store
-                  can be billed for conversations past its allowance. Shops already on an annual plan
-                  are unaffected and still see their own interval.
-                </s-banner>
-              )}
-            </s-stack>
-          </AdminCard>
-
           <AdminCard heading="Plan matrix">
             <s-stack gap="base">
               <TabPills
@@ -326,11 +254,6 @@ export default function AdminPlans() {
                   value={draft.priceMonthly}
                   onInput={(e) => patchDraft({ priceMonthly: e.currentTarget.value })}
                 />
-                <s-text-field
-                  label="Yearly ($/month)"
-                  value={draft.priceYearlyPerMonth}
-                  onInput={(e) => patchDraft({ priceYearlyPerMonth: e.currentTarget.value })}
-                />
                 <s-number-field
                   label="Trial days"
                   min={0}
@@ -347,7 +270,7 @@ export default function AdminPlans() {
                   <s-text-field
                     label="Overage $ / conversation"
                     placeholder="blank = AI stops at cap"
-                    details="Monthly subscriptions only — Shopify rejects usage charges on yearly ones, so a yearly subscriber hard-caps at the quota whatever this says."
+                    details="Charged per conversation once a store passes its allowance. Free is never billed overage, whatever is set here."
                     value={draft.overage}
                     onInput={(e) => patchDraft({ overage: e.currentTarget.value })}
                   />

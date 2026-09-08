@@ -39,13 +39,26 @@ export const runtimeConfigSchema = z.object({
   // Links & listing
   webAppUrl: z.string().trim().max(300).optional().default(""),
   appStoreHandle: z.string().trim().max(120).optional().default(""),
-  // Operational flags
+  // Operational flags.
+  //
+  // `billingTestMode` is operator-settable again (the dev app is a CUSTOM app,
+  // so the mock provider is the only way to switch plans there and flipping a
+  // switch beats editing .env and restarting). Its switch is rendered ONLY
+  // outside production — the original sin was not that it existed but that it
+  // appeared in production, where isBillingTestMode() discards it, under a
+  // banner claiming merchants could not be charged. BILLING_TEST_MODE stays as
+  // the env default so a fresh clone works without anyone flipping anything.
+  //
+  // `billingForceTestCharges` is gone and is NOT coming back: it was global, so
+  // leaving it on created EVERY merchant subscription with test:true and
+  // Shopify billed none of them, silently. Whether a charge should be a test
+  // charge is knowable per shop (ShopPlan.partnerDevelopment) — see
+  // shouldCreateTestCharge() in shopify-billing.server.ts.
   billingTestMode: z.boolean().optional(),
   // Coupons master switch (/admin/promo-codes). Off hides the "Have a code?"
   // card on Plan & Usage AND refuses validation server-side — a merchant with a
   // code in hand must not be able to redeem it past the switch.
   promoCodesEnabled: z.boolean().optional(),
-  billingForceTestCharges: z.boolean().optional(),
   embedStatusEnabled: z.boolean().optional(),
 });
 
@@ -65,7 +78,6 @@ export interface EffectiveRuntime {
   webAppUrl: string;
   appStoreHandle: string;
   billingTestMode: boolean;
-  billingForceTestCharges: boolean;
   embedStatusEnabled: boolean;
   promoCodesEnabled: boolean;
 }
@@ -133,9 +145,13 @@ export function runtimeConfig(): EffectiveRuntime {
     // Falls back to the known listing slug so every App Store link works with
     // no ops step; dashboard and env still win. See review.ts for why.
     appStoreHandle: stored.appStoreHandle || e.SHOPIFY_APP_STORE_HANDLE || DEFAULT_APP_STORE_HANDLE,
-    billingTestMode: stored.billingTestMode ?? envBool("BILLING_TEST_MODE") ?? false,
-    billingForceTestCharges:
-      stored.billingForceTestCharges ?? envBool("BILLING_FORCE_TEST_CHARGES") ?? false,
+    // Default ON outside production, OFF in production. The dev app is a CUSTOM
+    // app and Shopify refuses appSubscriptionCreate for those, so mock billing
+    // is the only way plans switch locally — that should work on a fresh clone
+    // with nothing configured. Production defaults off AND is hard-ignored by
+    // isBillingTestMode(), so the default there is belt and braces.
+    billingTestMode:
+      stored.billingTestMode ?? envBool("BILLING_TEST_MODE") ?? process.env.NODE_ENV !== "production",
     // Default ON since 2026-08-26: read_themes is now a declared scope, so the
     // themes query can actually succeed. It stays a flag so an operator can kill
     // it without a deploy if Shopify throttles the themes API, and because a
@@ -201,10 +217,6 @@ export function configSources(): Record<keyof EffectiveRuntime, ConfigSource> {
     webAppUrl: pick(stored.webAppUrl, Boolean(e.WEB_APP_URL || process.env.SHOPIFY_APP_URL)),
     appStoreHandle: pick(stored.appStoreHandle, Boolean(e.SHOPIFY_APP_STORE_HANDLE)),
     billingTestMode: pick(stored.billingTestMode, envBool("BILLING_TEST_MODE") !== undefined),
-    billingForceTestCharges: pick(
-      stored.billingForceTestCharges,
-      envBool("BILLING_FORCE_TEST_CHARGES") !== undefined,
-    ),
     embedStatusEnabled: pick(stored.embedStatusEnabled, envBool("EMBED_STATUS_ENABLED") !== undefined),
     promoCodesEnabled: pick(stored.promoCodesEnabled, envBool("PROMO_CODES_ENABLED") !== undefined),
   };
@@ -228,7 +240,6 @@ export function runtimeConfigForUi() {
     webAppUrl: effective.webAppUrl,
     appStoreHandle: effective.appStoreHandle,
     billingTestMode: effective.billingTestMode,
-    billingForceTestCharges: effective.billingForceTestCharges,
     embedStatusEnabled: effective.embedStatusEnabled,
     promoCodesEnabled: effective.promoCodesEnabled,
   };

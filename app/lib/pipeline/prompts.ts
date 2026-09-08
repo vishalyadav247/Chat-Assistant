@@ -65,6 +65,53 @@ export const PRODUCT_RECOMMEND = [
   "The shopper sees product cards (name, price, image) next to your reply, so do NOT repeat product names or prices in your text — say 'this one' or 'these picks'.",
 ].join(" ");
 
+// Product-detail lane (2026-09-07, production behaviour report). A shopper who
+// asks about a product they were just shown must be told about THAT product —
+// not handed a fresh set of recommendations. The lane is additive: it only runs
+// when this conversation has already shown cards, so nothing that reaches
+// PRODUCT_RECOMMEND today changes path.
+export const DETAIL_CONFIRM_SYSTEM = "Reply with only yes or no.";
+
+/**
+ * The buy/detail boundary, drawn deliberately narrow.
+ *
+ * The first version asked only "is this about a product above, rather than a
+ * request for different products?" — and the golden set caught what that lets
+ * through: after "show me some jackets" → "under $100", the follow-up "the
+ * waterproof one?" was classified as a detail question. It is not. The shopper
+ * is CHOOSING among what they were shown, which is still browsing, and the buy
+ * lane's tuned selection behaviour must keep it.
+ *
+ * So the yes case is facts about a settled product, and narrowing, comparing
+ * and picking are all explicitly no. The lane exists for "what is it made of",
+ * not for "which one".
+ */
+export function detailConfirmUser(msg: string, shownTitles: string[]): string {
+  return [
+    "Products already shown to this shopper:",
+    shownTitles.map((t, i) => `${i + 1}. ${t}`).join("\n"),
+    "",
+    `Shopper's message: ${msg}`,
+    "",
+    "Answer yes ONLY if the shopper is asking for FACTS about one of the products",
+    "above: what it is made of, its size or dimensions, what is included, how it",
+    "works, care or cleaning, ingredients, compatibility, or its warranty.",
+    "",
+    "Answer no if the shopper is choosing between the products, narrowing by an",
+    "attribute, asking to see one of them, asking for something different, cheaper",
+    "or additional, or starting a new search. Those are all still browsing.",
+  ].join("\n");
+}
+
+export const PRODUCT_DETAIL = [
+  "The shopper is asking about a product they have already been shown. Answer about THAT product only.",
+  "Use ONLY the product data below. Never invent a material, measurement, ingredient, certification, delivery time or discount. If the data does not say, say plainly that it is not listed and offer to check with the team.",
+  "Your FIRST line must be exactly `DETAIL: <id>` — the one product you are answering about (example: `DETAIL: 2`). If you genuinely cannot tell which one they mean, use `DETAIL: none` and your reply must ask which one.",
+  "Then answer in 1-4 short sentences. Lead with the specific thing they asked for. Add only the specifications that bear on their question — do not recite the whole record.",
+  "Do NOT recommend, mention, compare or suggest any other product. The shopper did not ask to browse. Offering alternatives here reads as a sales pitch over an unanswered question.",
+  "The shopper sees the product card next to your reply, so do not repeat its name or price.",
+].join(" ");
+
 export const CURATED_CONFIRM_SYSTEM = "Reply with only yes or no.";
 
 export function curatedConfirmUser(msg: string, question: string): string {

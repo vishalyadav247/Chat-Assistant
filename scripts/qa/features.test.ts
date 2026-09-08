@@ -70,12 +70,20 @@ async function threw(fn: () => Promise<unknown>): Promise<Error | null> {
 
 async function main(): Promise<void> {
   const db = (await import("../../app/db.server")).default;
-  const { loadPlanConfig, getQuota, planEnforcementMode } = await import(
-    "../../app/lib/billing/plans.server"
-  );
+  const plans = await import("../../app/lib/billing/plans.server");
+  const { loadPlanConfig, getQuota } = plans;
+  const { savePlanConfig } = await import("../../app/lib/admin/admin-settings.server");
   await loadPlanConfig();
 
-  console.log(`plan enforcement: ${planEnforcementMode()}`);
+  // The gate/quota assertions below describe the DEFAULT matrix. Gates are
+  // always live since the enforcement switch was removed (2026-09-08), but the
+  // matrix itself is still operator-editable, so pin it to the defaults for the
+  // run and restore the stored row verbatim in the finally — exactly like
+  // plan-gates.test.ts does.
+  const priorPlanConfig = await db.appSecret.findUnique({
+    where: { key: plans.PLAN_CONFIG_SECRET_KEY },
+  });
+  await savePlanConfig({});
 
   // ── fixture shops ────────────────────────────────────────────────────────
   const shopA = await db.shop.upsert({
@@ -101,6 +109,7 @@ async function main(): Promise<void> {
     await curatedAnswers({ db, A, B, devShopId: devShop?.id ?? null });
     await search({ db, A, B });
     await rankingGuards({ db, A });
+    await metaobjectResolution();
     await campaigns({ db, A, B, getQuota, setPlan });
     await analytics({ db, A, B, getQuota, setPlan });
     await inbox({ db, A, B, setPlan });
@@ -111,6 +120,18 @@ async function main(): Promise<void> {
     await backgroundJobs({ db, A, B });
     await gdpr({ db, A, B });
   } finally {
+    // Put the operator's plan config back byte-for-byte (or remove ours if
+    // none existed), then reload so the live matrix matches again.
+    if (priorPlanConfig) {
+      await db.appSecret.upsert({
+        where: { key: plans.PLAN_CONFIG_SECRET_KEY },
+        create: { key: plans.PLAN_CONFIG_SECRET_KEY, value: priorPlanConfig.value },
+        update: { value: priorPlanConfig.value },
+      });
+    } else {
+      await db.appSecret.deleteMany({ where: { key: plans.PLAN_CONFIG_SECRET_KEY } });
+    }
+    await loadPlanConfig();
     await teardown(db, [A, B]);
     report();
   }
@@ -1259,6 +1280,114 @@ async function rankingGuards(ctx: { db: any; A: string }): Promise<void> {
       configuredTopicNamedBy("advice", topics) === null &&
       configuredTopicNamedBy("", topics) === null,
     `political→${configuredTopicNamedBy("political opinions", topics)} banned→${configuredTopicNamedBy("BANNED TOPIC", topics)}`,
+  );
+}
+
+// ── Module 4c: metaobject-reference metafields (spec 07, 2026-09-07) ────────
+
+async function metaobjectResolution(): Promise<void> {
+  section("Metaobject-reference metafields: resolution + rendering");
+  const {
+    buildMetafieldText,
+    metafieldKey,
+    metaobjectIdsIn,
+    renderMetafieldValue,
+    renderMetaobject,
+    resolveMetaobjectRefs,
+  } = await import("../../app/lib/ingestion/metafields.server");
+
+  // MR1 — a metaobject renders as readable text; reference/file fields and the
+  // display-name repeat are skipped (one level deep only)
+  const rendered = renderMetaobject({
+    id: "gid://shopify/Metaobject/1",
+    displayName: "Rose Quartz",
+    fields: [
+      { key: "name", value: "Rose Quartz", type: "single_line_text_field" },
+      { key: "origin", value: "Brazil", type: "single_line_text_field" },
+      { key: "benefit", value: "love & harmony", type: "multi_line_text_field" },
+      { key: "related", value: "gid://shopify/Metaobject/9", type: "metaobject_reference" },
+      { key: "image", value: "gid://shopify/MediaImage/3", type: "file_reference" },
+    ],
+  });
+  ok(
+    "MR1 renderMetaobject: fields become text; references and the name repeat are skipped",
+    rendered === "Rose Quartz (origin: Brazil; benefit: love & harmony)",
+    rendered,
+  );
+
+  const single = {
+    owner: "product" as const, variant: "", namespace: "custom", key: "spec",
+    type: "metaobject_reference", value: "gid://shopify/Metaobject/11",
+    resolved: undefined as string | undefined,
+  };
+  const listEntry = {
+    ...single, key: "ingredients", type: "list.metaobject_reference",
+    value: '["gid://shopify/Metaobject/11","gid://shopify/Metaobject/12","nope"]',
+  };
+  const textEntry = { ...single, key: "care", type: "single_line_text_field", value: "wipe dry" };
+
+  // MR2 — gid extraction: single, list (bad items dropped), non-reference
+  ok(
+    "MR2 metaobjectIdsIn extracts gids from single and list values, ignores non-references",
+    JSON.stringify(metaobjectIdsIn(single)) === '["gid://shopify/Metaobject/11"]' &&
+      JSON.stringify(metaobjectIdsIn(listEntry)) ===
+        '["gid://shopify/Metaobject/11","gid://shopify/Metaobject/12"]' &&
+      metaobjectIdsIn(textEntry).length === 0,
+    `${JSON.stringify(metaobjectIdsIn(single))} / ${JSON.stringify(metaobjectIdsIn(listEntry))}`,
+  );
+
+  // MR3 — batched resolution: one call for all lists, deleted (null) node
+  // leaves its entry unresolved, DISABLED definitions are never fetched
+  let calls = 0;
+  const fakeAdmin = {
+    async graphql(_query: string, options?: { variables?: Record<string, unknown> }) {
+      calls++;
+      const ids = (options?.variables?.ids ?? []) as string[];
+      return {
+        async json() {
+          return {
+            data: {
+              nodes: ids.map((id) =>
+                id.endsWith("/12")
+                  ? null
+                  : {
+                      id,
+                      displayName: `Obj ${id.split("/").pop()}`,
+                      fields: [{ key: "origin", value: "Brazil", type: "single_line_text_field" }],
+                    },
+              ),
+            },
+          };
+        },
+      };
+    },
+  };
+  const enabled = new Map([
+    [metafieldKey("product", "custom", "spec"), { name: "Specifications", type: "metaobject_reference" }],
+    [metafieldKey("product", "custom", "ingredients"), { name: "Ingredients", type: "list.metaobject_reference" }],
+  ]);
+  const a = { ...single };
+  const b = { ...listEntry };
+  const disabled = { ...single, key: "hidden" };
+  await resolveMetaobjectRefs(fakeAdmin, [[a, b], [disabled]], enabled);
+  ok(
+    "MR3 one batched call resolves enabled refs; deleted id skipped; disabled untouched",
+    calls === 1 &&
+      a.resolved === "Obj 11 (origin: Brazil)" &&
+      b.resolved === "Obj 11 (origin: Brazil)" &&
+      disabled.resolved === undefined,
+    `calls=${calls} a=${String(a.resolved)} disabled=${String(disabled.resolved)}`,
+  );
+
+  // MR4 — a reference entry renders ONLY its resolved text, never the gid
+  ok(
+    "MR4 reference entries render resolved text only — an unresolved one renders nothing",
+    renderMetafieldValue("metaobject_reference", "gid://shopify/Metaobject/11", "Obj 11 (origin: Brazil)") ===
+      "Obj 11 (origin: Brazil)" &&
+      renderMetafieldValue("metaobject_reference", "gid://shopify/Metaobject/11") === "" &&
+      buildMetafieldText([a], enabled) === "Specifications: Obj 11 (origin: Brazil)" &&
+      buildMetafieldText([{ ...single }], enabled) === "",
+    buildMetafieldText([a], enabled),
   );
 }
 

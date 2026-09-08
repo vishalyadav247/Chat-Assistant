@@ -33,6 +33,7 @@ const SUPPORTED_TYPES: { label: string; types: string }[] = [
   { label: "Numbers", types: "integer, decimal, rating, money" },
   { label: "Measurements", types: "dimension, volume, weight" },
   { label: "Other", types: "true/false, date, date & time, URL, link, color" },
+  { label: "References", types: "metaobject — its entry's fields become readable text (e.g. Specifications, Ingredients)" },
   { label: "Lists", types: "lists of any type above" },
 ];
 
@@ -261,9 +262,9 @@ export function ManageMetafieldsModal(props: {
             </s-table-body>
           </s-table>
           <s-paragraph color="subdued">
-            Not supported yet: references (products, variants, collections, files, pages,
-            metaobjects) and JSON — their values are IDs or raw data, not text. Only metafields
-            with a definition (Shopify Settings → Custom data) are listed.
+            Not supported yet: references to products, variants, collections, files and pages, and
+            JSON — their values are IDs or raw data, not text. Only metafields with a definition
+            (Shopify Settings → Custom data) are listed.
           </s-paragraph>
         </s-stack>
         <s-button slot="primary-action" onClick={() => modalEl(TYPES_MODAL_ID)?.hideOverlay()}>
