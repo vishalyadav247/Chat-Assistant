@@ -40,6 +40,7 @@ const PRODUCTS_QUERY = `#graphql
         status
         handle
         onlineStoreUrl
+        publishedAt
         featuredMedia { preview { image { url } } }
         priceRangeV2 { minVariantPrice { amount } }
         totalInventory
@@ -179,6 +180,7 @@ export async function fullCatalogSync(shopDomain: string): Promise<void> {
               status: string;
               handle: string;
               onlineStoreUrl: string | null;
+              publishedAt: string | null;
               featuredMedia: { preview: { image: { url: string } | null } | null } | null;
               priceRangeV2: { minVariantPrice: { amount: string } };
               totalInventory: number | null;
@@ -217,7 +219,14 @@ export async function fullCatalogSync(shopDomain: string): Promise<void> {
           // does NOT imply published, and an unpublished product 404s for the
           // shopper — so recommendations must be able to exclude it.
           onlineStoreUrl: node.onlineStoreUrl ?? null,
-          publishedOnline: Boolean(node.onlineStoreUrl),
+          // published/not comes from publishedAt, NEVER from onlineStoreUrl:
+          // Shopify returns onlineStoreUrl null for every product of a
+          // password-protected storefront (dev stores!), and deriving the flag
+          // from it marked jgw-check's entire catalogue unpublished on
+          // 2026-09-08 — the AI then had zero candidates. publishedAt is the
+          // Online Store channel publication date and matches the webhook
+          // path's published_at signal exactly.
+          publishedOnline: Boolean(node.publishedAt),
           imageUrl: node.featuredMedia?.preview?.image?.url ?? null,
           price: Number(node.priceRangeV2.minVariantPrice.amount),
           stock: node.totalInventory ?? 0,
