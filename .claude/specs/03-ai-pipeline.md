@@ -38,7 +38,10 @@ Implement the validated demo pipeline on production infrastructure. The LLM is t
      · off_topic is ignored when persona.scope is empty — with no STORE SCOPE line the model invented one
        and redirected "which bracelet is good for money and wealth".
 5. LANES:
-   detail   → (2026-09-07) a follow-up ABOUT a product already shown. Checked BEFORE buy, and only when this
+   detail   → (2026-09-07) a follow-up ABOUT a product already shown. Checked BEFORE every lane (widened
+              2026-09-08: "tell me more about this" / "product details" carry no product words, so the router
+              calls them `question` or `chat` — gated inside buy alone the check never ran and the turn died
+              in the RAG fallback, three in a row on jgw-check, then the cannot-answer handover), and only when this
               conversation has already rendered cards — no cards, no check, no cost. One focused yes/no confirm
               (`detailConfirmUser`, temp 0, 3 tokens, same shape as the curated/block confirms) draws the line:
               FACTS about a settled product (material, size, contents, care, how it works, compatibility,

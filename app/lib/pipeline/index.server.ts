@@ -1,4 +1,5 @@
-import type { Conversation, Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
+import type { Conversation } from "@prisma/client";
 import db from "../../db.server";
 import { recordEvent, type AnalyticsEventType } from "../analytics/events.server";
 import { tickConversation, aiAllowed } from "../billing/usage.server";
@@ -691,22 +692,18 @@ export async function* runPipeline(
     config.persona ? buildPersonaPrompt(config.persona) : "You are a helpful shop assistant."
   }${language ? `\n${language}` : ""}${shopper ? `\n${shopper}` : ""}`;
 
-  // ── Lanes ─────────────────────────────────────────────────────────────────
-  trace.step("lane", `Lane selected: ${routed.intent}`, "info", {
-    buy: "hybrid product search over the catalogue",
-    question: "RAG over merchant knowledge",
-    chat: "persona reply, no retrieval",
-    selected: routed.intent,
-  });
-
-  if (routed.intent === "buy") {
-    // A question ABOUT a product already on screen is not a request for more
-    // products (spec 03 delta 2026-09-07). The router cannot tell the two apart
-    // — both are `buy` — so the distinction is drawn here, and only when this
-    // conversation has actually shown cards. No cards, no check, no cost.
-    const shown = config.settings.learn.products
-      ? await shownProducts(shopId, convo.id)
-      : [];
+  // A question ABOUT a product already on screen is not a request for more
+  // products — and it is not a policy question either (spec 03 delta
+  // 2026-09-07; widened to every lane 2026-09-08). The router cannot see this
+  // case at all: "tell me more about this" / "product details" carry no
+  // product words, so they route as `question` (or `chat`) — and gated inside
+  // the buy branch alone, the check never ran and the turn died in the RAG
+  // fallback (observed on jgw-check: three fallbacks in a row, then the
+  // cannot-answer handover). The check now runs BEFORE lane selection, still
+  // only when this conversation has actually shown cards — no cards, no
+  // check, no cost — with the 3-token confirm deciding.
+  if (config.settings.learn.products) {
+    const shown = await shownProducts(shopId, convo.id);
     if (shown.length > 0) {
       const isDetail = await isDetailFollowUp(shopId, message, shown.map((p) => p.title));
       trace.countLlm("router");
@@ -715,7 +712,8 @@ export async function* runPipeline(
         "Follow-up about a product already shown?",
         isDetail ? "hit" : "miss",
         {
-          rule: "yes ⇒ answer about that product only; no ⇒ the buy lane, unchanged",
+          rule: "yes ⇒ answer about that product only; no ⇒ the routed lane, unchanged",
+          routedIntent: routed.intent,
           shown: shown.map((p) => p.title),
         },
       );
@@ -727,6 +725,17 @@ export async function* runPipeline(
         return;
       }
     }
+  }
+
+  // ── Lanes ─────────────────────────────────────────────────────────────────
+  trace.step("lane", `Lane selected: ${routed.intent}`, "info", {
+    buy: "hybrid product search over the catalogue",
+    question: "RAG over merchant knowledge",
+    chat: "persona reply, no retrieval",
+    selected: routed.intent,
+  });
+
+  if (routed.intent === "buy") {
     yield* buyLane({
       shopId, convoId: convo.id, config, message, queryEmbedding,
       keywords: routed.keywords, priceMax: routed.price_max,
@@ -821,7 +830,9 @@ export function configuredTopicNamedBy(reason: string, topics: string[]): string
  * Grounding is the shown set itself: the model can only speak about products
  * this conversation already put in front of this shopper, so it cannot wander
  * into the catalogue, and one card — the one being discussed — is all that is
- * rendered.
+ * rendered, and only when it is not already the card directly above
+ * (2026-09-08: repeated detail questions were re-rendering the same card
+ * every turn).
  */
 async function* detailLane(args: {
   shopId: string;
@@ -886,7 +897,37 @@ async function* detailLane(args: {
     await args.track("detail_answered", { product: chosen?.title ?? null, resolved: Boolean(chosen) });
     // No card when the subject is unresolved: the reply is asking WHICH product
     // they mean, and showing one would answer that question wrongly.
-    return chosen ? [toCard(chosen)] : [];
+    if (!chosen) return [];
+    // The card exists to say WHICH product is being answered about. When the
+    // most recent card in the thread is already exactly this one product, it
+    // says nothing new — and a shopper asking three detail questions in a row
+    // was seeing the same card three more times (user report 2026-09-08). It
+    // still renders when the last card set had several products (it picks the
+    // subject out of them) or when the subject switches.
+    const lastCards = await db.message.findFirst({
+      where: {
+        shopId: args.shopId,
+        conversationId: args.convoId,
+        role: "out",
+        productCards: { not: Prisma.DbNull },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { productCards: true },
+    });
+    const lastIds = Array.isArray(lastCards?.productCards)
+      ? (lastCards.productCards as { shopifyProductId?: unknown }[]).map((c) =>
+          typeof c?.shopifyProductId === "string" ? c.shopifyProductId : "",
+        )
+      : [];
+    const duplicate = lastIds.length === 1 && lastIds[0] === chosen.shopifyProductId;
+    args.trace.step("detail_card", "Card rendered with the answer?", duplicate ? "skip" : "hit", {
+      reason: duplicate
+        ? "suppressed — the message above already shows exactly this card"
+        : lastIds.length > 1
+          ? "shown — it picks the subject out of the several cards above"
+          : "shown — the subject is new or from an earlier turn",
+    });
+    return duplicate ? [] : [toCard(chosen)];
   };
 
   yield* streamAndLog({
@@ -1596,7 +1637,10 @@ async function* streamAndLog(args: {
     content: full,
     sourceLayer: args.sourceLayer,
     intent: args.intent,
-    productCards: cards,
+    // Never persist an EMPTY cards array: `[]` is not DbNull, so it would
+    // count as a card-bearing message for shownProducts and for the detail
+    // card-suppression lookup (a suppressed turn then un-suppressed the next).
+    productCards: cards && cards.length > 0 ? cards : undefined,
   });
   args.trace?.countLlm("reply");
   args.trace?.step("reply", "Reply streamed and saved", "info", {
