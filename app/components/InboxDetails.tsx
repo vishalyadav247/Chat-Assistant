@@ -238,7 +238,21 @@ export function InboxDetails({
                 <div key={i} className="cin-cart-item">
                   <span className="cin-cart-info">
                     <span className="cin-cart-name">{line.title || "Item"}</span>
-                    {line.variant ? <span className="cin-cart-var">{line.variant}</span> : null}
+                    {/* Quantity belongs on the row, not just in the total: the
+                        cart read "Bracelet · Small" whether that was one item
+                        or six, and the total then looked wrong. Shown only
+                        past 1 — "x 1" on every line is noise. */}
+                    {line.variant || (line.quantity ?? 1) > 1 ? (
+                      <span className="cin-cart-var">
+                        {line.variant}
+                        {(line.quantity ?? 1) > 1 ? (
+                          <span className="cin-cart-qty">
+                            {line.variant ? " × " : "× "}
+                            {line.quantity}
+                          </span>
+                        ) : null}
+                      </span>
+                    ) : null}
                   </span>
                   <span className="cin-cart-price">
                     {typeof line.price === "number" ? fmt(line.price) : ""}

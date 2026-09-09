@@ -497,6 +497,15 @@ async function main(): Promise<void> {
     ok("carries showBranding flag", typeof c.showBranding === "boolean");
     ok("carries aiAvailable flag", typeof c.aiAvailable === "boolean");
     ok("carries featuredFaqs array", Array.isArray(c.featuredFaqs));
+    // The widget hides the whole FAQ block when the shop has no PUBLISHED FAQ,
+    // whatever the Chatbox toggle says — an empty search box over "No results"
+    // reads as broken rather than unconfigured (2026-09-09).
+    ok("carries faqAvailable", typeof c.faqAvailable === "boolean", String(c.faqAvailable));
+    ok(
+      "faqAvailable agrees with the FAQs actually published",
+      c.faqAvailable === (await db.faq.count({ where: { shopId: shopA.id, status: "published" } })) > 0,
+      `faqAvailable=`,
+    );
     ok("carries campaigns array", Array.isArray(c.campaigns));
     ok(
       "orderTracking exposes mode+customUrl ONLY (no provider apiKey)",

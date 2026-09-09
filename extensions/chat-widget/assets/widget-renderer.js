@@ -358,7 +358,9 @@
       home.appendChild(row);
     }
 
-    if (widget.faqs) {
+    // FAQs on in Chatbox settings but none written yet ⇒ no block at all. An
+    // empty search box above "No results" reads as broken, not as unconfigured.
+    if (widget.faqs && config.faqAvailable) {
       hasBlock = true;
       var faqBlk = el("div", "cw-blk");
       var search = el("div", "cw-search");
@@ -559,11 +561,15 @@
     var wrap = el("div", "cw-cards", { role: "list" });
     cards.forEach(function (card) {
       var item = el("div", "cw-card", { role: "listitem" });
+      // The image is its own positioned box so the add button can sit ON it,
+      // bottom-right, leaving the row below to one full-width "View product".
+      var media = el("div", "cw-card-media");
       if (card.imageUrl) {
-        item.appendChild(el("img", "cw-card-img", { src: card.imageUrl, alt: card.title, loading: "lazy" }));
+        media.appendChild(el("img", "cw-card-img", { src: card.imageUrl, alt: card.title, loading: "lazy" }));
       } else {
-        item.appendChild(el("div", "cw-card-img"));
+        media.appendChild(el("div", "cw-card-img"));
       }
+      item.appendChild(media);
       var body = el("div", "cw-card-body");
       var t = el("div", "cw-card-t");
       t.textContent = card.title;
@@ -574,12 +580,12 @@
 
       var actions = el("div", "cw-card-actions");
       var view = el("a", "cw-btn cw-btn--ghost", { href: "/products/" + card.handle });
-      view.textContent = "View";
+      view.textContent = "View product";
       if (cb && cb.onView) {
         view.addEventListener("click", function () { cb.onView(card); });
       }
-      var add = el("button", "cw-btn cw-btn--primary", { type: "button" });
-      add.textContent = "Add to cart";
+      var add = el("button", "cw-card-add", { type: "button", "aria-label": "Add " + card.title + " to cart" });
+      add.textContent = "Add";
       if (cb && cb.onAdd) {
         // The add is a network round trip. Without a pending state the button
         // sat idle until the drawer opened, which reads as "nothing happened"
@@ -593,9 +599,8 @@
           if (on) {
             add.textContent = "";
             add.appendChild(el("span", "cw-spin", { "aria-hidden": "true" }));
-            add.appendChild(document.createTextNode("Adding…"));
           } else {
-            add.textContent = "Add to cart";
+            add.textContent = "Add";
           }
         };
         add.addEventListener("click", function () {
@@ -613,8 +618,8 @@
           if (result && typeof result.then === "function") result.then(release, release);
         });
       }
+      media.appendChild(add);
       actions.appendChild(view);
-      actions.appendChild(add);
       body.appendChild(actions);
       item.appendChild(body);
       wrap.appendChild(item);

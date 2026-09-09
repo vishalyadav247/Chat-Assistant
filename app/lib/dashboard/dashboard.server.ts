@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
-import { getEmbedStatus, type EmbedStatus } from "../embed-status.server";
+import { getEmbedDetail, type EmbedStatus } from "../embed-status.server";
 import { clampRange } from "../analytics/reports.server";
 import { ANALYTICS_RANGES, ANALYTICS_RANGE_DAYS, type AnalyticsRange } from "../analytics/shared";
 
@@ -179,8 +179,13 @@ export interface ChecklistStep {
   /** Internal admin route for the deep link. */
   href: string;
   linkLabel: string;
-  /** External URL (theme editor) — only on the embed step's "unknown" state. */
+  /** External URL (theme editor). The embed step always uses it: the action a
+   *  merchant needs is the theme customiser, not another admin page. */
   externalUrl?: string;
+  /** Live status shown on the row, mirroring Settings -> General. */
+  status?: { tone: "success" | "warning" | "critical" | "neutral"; label: string };
+  /** One line of explanation under the label (draft-theme case). */
+  note?: string;
 }
 
 export interface SetupChecklist {
@@ -190,15 +195,23 @@ export interface SetupChecklist {
   embedStatus: EmbedStatus;
 }
 
+/** The same four states Settings → General shows, so the two never disagree. */
+function embedStatusBadge(status: EmbedStatus): ChecklistStep["status"] {
+  if (status === "on") return { tone: "success", label: "On" };
+  if (status === "draft") return { tone: "warning", label: "Draft theme only" };
+  if (status === "off") return { tone: "critical", label: "Off" };
+  return { tone: "neutral", label: "Unknown" };
+}
+
 export async function setupChecklist(
   shopId: string,
   shopDomain: string,
 ): Promise<SetupChecklist> {
   requireShopId(shopId);
 
-  const [embedStatus, widgetRow, syncState, persona, curatedPublished, activeCampaigns] =
+  const [embedDetail, widgetRow, syncState, persona, curatedPublished, activeCampaigns] =
     await Promise.all([
-      getEmbedStatus(shopDomain),
+      getEmbedDetail(shopDomain),
       db.widgetSettings.findUnique({ where: { shopId }, select: { id: true } }),
       db.syncState.findUnique({ where: { shopId }, select: { productSyncAt: true } }),
       db.persona.findUnique({ where: { shopId }, select: { role: true, behaviours: true } }),
@@ -206,11 +219,14 @@ export async function setupChecklist(
       db.campaign.count({ where: { shopId, status: "active" } }),
     ]);
 
+  const embedStatus = embedDetail.status;
   // Same deep link as Settings → General "Turn on": activateAppId pre-selects
-  // the chat-widget app embed in the theme editor.
+  // the chat-widget app embed in the theme editor. Dropped once the embed is
+  // already ON — Shopify has no deactivate parameter, so re-sending activate
+  // would be a no-op dressed as an action; that merchant just wants the editor.
   const apiKey = process.env.SHOPIFY_API_KEY || "";
   const themeEditorUrl = `https://${shopDomain}/admin/themes/current/editor?context=apps${
-    apiKey ? `&activateAppId=${apiKey}/chat-widget` : ""
+    apiKey && embedStatus !== "on" ? `&activateAppId=${apiKey}/chat-widget` : ""
   }`;
 
   const steps: ChecklistStep[] = [
@@ -251,17 +267,34 @@ export async function setupChecklist(
     },
     {
       id: "embed",
-      // "draft" is NOT done — the embed is enabled, but on a theme shoppers
-      // aren't served, so the chat still isn't live. The label says which,
-      // rather than repeating the generic step text and looking stuck.
-      label:
-        embedStatus === "draft"
-          ? "Embed app to your LIVE theme (currently on a draft theme)"
-          : "Embed app to your theme",
+      // Reworked 2026-09-09 (user): the step used to read "Embed app to your
+      // theme" and send the merchant to Settings — a second admin page that
+      // only offers the same theme-editor link. It also said nothing about the
+      // current state, so a merchant who had already switched it on saw an
+      // apparently unfinished step. Now: plain language about what it does,
+      // the theme editor directly, and the live status Settings shows.
+      label: "Enable the AI agent on your storefront",
       state: embedStatus === "on" ? "done" : embedStatus === "unknown" ? "unknown" : "todo",
+      // Kept so the row still has an in-admin destination if the editor link is
+      // ever unavailable; externalUrl is what the button actually uses.
       href: "/app/settings?tab=general",
-      linkLabel: embedStatus === "unknown" ? "Check in Theme editor" : "Settings",
-      ...(embedStatus === "unknown" ? { externalUrl: themeEditorUrl } : {}),
+      linkLabel:
+        embedStatus === "on"
+          ? "Open Theme editor"
+          : embedStatus === "unknown"
+            ? "Check in Theme editor"
+            : "Turn on in Theme editor",
+      externalUrl: themeEditorUrl,
+      status: embedStatusBadge(embedStatus),
+      // "draft" is a real state, not a near-miss of "off": the merchant HAS
+      // turned the embed on, just on a theme that is not live. Saying only
+      // "To do" there reads as "your setup didn't register" and sends them to
+      // redo work they already did. Same wording as Settings → General.
+      ...(embedStatus === "draft"
+        ? {
+            note: `Enabled on ${embedDetail.themeName ?? "an unpublished theme"} — shoppers won't see the chat until that theme is published, or you turn it on for your live theme.`,
+          }
+        : {}),
     }
   ];
 
