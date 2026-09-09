@@ -54,20 +54,29 @@ export function DashboardChecklist(props: {
                     >
                       {step.state === "done" ? "Done" : step.state === "unknown" ? "Info" : "To do"}
                     </s-badge>
-                    {step.state === "done" ? (
-                      <s-text tone="neutral">{step.label}</s-text>
-                    ) : step.state === "unknown" ? (
-                      // Not counted in the progress ring — can't be verified
-                      // without the read_themes scope (dashboard.server.ts).
-                      <s-stack gap="small-300">
-                        <s-text>{step.label}</s-text>
+                    <s-stack gap="small-300">
+                      <s-stack direction="inline" gap="small-300" alignItems="center">
+                        {step.state === "done" ? (
+                          <s-text tone="neutral">{step.label}</s-text>
+                        ) : (
+                          <s-text>{step.label}</s-text>
+                        )}
+                        {/* Live state for steps that have one (the storefront
+                            embed), so the row says the same thing Settings →
+                            General does instead of only "To do". */}
+                        {step.status ? (
+                          <s-badge tone={step.status.tone}>{step.status.label}</s-badge>
+                        ) : null}
+                      </s-stack>
+                      {step.note ? <s-text tone="neutral">{step.note}</s-text> : null}
+                      {step.state === "unknown" && !step.note ? (
+                        // Not counted in the progress ring — can't be verified
+                        // without the read_themes scope (dashboard.server.ts).
                         <s-text tone="neutral">
                           Can&apos;t verify automatically — check in Theme editor
                         </s-text>
-                      </s-stack>
-                    ) : (
-                      <s-text>{step.label}</s-text>
-                    )}
+                      ) : null}
+                    </s-stack>
                   </s-stack>
                   {step.externalUrl ? (
                     <s-link href={step.externalUrl} target="_blank">

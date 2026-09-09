@@ -197,7 +197,7 @@
 .cw-body::-webkit-scrollbar-thumb:hover { background: #adadb8; }
 
 /* ── Home blocks ───────────────────────────────────────────────────────── */
-.cw-blk { background: var(--cw-surface); border-radius: 12px; box-shadow: var(--cw-shadow-sm); padding: 13px 14px; }
+.cw-blk { background: var(--cw-surface) !important; border-radius: 12px; box-shadow: var(--cw-shadow-sm); padding: 13px 14px; }
 .cw-blk-t { font-weight: 750; color: var(--cw-ink-strong); font-size: 13.5px; }
 .cw-status { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; margin-top: 5px; color: var(--cw-green); }
 .cw-status .cw-d { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: none; }
@@ -260,6 +260,12 @@
   margin-bottom: 4px;
 }
 .cw-search input { flex: 1; border: none; background: transparent; outline: none; font-size: 12px; color: var(--cw-ink); min-width: 0; }
+/* Focus belongs to the SEARCH BOX, not the bare input inside it. The global
+   `.cw-root :focus-visible` ring was drawing a rounded outline around the input
+   alone, inset from the box border and offset by 1px — the odd double edge with
+   a gap between them. Thickening the box.s own inset ring keeps one clean
+   outline and the same focus visibility. */
+.cw-search input:focus-visible { outline: none;box-shadow: none;}
 .cw-search input::placeholder { color: var(--cw-muted-2); }
 .cw-faq {
   display: flex;
@@ -415,13 +421,40 @@
   flex: none;
   width: 158px;
   background: var(--cw-surface);
-  border-radius: 12px;
+  border-radius: 5px;
   box-shadow: var(--cw-shadow-sm);
   overflow: hidden;
   display: flex;
   flex-direction: column;
 }
+/* Positioned so the add button can overlay the image bottom-right (user,
+   2026-09-09). Keeping "View product" alone on the row below stops the two
+   actions competing for a 158px card, where both labels had to truncate. */
+.cw-card-media { position: relative; }
 .cw-card-img { width: 100%; height: 110px; object-fit: cover; background: var(--cw-surface-2); }
+/* .cw-root scope beats the `.cw-root button { background: none; color: inherit }`
+   reset — the same trap already documented on .cw-launcher and .cw-send. */
+.cw-root .cw-card-add {
+  position: absolute;
+  right: 3px;
+  bottom: 6px;
+  min-width: 50px;
+  padding: 6px 11px;
+  border-radius: 5px;
+  background: linear-gradient(135deg, var(--cw1), var(--cw2));
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 17px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  /* Reads on a pale product photo as well as a dark one. */
+  box-shadow: 0 2px 6px rgba(20, 20, 25, 0.35);
+}
+.cw-root .cw-card-add:hover { filter: brightness(1.06); }
+.cw-root .cw-card-add[disabled] { opacity: 0.8; cursor: default; }
 .cw-card-body { padding: 9px 10px 10px; display: flex; flex-direction: column; gap: 4px; flex: 1; }
 .cw-card-t {
   font-weight: 650;
@@ -433,13 +466,14 @@
   overflow: hidden;
 }
 .cw-card-p { font-size: 12.5px; font-weight: 700; color: var(--cw-ink-strong); }
+/* One action now, so it spans the card instead of sharing the row. */
 .cw-card-actions { display: flex; gap: 6px; margin-top: auto; padding-top: 6px; }
 .cw-btn {
   flex: auto;
   border-radius: 8px;
   padding: 7px 8px;
   font-size: 11.5px;
-  font-weight: 650;
+  font-weight: 500;
   text-align: center;
   text-decoration: none;
 }

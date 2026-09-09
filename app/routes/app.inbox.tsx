@@ -811,6 +811,7 @@ button.cin-send:disabled{opacity:.4;box-shadow:none;}
 .cin-cart-info{flex:1;min-width:0;display:block;}
 .cin-cart-name{display:block;font-weight:650;color:#141417;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .cin-cart-var{display:block;color:#6b6b73;font-size:11.5px;margin-top:2px;}
+.cin-cart-qty{font-weight:650;color:#141417;}
 .cin-cart-price{font-weight:700;color:#141417;font-size:12.5px;white-space:nowrap;}
 .cin-cart-total{display:flex;align-items:center;justify-content:space-between;margin-top:10px;padding-top:10px;box-shadow:inset 0 1px 0 #e9e9ec;font-size:12.5px;color:#6b6b73;font-weight:600;}
 .cin-rating{margin-top:8px;display:flex;align-items:center;gap:3px;}

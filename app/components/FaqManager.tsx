@@ -84,11 +84,23 @@ const TABLE_CSS = `
 }
 `;
 
+// Every column the importer understands, in the SAME order exportFaqCsv writes
+// them — so an export can be edited and re-imported, and the sample doubles as
+// the format reference. It used to show question/answer only, which quietly
+// implied category, status and featured were not supported (they are, and are
+// preserved on a round trip).
+//
+//   category  name; created automatically if the shop has no category by that
+//             name. Blank → the default category.
+//   status    "draft" (matched loosely) → draft; anything else → published.
+//   featured  true / yes / 1 → featured (shown in the widget); anything else
+//             → not featured.
 const SAMPLE_CSV = [
-  "question,answer",
-  "What is your return policy?,You can return any item within 30 days of delivery for a full refund.",
-  "Do you ship internationally?,Yes — we ship worldwide. International orders arrive in 7–14 business days.",
-  "How do I track my order?,Once your order ships we email you a tracking link.",
+  "question,answer,category,status,featured",
+  "What is your return policy?,You can return any item within 30 days of delivery for a full refund.,Returns,published,true",
+  "Do you ship internationally?,Yes — we ship worldwide. International orders arrive in 7–14 business days.,Shipping,published,true",
+  "How do I track my order?,Once your order ships we email you a tracking link.,Shipping,published,false",
+  "Can I change my order after checkout?,Contact us within an hour and we'll do our best.,Orders,draft,false",
 ].join("\r\n");
 
 interface FaqDraft {

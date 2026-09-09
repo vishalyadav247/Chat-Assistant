@@ -38,6 +38,9 @@ export type WidgetConfigPayload =
       /** true → render "Powered by ChatConvert" footer. */
       showBranding: boolean;
       featuredFaqs: WidgetFeaturedFaq[];
+      /** The shop has at least one PUBLISHED FAQ. The widget hides the whole FAQ
+       *  block when false, whatever the Chatbox setting says. */
+      faqAvailable: boolean;
       aiAvailable: boolean;
       shopDomain: string;
       survey: ShopSettingsData["survey"];
@@ -92,13 +95,17 @@ export async function buildWidgetConfig(
     ? !config.widget.appearance.removeBranding
     : true;
 
-  const [faqs, categories, allowed, campaigns] = await Promise.all([
+  const [faqs, publishedFaqCount, categories, allowed, campaigns] = await Promise.all([
     db.faq.findMany({
       where: { shopId, status: "published", featured: true },
       orderBy: { position: "asc" },
       take: 8,
       select: { id: true, question: true, answerHtml: true, categoryId: true },
     }),
+    // Whether the shop has ANY published FAQ, not just featured ones: the
+      // widget search can reach non-featured answers, so keying the block on
+      // `featuredFaqs` alone would hide a working search.
+    db.faq.count({ where: { shopId, status: "published" } }),
     db.faqCategory.findMany({
       where: { shopId, status: "published" },
       select: { id: true, name: true },
@@ -165,6 +172,10 @@ export async function buildWidgetConfig(
       answerHtml: sanitizeHtml(f.answerHtml),
       category: (f.categoryId && categoryName.get(f.categoryId)) || null,
     })),
+    // The merchant can switch FAQs on in Chatbox settings before writing any.
+    // Until then the block rendered as an empty search box over "No results",
+    // which reads as broken rather than unconfigured.
+    faqAvailable: publishedFaqCount > 0,
     aiAvailable: config.aiEnabled && allowed,
     shopDomain,
     survey: config.settings.survey,
