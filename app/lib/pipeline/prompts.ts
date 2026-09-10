@@ -9,7 +9,7 @@
 export const ROUTER = [
   "You are the router for a shop chat assistant. Classify the latest message.",
   "Return STRICT JSON with these keys: intent (one of buy, question, chat), price_max (number or null), keywords (array of strings), blocked (true or false), blocked_reason (string), off_topic (true or false), off_topic_reason (string).",
-  "buy = the shopper wants products, including asking which product suits a need, purpose, occasion or person. question = shipping, returns, sizing, payment, warranty, care, or policy. chat = greeting or small talk.",
+  "buy = the shopper wants products, including asking which product suits a need, purpose, occasion or person. question = shipping, returns, sizing, payment, warranty, care, policy, OR what discounts, offers, sales or deals the store currently has. chat = greeting or small talk.",
   "keywords = 1 to 4 product words when intent is buy, otherwise an empty array. Write keywords in English even when the message is in another language.",
   "Set blocked = true and blocked_reason = the matching topic copied from the list ONLY if the message is about one of the store's BANNED TOPICS listed below. Judge by MEANING and handle negation. Asking for products for a purpose (for stress, for sleep, for a gift) is a product request, not a banned topic; block only when the shopper asks for advice or information about the banned topic itself.",
   "Set off_topic = true and off_topic_reason = the topic if the message is unrelated to the STORE SCOPE listed below (a different domain/industry), even if it is harmless. Greetings and small talk are NOT off_topic.",
@@ -59,7 +59,7 @@ export const QUESTION_ANSWER =
 export const PRODUCT_RECOMMEND = [
   "Recommend ONLY from the candidate products JSON. Never invent a product, price, or discount.",
   "Each candidate has an id. First decide which candidates genuinely ARE what the shopper asked for, from the title, type, tags and the quoted description fragment. Identity words — a colour, stone, material, size, month, number or name — must describe THIS product: in its title/type/tags, or in a fragment about the product itself. A fragment about something else (an outfit to pair with, a crystal to cleanse with, another month) does not count, however often the word appears. Features and purposes (keeps drinks hot, blocks RFID, for stress, a gift) count when the title or fragment states them, and may match by meaning.",
-  "Never pad the list: one right product beats four half-fits, and `PICKS: none` is a valid answer. Usually 1-3 picks; list 4 only when the shopper wants to browse several.",
+  "Aim for 2 to 4 picks, and never more than 4. Still never pad: one right product beats four half-fits, so pick 1 when only one genuinely fits, and `PICKS: none` is a valid answer.",
   "Your FIRST line must be exactly `PICKS: <ids>` — only the fitting ids, best first (example: `PICKS: 3, 1`) — or `PICKS: none` if nothing fits.",
   "Then reply to the shopper in 1-2 short sentences: say why the pick(s) fit (use the matched details), then offer to help more. If nothing fits, say so honestly and offer the closest alternative.",
   "The shopper sees product cards (name, price, image) next to your reply, so do NOT repeat product names or prices in your text — say 'this one' or 'these picks'.",
@@ -126,6 +126,22 @@ export function curatedConfirmUser(msg: string, question: string): string {
 // make zero generation calls, so the turn budget is unchanged.
 export function blockConfirmUser(msg: string, topic: string): string {
   return `Is this shopper message asking for advice or information about "${topic}" (rather than asking for a product to buy)?\nMessage: ${msg}`;
+}
+
+// Discount-intent confirm (2026-09-09). DISCOUNT_INTENT_RE is English-only,
+// which is a structural mismatch in an app that replies in five languages: the
+// synced Discount mirror is the ONLY grounding for this question, so a phrasing
+// the regex cannot see is answered "I'm not sure" while live discounts sit in
+// the table. Asked only when the regex missed and nothing else grounded the
+// turn, so English never pays for it. Deliberately narrow: the shopper must be
+// asking WHAT is on offer, not haggling or asking a price.
+export function discountConfirmUser(msg: string): string {
+  return [
+    `Shopper's message (may be in any language): ${msg}`,
+    "",
+    "Is the shopper asking what discounts, coupons, offers, sales, deals or",
+    "promotions the store currently has?",
+  ].join("\n");
 }
 
 export function buildPersonaPrompt(persona: {

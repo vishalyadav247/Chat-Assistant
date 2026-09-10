@@ -261,6 +261,34 @@ interface RawRow {
 
 // Chat filler that carries no product meaning (Postgres' english config already
 // drops classic stop-words; these are the extras a shopper types).
+/**
+ * Words that name "a product" rather than a product.
+ *
+ * FILLER below already drops these from the shopper-word tier, but the ROUTER
+ * keyword tier bypassed it — and the router happily answers "products under
+ * 1000" with keywords ["products"]. That was then searched literally, matching
+ * only items whose prose happens to contain the word, while the same question
+ * phrased "items under 1000" produced no keywords at all and fell through to
+ * the browse/price path that actually answers it. Same question, two different
+ * answers, decided by a word carrying no information.
+ *
+ * Stripping them can empty the keyword list, which is the correct outcome: a
+ * pure "show me products under X" IS a browse-by-price, and the price ceiling
+ * then does the discriminating (which is also why "under 1000" and "under
+ * 3000" were returning near-identical sets).
+ */
+export const GENERIC_PRODUCT_WORDS = new Set([
+  "product", "products", "item", "items", "thing", "things", "stuff", "goods",
+  "merchandise", "piece", "pieces", "article", "articles", "option", "options",
+  "something", "anything", "everything", "range", "collection", "collections",
+  "catalogue", "catalog", "inventory", "stock", "selection", "gift", "gifts",
+]);
+
+/** Router keywords minus the words that only mean "a product". */
+export function stripGenericKeywords(keywords: string[]): string[] {
+  return keywords.filter((k) => !GENERIC_PRODUCT_WORDS.has(k.trim().toLowerCase()));
+}
+
 const FILLER = new Set([
   "something", "anything", "someone", "looking", "look", "show", "need", "want", "like",
   "please", "recommend", "recommendation", "suggest", "suggestion", "have", "there", "what",

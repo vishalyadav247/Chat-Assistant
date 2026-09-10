@@ -98,6 +98,7 @@ export interface DiscountRow {
   summary: string;
   status: string;
   method: string; // code | automatic
+  code: string; // redeemable code; "" for automatic discounts
   discountType: string; // amount_off_order | amount_off_products | free_shipping | bxgy
   usedCount: number;
   learnEnabled: boolean;
@@ -210,6 +211,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           summary: true,
           status: true,
           method: true,
+          code: true,
           discountType: true,
           usedCount: true,
           learnEnabled: true,

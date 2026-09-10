@@ -518,6 +518,14 @@ export default function PlanUsagePage() {
           <s-paragraph>
             Resets on the 1st. Conversations are your plan meter.
           </s-paragraph>
+           {usage.credits > 0 ? (
+            <s-banner tone="success">
+              The count above includes <b>{usage.credits.toLocaleString("en-US")}</b> bonus
+              conversation{usage.credits === 1 ? "" : "s"} on top of your {data.planName} plan, added
+              by the ChatConvert team. They are never charged, and your limit returns to the plan
+              amount if they are withdrawn.
+            </s-banner>
+          ) : null}
           <QuotaMeter
             used={data.usage}
             quota={data.quota}
@@ -534,18 +542,7 @@ export default function PlanUsagePage() {
               {usage.rate ? ` at $${usage.rate.toFixed(2)} each` : ""} — <b>${usage.spend.toFixed(2)}</b>{" "}
               of your ${usage.capped} limit for this billing cycle.
             </s-paragraph>
-          ) : null}
-          {/* A silent balance would make the merchant's own numbers look wrong:
-              they would pass their allowance and carry on working with nothing
-              on screen explaining why. */}
-          {usage.credits > 0 ? (
-            <s-banner tone="success">
-              The count above includes <b>{usage.credits.toLocaleString("en-US")}</b> bonus
-              conversation{usage.credits === 1 ? "" : "s"} on top of your {data.planName} plan, added
-              by the ChatConvert team. They are never charged, and your limit returns to the plan
-              amount if they are withdrawn.
-            </s-banner>
-          ) : null}
+          ) : null}         
         </s-section>
 
         <s-section heading="Your plan">

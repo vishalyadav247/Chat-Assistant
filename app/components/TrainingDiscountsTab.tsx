@@ -193,11 +193,20 @@ export function TrainingDiscountsTab(props: {
               {
                 key: "method",
                 title: "Method",
-                render: (row) => (
-                  <s-text tone="neutral">
-                    {row.method === "automatic" ? "Automatic" : "Code"}
-                  </s-text>
-                )
+                // The code sits under the method rather than in a column of its
+                // own — the table is already wide, and the code is only ever
+                // meaningful for the "Code" method. It is what the AI agent now
+                // quotes to shoppers, so the merchant should see exactly what
+                // was synced.
+                render: (row) =>
+                  row.method === "automatic" ? (
+                    <s-text tone="neutral">Automatic</s-text>
+                  ) : (
+                    <s-stack gap="small-500">
+                      <s-text tone="neutral">Code</s-text>
+                      {row.code ? <s-text color="subdued">{row.code}</s-text> : null}
+                    </s-stack>
+                  ),
               },
               {
                 key: "type",

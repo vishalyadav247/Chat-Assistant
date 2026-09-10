@@ -2388,7 +2388,7 @@ async function discounts(ctx: {
   );
   const { loadShopSettings } = await import("../../app/lib/settings/save.server");
   const { invalidateShopConfig } = await import("../../app/lib/config/shop-config.server");
-  const { DISCOUNT_INTENT_RE } = await import("../../app/lib/pipeline/index.server");
+  const { DISCOUNT_INTENT_RE, discountFacts } = await import("../../app/lib/pipeline/index.server");
 
   const payload = (over: Record<string, any> = {}) => ({
     admin_graphql_api_id: "gid://shopify/DiscountCodeNode/770100",
@@ -2521,6 +2521,64 @@ async function discounts(ctx: {
     RE.test("any discounts today?") && RE.test("do you have coupons") && RE.test("any offers"),
     `"discounts"=${RE.test("any discounts today?")} "coupons"=${RE.test("do you have coupons")} "offers"=${RE.test("any offers")}`,
   );
+
+  // D7c — the coupon CODE reaches the shopper (2026-09-09). Syncing discounts
+  // is only useful if the agent can say how to claim one, so this asserts the
+  // REAL context builder, not a copy of its formatting.
+  await db.discount.updateMany({
+    where: { shopId: A, title: `${TAG}-SAVE20` },
+    data: { code: "SAVE20NOW" },
+  });
+  const auto = await db.discount.create({
+    data: {
+      shopId: A,
+      shopifyDiscountId: `${TAG}-auto`,
+      title: `${TAG}-AUTOSALE`,
+      summary: "10% off everything",
+      method: "automatic",
+      code: "",
+      status: "active",
+      learnEnabled: true,
+    },
+  });
+  const facts = await discountFacts(A);
+  ok(
+    "D7c the synced coupon code is handed to the AI, verbatim",
+    facts.includes("use code SAVE20NOW at checkout"),
+    facts.replace(/\s+/g, " ").slice(0, 160),
+  );
+  ok(
+    "D7c-ii automatic discounts are described as needing no code (never an invented one)",
+    facts.includes(`${TAG}-AUTOSALE`) &&
+      facts.includes("applies automatically, no code needed") &&
+      !facts.includes("use code at"),
+    facts.replace(/\s+/g, " ").slice(0, 240),
+  );
+  // A code discount synced BEFORE the code column existed has code = "". It
+  // must not be described as automatic — that is a confident falsehood told to
+  // a shopper who then cannot claim the discount.
+  await db.discount.updateMany({
+    where: { shopId: A, title: `${TAG}-SAVE20` },
+    data: { code: "" },
+  });
+  const staleFacts = await discountFacts(A);
+  ok(
+    "D7c-iv a code discount not yet re-synced claims nothing about how to redeem",
+    staleFacts.includes(`${TAG}-SAVE20`) &&
+      staleFacts.split("applies automatically, no code needed").length - 1 === 1 &&
+      !staleFacts.includes("use code"),
+    staleFacts.replace(/\s+/g, " ").slice(0, 240),
+  );
+  // The sync must actually ask Shopify for the codes, on all three code types.
+  // Substring counting, not a regex: a source guard whose pattern quietly stops
+  // matching passes forever while testing nothing.
+  const syncSrc = readFileSync(join(process.cwd(), "app", "lib", "ingestion", "catalog-sync.server.ts"), "utf-8");
+  ok(
+    "D7c-iii the discount sync requests codes(first: 1) on every code discount type",
+    syncSrc.split("codes(first: 1) { nodes { code } }").length - 1 === 3,
+    `occurrences=${syncSrc.split("codes(first: 1) { nodes { code } }").length - 1} (expected 3)`,
+  );
+  await db.discount.delete({ where: { id: auto.id } });
 
   // D8 — delete webhook is shop-scoped
   await deleteDiscountFromWebhook(SHOP_B, payload());

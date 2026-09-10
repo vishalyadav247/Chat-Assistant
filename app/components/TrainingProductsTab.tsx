@@ -108,19 +108,6 @@ export function TrainingProductsTab(props: {
 
       <s-section heading="Manage data">
         <s-stack gap="base">
-          {/* The products_synced cap is enforced during the sync itself
-              (catalog-sync.server.ts) — until now silently. A merchant whose
-              catalogue outgrew their plan saw a short product list and no
-              reason for it. */}
-          <PlanMeter
-            used={props.syncedUsed}
-            quota={props.syncedQuota}
-            label="products synced"
-            nextPlan={props.syncedNextPlan}
-          />
-{/* The meter above already COUNTS the bonus; this says where the extra
-              room came from. Same treatment as the conversations banner on Plan
-              & Usage, so the two screens explain a grant the same way. */}
           {props.syncedBonus > 0 ? (
             <s-banner tone="success">
               Includes <b>{props.syncedBonus.toLocaleString("en-US")}</b> bonus product
@@ -128,6 +115,12 @@ export function TrainingProductsTab(props: {
               team. Your limit returns to the plan amount if they are withdrawn.
             </s-banner>
           ) : null}
+          <PlanMeter
+            used={props.syncedUsed}
+            quota={props.syncedQuota}
+            label="products synced"
+            nextPlan={props.syncedNextPlan}
+          />
           {props.syncedUsed >= props.syncedQuota ? (
             <PlanBanner
               plan={props.syncedNextPlan}
