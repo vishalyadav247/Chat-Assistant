@@ -21,14 +21,14 @@ Admin views under `/app/ai-agent/instructions` (tabs: General Instructions / Pro
 ## Tab: Product recommendations
 
 - **Rules card**: toggle "Never recommend out-of-stock" (default ON; **revised 2026-08-10, user decision**: the toggle now controls OOS exclusion itself — OFF lets unavailable products appear in recommendation cards. Stored in `shopSettings.recommendationRules.excludeOutOfStock`; enforced in hybrid search, browse fallback, custom-rec pool, and all card assembly. "Purchasable" = `stock > 0` OR any variant availableForSale, covering untracked inventory and "continue selling when out of stock". The originally-specced *substitution suggestion* behavior is still unbuilt), toggle "Push overstock" (uses live inventory; optional `overstock` product tag boost).
-- **App recommendations** (pre-configured intents; model `Recommendation`: shopId, title, triggerQuestions[], productIds[], status, lastModified):
-  - Table Title | Products | Last modified | Status switch | edit/delete. Seeds on install: **Best sellers** ("What are your best sellers?", "Show me your top products"), **New arrivals** ("Any new items?", "What's new?").
-  - Detail view (#viewRec): title, trigger-question chips (add/remove), status, Add products → **Browse products modal** (search, filter chips Vendors/Tag/Collections, checkbox rows w/ stock strings "297 in stock for 3 variants"/"Inventory not tracked", live "N selected" footer), product rows w/ view+remove. Cancel/Save.
-  - Runtime: trigger questions embedded on save; matched in pipeline **curated-style** (these are effectively system curated answers ranked below merchant curated answers, spec 03/09 share the matcher).
-- **Custom recommendations** (model `CustomRecommendation`: shopId, name, searchTerms[], productIds[], collectionIds[], status):
-  - Detail view (#viewCustomRec): search-term rows (add/delete, min 1) + View-examples panel (occasion best practices, clickable example terms wedding gift/mother's day/graduation/valentine/christmas); Products conditions: Add by Product (browse modal) + Add by Collection (**Browse collections modal**, name + "N products"), expandable "N selected" lists; products preview table. Cancel/Save.
-  - Runtime: when router keywords/message match a search term (embedding or keyword), constrain/boost the buy-lane candidate pool to the configured products/collections.
-- **Cross-sell pairs** card: `+ Add pair` (product A → companions list). Empty: "No pairs yet…". Runtime: after recommending A, append companion suggestion. (Design has no editor — minimal pair picker via browse modal.)
+- **App recommendations** (ONE merged section since 2026-09-10, Option B user decision — the former Custom recommendations section folded in; model `Recommendation`: shopId, title, triggerQuestions[], productIds[], **collectionIds[]**, status, lastModified):
+  - Table Title (+ "Triggers on: …" subtitle) | Products ("N + M collections") | Last modified | Status switch | edit/delete. Seeds on install: **Best sellers**, **New arrivals**. Available on **every plan** (the `custom_recommendations` gate was removed 2026-09-10; stored plan overrides naming it are tolerated); the rule COUNT is tiered via the `recommendation_rules` quota (**5/10/25/50**, operator-editable at /admin/plans, enforced on create only — "N of Q rules used" counter, Add disabled at cap).
+  - Detail view (#viewRec): title, trigger-phrase chips, status, Add products (**Browse products modal**) OR Add collections (**Browse collections modal**) — **either/or, never both** (user decision 2026-09-10; the other picker locks once one side has entries, save validates, runtime stays tolerant of legacy mixed rows); requires ≥ 1 product or collection.
+  - Runtime — each trigger phrase fires TWO ways:
+    1. **Whole message ≈ phrase** (semantic, curated threshold; trigger vectors embedded lazily per row): instant deterministic answer, ranked below merchant curated answers — zero generation calls.
+    2. **Phrase contained in a shopping message** ("wedding gift" inside "I need a wedding gift"): the buy-lane candidate pool is constrained to this rule's products/collections (stock/price still enforced; the LLM still writes the reply).
+    Both resolve products + collection members through `recommendationRulePool` with a **tiered shuffle** (explicit picks first, then collection members, each shuffled) so a repeated trigger shows different picks (user requirement).
+- **Cross-sell pairs** card: `+ Add pair` (product A → companions list) — **every plan**; the tier controls the NUMBER of pairs via the `cross_sell_pairs` quota (defaults 3/10/25/100, operator-editable at /admin/plans, enforced on creating a new anchor; editing an existing pair is never blocked; "N of Q pairs used" counter). Runtime: after recommending A, append companions — gated by the merchant's **"Cross-sell companion products" toggle** (Rules card, `recommendationRules.crossSellEnabled`, default ON).
 
 ## Tab: Human handover → `HandoverConfig.config`
 
@@ -69,8 +69,8 @@ Runtime consumption: spec 10 (inbox ticket creation, AI dormant, widget states).
 
 1. General tab round-trips; saving banned topics changes pipeline blocking within one config-cache TTL; fallback message override honored.
 2. Auto-detect toggle saves on every plan; the reply language follows it at generation time (first message and mid-chat switches).
-3. App recommendation with trigger "what are your best sellers" answers deterministically with its products (and loses to a merchant curated answer on the same question).
-4. Custom recommendation search term "wedding gift" constrains buy-lane candidates to configured collection.
+3. App recommendation with trigger "what are your best sellers" answers deterministically with its products (and loses to a merchant curated answer on the same question); repeat triggers rotate the picks.
+4. The SAME rule's trigger phrase contained in a shopping message ("wedding gift") constrains buy-lane candidates to its configured products/collections.
 5. OOS toggle: substitution copy appears when a matched product is OOS; overstock toggle boosts tagged items.
 6. Handover config: each destination + nested option persists; runtime behavior verified in 10's tests.
 7. Test AI: replies match storefront pipeline for same inputs; Review source shows retrieval + scores; no usage-meter tick.

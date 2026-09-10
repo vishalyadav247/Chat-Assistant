@@ -87,15 +87,19 @@ async function main() {
     for (const [feature, freeHas, plusHas] of [
       ["survey", false, true],
       ["push_notifications", false, true],
-      ["custom_recommendations", false, true],
+      ["exports", false, true],
     ] as const) {
       assert(
         hasFeature("free", feature) === freeHas && hasFeature("plus", feature) === plusHas,
         `gate ${feature} follows the matrix`,
       );
     }
-    assert(hasFeature("basic", "custom_recommendations") === false, "custom_recommendations is Pro+");
+    assert(hasFeature("basic", "exports") === false, "exports is Plus-only");
     assert(hasFeature("basic", "survey") === true, "survey is Basic+");
+    assert(
+      getQuota("free", "cross_sell_pairs") === 3 && getQuota("plus", "cross_sell_pairs") === 100,
+      "cross_sell_pairs quota enforced per tier (un-gated feature, tiered number — 2026-09-10)",
+    );
 
     // 4. AI overrides save + clear
     await saveAiOverrides({ chatModel: "gpt-4o", temperature: 0.7, maxTokens: 500 });

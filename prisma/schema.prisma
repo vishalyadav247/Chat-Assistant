@@ -307,12 +307,19 @@ model CuratedAnswer {
 
 // ── Recommendations (spec 08) ───────────────────────────────────────────────
 
+// One merged rule (2026-09-10, user decision — Option B): a trigger phrase
+// fires BOTH ways at runtime. Whole message ≈ phrase (semantic, curated
+// threshold) → instant deterministic cards; phrase contained in a shopping
+// message → the buy-lane candidate pool is constrained to this rule's
+// products/collections. Absorbed the former CustomRecommendation model
+// (searchTerms → triggerQuestions, name → title).
 model Recommendation {
   id               String                       @id @default(cuid())
   shopId           String
   title            String
   triggerQuestions String[]                     @default([])
   productIds       String[]                     @default([])
+  collectionIds    String[]                     @default([])
   status           String                       @default("active")
   embedding        Unsupported("vector(1536)")?
   updatedAt        DateTime                     @updatedAt
@@ -345,20 +352,6 @@ model UnresolvedQuestion {
 
   @@index([shopId, status])
   @@map("unresolved_questions")
-}
-
-model CustomRecommendation {
-  id            String   @id @default(cuid())
-  shopId        String
-  name          String
-  searchTerms   String[] @default([])
-  productIds    String[] @default([])
-  collectionIds String[] @default([])
-  status        String   @default("inactive")
-  updatedAt     DateTime @updatedAt
-
-  @@index([shopId])
-  @@map("custom_recommendations")
 }
 
 // ── Per-shop AI config (specs 03/08) ────────────────────────────────────────

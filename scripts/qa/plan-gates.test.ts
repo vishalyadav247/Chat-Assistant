@@ -34,22 +34,6 @@ function ok(name: string, condition: boolean, detail = ""): void {
   }
 }
 
-/** Run `fn` and report whether it was refused by a plan gate. */
-async function refused(fn: () => Promise<unknown>): Promise<boolean> {
-  try {
-    const result = await fn();
-    // Savers that return a result object rather than throwing.
-    if (result && typeof result === "object") {
-      const r = result as { ok?: boolean; code?: string; error?: string };
-      if (r.ok === false && (r.code === "cap" || r.code === "plan_gate")) return true;
-      if (r.ok === false) return false;
-    }
-    return false;
-  } catch (error) {
-    return (error as Error).message?.startsWith("plan_gate:") ?? false;
-  }
-}
-
 async function main(): Promise<void> {
   const db = (await import("../../app/db.server")).default;
   const plans = await import("../../app/lib/billing/plans.server");
@@ -58,7 +42,7 @@ async function main(): Promise<void> {
   );
   const { saveCuratedAnswer } = await import("../../app/lib/curated/save.server");
   const { saveCampaign, toggleCampaign } = await import("../../app/lib/campaigns/campaigns.server");
-  const { saveCustomRecommendation, saveCrossSellPair, saveGeneralInstructions } = await import(
+  const { saveRecommendation, saveCrossSellPair, saveGeneralInstructions } = await import(
     "../../app/lib/instructions/save.server"
   );
 
@@ -186,45 +170,115 @@ async function main(): Promise<void> {
     const cUnlimited = await saveCampaign(shopId, "plus", campaignPayload("probe plus", "active"));
     ok("Plus has unlimited active campaigns", cUnlimited.ok === true);
 
-    // ── B-15 feature gates ────────────────────────────────────────────────
-    await setPlan("basic");
-    ok(
-      "custom_recommendations refused on Basic",
-      await refused(() =>
-        saveCustomRecommendation(shopId, {
-          name: "probe rec",
-          searchTerms: ["probe"],
-          productIds: ["gid://shopify/Product/1"],
-          collectionIds: [],
-          status: "active",
-        }),
-      ),
-    );
-    ok(
-      "cross-sell pairs refused on Basic",
-      await refused(() =>
-        saveCrossSellPair(shopId, {
-          productId: "gid://shopify/Product/1",
-          companionIds: ["gid://shopify/Product/2"],
-        }),
-      ),
-    );
-
-    await setPlan("pro");
-    let proRecOk = false;
+    // ── B-15: recommendation rules + cross-sell are UN-GATED (2026-09-10) ──
+    // The merged rule saves on every plan; what varies is the
+    // cross_sell_pairs QUOTA (free = 3 on the default matrix).
+    await setPlan("free");
+    let freeRecOk = false;
     try {
-      await saveCustomRecommendation(shopId, {
-        name: "probe rec pro",
-        searchTerms: ["probe"],
+      await saveRecommendation(shopId, {
+        title: "probe rec",
+        triggerQuestions: ["probe"],
         productIds: ["gid://shopify/Product/1"],
         collectionIds: [],
         status: "active",
       });
-      proRecOk = true;
+      freeRecOk = true;
     } catch {
-      proRecOk = false;
+      freeRecOk = false;
     }
-    ok("custom_recommendations allowed on Pro", proRecOk);
+    ok("merged recommendation rule saves on Free (un-gated 2026-09-10)", freeRecOk);
+    // recommendation_rules quota (5/10/25/50, user decision): count is tiered.
+    const freeRuleQuota = plans.getQuota("free", "recommendation_rules");
+    ok("recommendation_rules quota on Free is 5", freeRuleQuota === 5, String(freeRuleQuota));
+    let rulesCreated = 1; // "probe rec" above is the first
+    for (let i = rulesCreated + 1; i <= freeRuleQuota; i++) {
+      try {
+        await saveRecommendation(shopId, {
+          title: `probe rec ${i}`,
+          triggerQuestions: ["probe"],
+          productIds: ["gid://shopify/Product/1"],
+          collectionIds: [],
+          status: "active",
+        });
+        rulesCreated++;
+      } catch {
+        break;
+      }
+    }
+    ok("rules save up to the quota", rulesCreated === freeRuleQuota, String(rulesCreated));
+    let sixthRefused = false;
+    try {
+      await saveRecommendation(shopId, {
+        title: "probe rec over quota",
+        triggerQuestions: ["probe"],
+        productIds: ["gid://shopify/Product/1"],
+        collectionIds: [],
+        status: "active",
+      });
+    } catch (error) {
+      sixthRefused = /plan allows/i.test((error as Error).message ?? "");
+    }
+    ok("one rule past the quota is refused", sixthRefused);
+    // Products XOR collections (user decision 2026-09-10): both at once refused.
+    let bothRefused = false;
+    try {
+      await saveRecommendation(shopId, {
+        title: "probe both",
+        triggerQuestions: ["probe"],
+        productIds: ["gid://shopify/Product/1"],
+        collectionIds: ["gid://shopify/Collection/1"],
+        status: "active",
+      });
+    } catch (error) {
+      bothRefused = /not both/i.test((error as Error).message ?? "");
+    }
+    ok("a rule with BOTH products and collections is refused", bothRefused);
+    ok(
+      "custom_recommendations is no longer a gated feature",
+      !(plans.GATED_FEATURES as string[]).includes("custom_recommendations"),
+    );
+
+    const freePairQuota = plans.getQuota("free", "cross_sell_pairs");
+    ok("cross_sell_pairs quota on Free is 3", freePairQuota === 3, String(freePairQuota));
+    let pairsCreated = 0;
+    for (let i = 1; i <= freePairQuota; i++) {
+      try {
+        await saveCrossSellPair(shopId, {
+          productId: `gid://shopify/Product/${i}`,
+          companionIds: ["gid://shopify/Product/99"],
+        });
+        pairsCreated++;
+      } catch {
+        break;
+      }
+    }
+    ok("cross-sell pairs save on Free up to the quota", pairsCreated === freePairQuota, String(pairsCreated));
+    // The quota refusal is a merchant-facing Error ("Your plan allows N…"),
+    // not a "plan_gate:"-prefixed gate error — assert it directly rather than
+    // through refused(), which only recognises the gate shape.
+    let fourthRefused = false;
+    try {
+      await saveCrossSellPair(shopId, {
+        productId: `gid://shopify/Product/${freePairQuota + 1}`,
+        companionIds: ["gid://shopify/Product/99"],
+      });
+    } catch (error) {
+      fourthRefused = /plan allows/i.test((error as Error).message ?? "");
+    }
+    ok("one pair past the quota is refused", fourthRefused);
+    let editAtCapOk = false;
+    try {
+      // Editing an EXISTING pair at the cap must never be blocked.
+      await saveCrossSellPair(shopId, {
+        productId: "gid://shopify/Product/1",
+        companionIds: ["gid://shopify/Product/98"],
+      });
+      editAtCapOk = true;
+    } catch {
+      editAtCapOk = false;
+    }
+    ok("editing an existing pair at the cap still saves", editAtCapOk);
 
     // Auto-detect language is UN-GATED (2026-09-03): every plan may turn it on.
     const general = {
@@ -253,7 +307,7 @@ async function main(): Promise<void> {
 
     // ── B-13 never-gated surfaces stay open on Free ───────────────────────
     await setPlan("free");
-    for (const feature of ["survey", "push_notifications", "custom_recommendations"] as const) {
+    for (const feature of ["survey", "push_notifications", "exports"] as const) {
       ok(`free is gated out of ${feature}`, plans.hasFeature("free", feature) === false);
     }
     // Spec 15 never-gate list: inbox, human handover, GDPR flows and the Test
@@ -301,13 +355,13 @@ async function main(): Promise<void> {
     ok("…so the curated quota still bites", openCreate.ok === false);
     // FEATURES are not grantable — a grant tops up a NUMBER, never unlocks a
     // gated capability. Upgrading is the only way to get those.
-    ok("…but features stay gated by plan", plans.hasFeature("free", "custom_recommendations") === false);
+    ok("…but features stay gated by plan", plans.hasFeature("free", "exports") === false);
     for (const g of await grantsMod.listGrants(shopId)) await grantsMod.revokeGrant(shopId, g.id);
   } finally {
     // Remove the fixture shop and restore the operator's stored plan config.
     await db.curatedAnswer.deleteMany({ where: { shopId } });
     await db.campaign.deleteMany({ where: { shopId } });
-    await db.customRecommendation.deleteMany({ where: { shopId } });
+    await db.recommendation.deleteMany({ where: { shopId } });
     await db.crossSellPair.deleteMany({ where: { shopId } });
     await db.persona.deleteMany({ where: { shopId } });
     await db.guardrails.deleteMany({ where: { shopId } });

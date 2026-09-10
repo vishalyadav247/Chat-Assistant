@@ -88,7 +88,7 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 | B-12 | Downgrade keeps over-quota data | Create 50 curated answers on Plus → downgrade to Free (quota 5) | All 50 rows survive; new creates blocked; banner explains. **No deletions** | B |
 | B-13 | Never-gated surfaces | On Free: inbox, human handover, GDPR flows, Test AI console | All fully functional — these must never be gated | P |
 | B-14 | Same LLM on every tier | Compare model used on free vs plus | Identical — plans differ on volume and tooling only | P |
-| B-15 | New seams enforce | `active_campaigns`, `analytics_range_days`, `survey`, `push_notifications`, `custom_recommendations` | Each blocked at the right tier, server-side. `multi_language` un-gated 2026-09-03 — auto-detect language saves on every plan | B, P |
+| B-15 | New seams enforce | `active_campaigns`, `analytics_range_days`, `survey`, `push_notifications`, `cross_sell_pairs` + `recommendation_rules` quotas | Each blocked at the right tier, server-side. Un-gated by user decision: `multi_language` (2026-09-03) and `custom_recommendations` (2026-09-10 — merged recommendation rules + cross-sell save on every plan; only the COUNTS are tiered: pairs 3/10/25/100, rules 5/10/25/50, refused past quota on new creates, editing at cap allowed) | B, P |
 | B-16 | Price change doesn't re-price existing subs | Change Pro price → check an existing Pro subscriber | Shopify keeps the agreed charge; only new subscriptions get the new price. UI copy must say so | B |
 
 ## C. Promo / coupon codes (spec 15)

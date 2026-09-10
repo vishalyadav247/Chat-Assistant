@@ -272,17 +272,8 @@ export async function saveCampaign(
   if (settings.message.kind === "product_quiz") {
     return { ok: false, error: "Product Quiz isn't available yet.", code: "invalid" };
   }
-  if (
-    settings.message.kind === "product_recommendation" &&
-    settings.message.recommendation === "similar" &&
-    !hasFeature(plan, "custom_recommendations")
-  ) {
-    return {
-      ok: false,
-      error: "“Recommend similar products” requires a Pro or Plus plan.",
-      code: "plan_gate",
-    };
-  }
+  // "Similar products" rode the custom_recommendations gate until 2026-09-10;
+  // that feature is now un-gated on every plan, so the source needs no check.
 
   // active_campaigns quota (spec 15). Only saving AS ACTIVE is gated — drafts
   // are unlimited, and an already-active campaign re-saved stays active.
@@ -674,7 +665,6 @@ export async function activeCampaignsForWidget(
     orderBy: [{ priority: "asc" }, { updatedAt: "desc" }],
   });
   const premiumAllowed = hasFeature(plan, "premium_campaign_templates");
-  const similarAllowed = hasFeature(plan, "custom_recommendations");
   const allowed = rows.filter((r) => premiumAllowed || !isPremiumTemplate(r.templateType));
 
   const campaigns = allowed
@@ -686,11 +676,9 @@ export async function activeCampaignsForWidget(
   const projected: WidgetCampaign[] = [];
   for (const { row, settings } of campaigns) {
     const wantsProducts = settings.message.kind === "product_recommendation";
-    // Below Pro, "similar" degrades to best sellers instead of showing nothing.
-    const source =
-      settings.message.recommendation === "similar" && !similarAllowed
-        ? "best_sellers"
-        : settings.message.recommendation;
+    // "similar" is available on every plan since 2026-09-10 (un-gated with the
+    // merged recommendation rules) — no per-plan degrade any more.
+    const source = settings.message.recommendation;
     const contextual = wantsProducts && isContextualRecommendation(source);
     const products =
       wantsProducts && !contextual

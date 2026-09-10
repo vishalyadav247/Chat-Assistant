@@ -15,12 +15,13 @@ export type GatedFeature =
   | "csv_import"
   | "file_upload"
   | "survey" // post-chat CSAT survey (spec 16) — Basic+
-  | "push_notifications" // browser push in the web app (spec 18) — Basic+
-  | "custom_recommendations"; // custom recommendations + cross-sell pairs (spec 08) — Pro+
-// "multi_language" (persona auto-detect language, spec 08) was gated until
-// 2026-09-03 — un-gated on every plan (user decision; matches the spec 15
-// matrix). Stored plan overrides naming it are tolerated and filtered out
-// (plans.server planPatchSchema).
+  | "push_notifications"; // browser push in the web app (spec 18) — Basic+
+// Un-gated features (user decisions; stored plan overrides naming them are
+// tolerated and filtered out by plans.server planPatchSchema):
+//   "multi_language" (2026-09-03) — persona auto-detect language, every plan.
+//   "custom_recommendations" (2026-09-10) — the merged App-recommendation rules
+//   and cross-sell pairs are on every plan; what varies per tier is the
+//   cross_sell_pairs QUOTA below.
 
 export type QuotaDimension =
   | "conversations"
@@ -33,7 +34,9 @@ export type QuotaDimension =
   | "metafields_enabled" // product/variant metafields opted into AI training (spec 07)
   | "team_seats" // team members (excluding the owner) who can log into the web app (spec 18)
   | "active_campaigns" // simultaneously ACTIVE proactive campaigns (spec 12)
-  | "analytics_range_days"; // how far back /app/analytics may look (spec 14)
+  | "analytics_range_days" // how far back /app/analytics may look (spec 14)
+  | "cross_sell_pairs" // cross-sell pairs a merchant may configure (spec 08, 2026-09-10)
+  | "recommendation_rules"; // merged App-recommendation rules per shop (spec 08, 2026-09-10)
 
 /** Sentinel for "no limit". Kept here (not in plans.server) so the admin
  *  dashboard and the quota meters can recognise it in the browser bundle. */
@@ -64,7 +67,6 @@ export const GATED_FEATURES: GatedFeature[] = [
   "file_upload",
   "survey",
   "push_notifications",
-  "custom_recommendations",
 ];
 
 export const QUOTA_DIMENSIONS: QuotaDimension[] = [
@@ -79,6 +81,8 @@ export const QUOTA_DIMENSIONS: QuotaDimension[] = [
   "team_seats",
   "active_campaigns",
   "analytics_range_days",
+  "cross_sell_pairs",
+  "recommendation_rules",
 ];
 
 export interface PlanDefinition {

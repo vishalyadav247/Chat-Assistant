@@ -50,6 +50,8 @@ const QUOTA_LABELS: Record<QuotaDimension, string> = {
   team_seats: "Team seats",
   active_campaigns: "Active proactive campaigns",
   analytics_range_days: "Analytics history (days)",
+  cross_sell_pairs: "Cross-sell pairs",
+  recommendation_rules: "App recommendation rules",
 };
 
 const FEATURE_LABELS: Record<GatedFeature, string> = {
@@ -64,7 +66,6 @@ const FEATURE_LABELS: Record<GatedFeature, string> = {
   file_upload: "File upload sources",
   survey: "Post-chat survey (CSAT)",
   push_notifications: "Browser push notifications",
-  custom_recommendations: "Custom recommendations + cross-sells",
 };
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {

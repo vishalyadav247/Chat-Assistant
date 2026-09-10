@@ -135,7 +135,6 @@ async function main() {
   await db.curatedAnswer.create({ data: { shopId: a, question: "Curated question?" } });
   await db.recommendation.create({ data: { shopId: a, title: "Test rec" } });
   await db.crossSellPair.create({ data: { shopId: a, productId: "gid://p/1" } });
-  await db.customRecommendation.create({ data: { shopId: a, name: "Custom rec" } });
   await db.persona.create({ data: { shopId: a } });
   await db.guardrails.create({ data: { shopId: a } });
   await db.handoverConfig.create({ data: { shopId: a, config: {} } });
@@ -330,7 +329,6 @@ async function main() {
     ["recommendations", await db.recommendation.count({ where: { shopId: a } })],
     ["cross_sell_pairs", await db.crossSellPair.count({ where: { shopId: a } })],
     ["unresolved_questions", await db.unresolvedQuestion.count({ where: { shopId: a } })],
-    ["custom_recommendations", await db.customRecommendation.count({ where: { shopId: a } })],
     ["personas", await db.persona.count({ where: { shopId: a } })],
     ["guardrails", await db.guardrails.count({ where: { shopId: a } })],
     ["handover_configs", await db.handoverConfig.count({ where: { shopId: a } })],

@@ -112,6 +112,8 @@ const QUOTA_BULLET: Record<QuotaDimension, (def: PlanDefinition) => string | nul
       ? "1 team seat (owner only)"
       : `${amount(d.quotas.team_seats)} team seats`,
   active_campaigns: (d) => `${amount(d.quotas.active_campaigns)} active proactive campaigns`,
+  cross_sell_pairs: (d) => `${amount(d.quotas.cross_sell_pairs)} cross-sell pairs`,
+  recommendation_rules: (d) => `${amount(d.quotas.recommendation_rules)} recommendation rules`,
   analytics_range_days: (d) =>
     isUnlimitedQuota(d.quotas.analytics_range_days)
       ? "Full analytics history"
@@ -135,7 +137,6 @@ const FEATURE_BULLET: Record<GatedFeature, string | null> = {
   file_upload: null, // stated by the file_uploads quota line
   survey: null,
   push_notifications: "Browser push notifications",
-  custom_recommendations: "Custom recommendations + cross-sell pairs",
 };
 
 /** GENERATED from the live plan matrix, never hand-written per plan id.

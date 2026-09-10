@@ -3,41 +3,43 @@ import { useFetcher } from "react-router";
 import { useAppBridge } from "../lib/ui/surface";
 import type {
   CrossSellPairRowData,
-  CustomRecommendationRowData,
   InstructionsActionResult,
   ProductMeta,
   RecommendationRowData,
 } from "../routes/app.ai-agent.instructions";
 import { DataTable, type Column } from "./DataTable";
 import { BrowseProductsModal, BrowseThumb, type BrowseItemMeta } from "./BrowseProductsModal";
-import { PlanBadge, PlanBanner } from "./ui/PlanGate";
 import { useDateTime } from "../lib/format/context";
 
 // Instructions → Product recommendations tab (spec 08, design #viewInstructions
-// prod panel): Rules card, App recommendations table, Custom recommendations
-// table, Cross-sell pairs. Detail views open via onOpenRec/onOpenCustom
-// (?rec= / ?custom= search params on the route).
+// prod panel): Rules card, ONE merged App recommendations table (Option B
+// 2026-09-10 — the former Custom recommendations section folded in; a rule
+// answers instantly on a whole-message match and steers shopping results when
+// a trigger word appears inside a request, over products AND collections,
+// with shuffled picks), Cross-sell pairs. Detail view opens via onOpenRec
+// (?rec= search param on the route).
 //
 // Rules card deltas (spec 08 noted in the feature report):
 // - "Never recommend out-of-stock" is functional (product decision 2026-08-10,
 //   diverges from spec 08's always-on exclusion): stored in
 //   shopSettings.recommendationRules, enforced across search + card assembly.
 //   OFF lets unavailable products appear in recommendation cards.
+// - "Cross-sell companions" toggle (2026-09-10): every plan; OFF stops
+//   companion products being appended to recommendation cards.
 // - "Push overstock" renders OFF + disabled — coming soon, no storage in v1.
 
 
 export function InstructionsRecommendationsTab(props: {
   recommendations: RecommendationRowData[];
-  customRecs: CustomRecommendationRowData[];
   pairs: CrossSellPairRowData[];
   productMeta: Record<string, ProductMeta>;
-  rules: { excludeOutOfStock: boolean };
-  /** Plan needed for `custom_recommendations`; null when this shop has it. */
-  customRecsPlan: string | null;
+  rules: { excludeOutOfStock: boolean; crossSellEnabled: boolean };
+  /** How many cross-sell pairs this shop's plan allows (cross_sell_pairs quota). */
+  crossSellQuota: number;
+  /** How many recommendation rules this shop's plan allows (recommendation_rules quota). */
+  recommendationQuota: number;
   onOpenRec: (id: string) => void;
-  onOpenCustom: (id: string) => void;
 }) {
-  const customRecsPlan = props.customRecsPlan;
   const dt = useDateTime();
   const shopify = useAppBridge();
   const fetcher = useFetcher<InstructionsActionResult>();
@@ -57,8 +59,6 @@ export function InstructionsRecommendationsTab(props: {
         "save-rules": "Recommendation rules saved",
         "toggle-recommendation": "Recommendation updated",
         "delete-recommendation": "Recommendation deleted",
-        "toggle-custom": "Custom recommendation updated",
-        "delete-custom": "Custom recommendation deleted",
         "save-pair": "Cross-sell pair saved",
         "delete-pair": "Cross-sell pair removed",
       };
@@ -80,14 +80,21 @@ export function InstructionsRecommendationsTab(props: {
         <s-stack gap="small-500">
           <s-text type="strong">{row.title}</s-text>
           <s-text color="subdued">
-            {row.triggerQuestions[0]
-              ? `Product recommendations for "${row.triggerQuestions[0]}"`
-              : "No trigger questions yet"}
+            {row.triggerQuestions.length
+              ? `Triggers on: ${row.triggerQuestions.slice(0, 3).join(", ")}${row.triggerQuestions.length > 3 ? "…" : ""}`
+              : "No trigger phrases yet"}
           </s-text>
         </s-stack>
       ),
     },
-    { key: "products", title: "Products", render: (row) => String(row.productIds.length) },
+    {
+      key: "products",
+      title: "Products",
+      render: (row) =>
+        row.collectionIds.length
+          ? `${row.productIds.length} + ${row.collectionIds.length} collection${row.collectionIds.length === 1 ? "" : "s"}`
+          : String(row.productIds.length),
+    },
     { key: "modified", title: "Last modified", render: (row) => dt.dateTime(row.updatedAt) },
     {
       key: "status",
@@ -134,75 +141,6 @@ export function InstructionsRecommendationsTab(props: {
     },
   ];
 
-  const customColumns: Column<CustomRecommendationRowData>[] = [
-    {
-      key: "title",
-      title: "Title",
-      render: (row) => (
-        <s-stack gap="small-500">
-          <s-text type="strong">{row.name}</s-text>
-          <s-text color="subdued">
-            {row.searchTerms.length
-              ? `Triggers on: ${row.searchTerms.slice(0, 3).join(", ")}${row.searchTerms.length > 3 ? "…" : ""}`
-              : "No search terms yet"}
-          </s-text>
-        </s-stack>
-      ),
-    },
-    {
-      key: "products",
-      title: "Products",
-      render: (row) =>
-        row.collectionIds.length
-          ? `${row.productIds.length} + ${row.collectionIds.length} collection${row.collectionIds.length === 1 ? "" : "s"}`
-          : String(row.productIds.length),
-    },
-    { key: "modified", title: "Last modified", render: (row) => dt.dateTime(row.updatedAt) },
-    {
-      key: "status",
-      title: "Status",
-      render: (row) => (
-        <s-switch
-          label={`${row.name} status`}
-          labelAccessibilityVisibility="exclusive"
-          checked={row.status === "active"}
-          disabled={busy}
-          onInput={(e) =>
-            submit("toggle-custom", {
-              id: row.id,
-              status: e.currentTarget.checked ? "active" : "inactive",
-            })
-          }
-        />
-      ),
-    },
-    {
-      key: "actions",
-      title: "Actions",
-      align: "end",
-      render: (row) => (
-        <s-stack direction="inline" gap="small-300" justifyContent="end">
-          <s-button variant="tertiary" icon="edit" accessibilityLabel={`Edit ${row.name}`} onClick={() => props.onOpenCustom(row.id)}>
-            Edit
-          </s-button>
-          <s-button
-            variant="tertiary"
-            tone="critical"
-            accessibilityLabel={`Delete ${row.name}`}
-            disabled={busy}
-            onClick={() => {
-              if (window.confirm(`Delete custom recommendation "${row.name}"?`)) {
-                submit("delete-custom", { id: row.id });
-              }
-            }}
-          >
-            Delete
-          </s-button>
-        </s-stack>
-      ),
-    },
-  ];
-
   const productTitle = (gid: string) => props.productMeta[gid]?.title ?? "Unavailable product";
 
   return (
@@ -215,7 +153,18 @@ export function InstructionsRecommendationsTab(props: {
             details="When off, unavailable products can appear in recommendations."
             checked={props.rules.excludeOutOfStock}
             disabled={busy}
-            onInput={(e) => submit("save-rules", { excludeOutOfStock: e.currentTarget.checked })}
+            onInput={(e) =>
+              submit("save-rules", { ...props.rules, excludeOutOfStock: e.currentTarget.checked })
+            }
+          />
+          <s-switch
+            label="Cross-sell companion products"
+            details="When on, products from your cross-sell pairs are appended to recommendation cards."
+            checked={props.rules.crossSellEnabled}
+            disabled={busy}
+            onInput={(e) =>
+              submit("save-rules", { ...props.rules, crossSellEnabled: e.currentTarget.checked })
+            }
           />
           <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="center">
             <s-switch
@@ -232,55 +181,29 @@ export function InstructionsRecommendationsTab(props: {
       <s-section heading="App recommendations">
         <s-stack gap="base">
           <s-paragraph color="subdued">
-            Pre-configured recommendations that automatically respond to common customer intents.
+            One rule does both jobs: when a shopper&apos;s message matches a trigger phrase, the
+            products show instantly; when a trigger word appears inside a shopping request
+            (&quot;wedding gift&quot;, &quot;rakhi&quot;), results come from this rule&apos;s
+            products and collections. Picks rotate so repeat shoppers see variety.
           </s-paragraph>
           <DataTable
             columns={recColumns}
             rows={props.recommendations}
             onRowClick={(row) => props.onOpenRec(row.id)}
-            emptyMessage="No app recommendations yet. Add one to answer common intents deterministically."
-            toolbar={
-              <s-button variant="primary" icon="plus" onClick={() => props.onOpenRec("new")}>
-                Add new
-              </s-button>
-            }
-          />
-        </s-stack>
-      </s-section>
-
-      <s-section heading="Custom recommendations">
-        <s-stack gap="base">
-          <s-paragraph color="subdued">
-            Create custom recommendation rules for specific use cases like gifts, occasions, or
-            seasonal campaigns.
-          </s-paragraph>
-          {/* Gated by `custom_recommendations`, enforced in
-              instructions/save.server.ts. Existing rules stay visible and
-              editable-looking; only creating is stopped, and the banner says
-              why instead of leaving the save to fail. */}
-          <PlanBanner
-            plan={customRecsPlan}
-            heading="Custom recommendation rules are a paid feature"
-          >
-            Rules let you answer &quot;gifts for dad&quot; or &quot;summer sale&quot; with a
-            hand-picked set of products or collections.
-          </PlanBanner>
-          <DataTable
-            columns={customColumns}
-            rows={props.customRecs}
-            onRowClick={(row) => props.onOpenCustom(row.id)}
-            emptyMessage="No custom recommendations yet. Add one for occasions like gifts or seasonal campaigns."
+            emptyMessage="No recommendations yet. Add one for common questions or occasions like gifts and seasonal campaigns."
             toolbar={
               <s-stack direction="inline" gap="small-200" alignItems="center">
+                <s-text color="subdued">
+                  {props.recommendations.length} of {props.recommendationQuota} rules used
+                </s-text>
                 <s-button
                   variant="primary"
                   icon="plus"
-                  disabled={Boolean(customRecsPlan)}
-                  onClick={() => props.onOpenCustom("new")}
+                  disabled={props.recommendations.length >= props.recommendationQuota}
+                  onClick={() => props.onOpenRec("new")}
                 >
                   Add new
                 </s-button>
-                <PlanBadge plan={customRecsPlan} />
               </s-stack>
             }
           />
@@ -295,14 +218,16 @@ export function InstructionsRecommendationsTab(props: {
               sleeping bag.
             </s-paragraph>
             <s-stack direction="inline" gap="small-200" alignItems="center">
+              <s-text color="subdued">
+                {props.pairs.length} of {props.crossSellQuota} pairs used
+              </s-text>
               <s-button
                 icon="plus"
-                disabled={Boolean(customRecsPlan)}
+                disabled={props.pairs.length >= props.crossSellQuota}
                 onClick={() => setPairStage({ stage: "anchor" })}
               >
                 Add pair
               </s-button>
-              <PlanBadge plan={customRecsPlan} />
             </s-stack>
           </s-grid>
           {props.pairs.length === 0 ? (

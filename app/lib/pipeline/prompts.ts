@@ -100,6 +100,8 @@ export function detailConfirmUser(msg: string, shownTitles: string[]): string {
     "Answer no if the shopper is choosing between the products, narrowing by an",
     "attribute, asking to see one of them, asking for something different, cheaper",
     "or additional, or starting a new search. Those are all still browsing.",
+    'Examples of no: "the waterproof one?", "the cheaper one", "show me the black one",',
+    '"do you have more like this". Example of yes: "what is the waterproof one made of?".',
   ].join("\n");
 }
 

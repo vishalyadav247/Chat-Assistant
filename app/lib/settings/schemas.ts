@@ -224,10 +224,15 @@ export const shopSettingsSchema = z.object({
     .object({ products: z.boolean().catch(true), collections: z.boolean().catch(true) })
     .catch({ products: true, collections: true }),
   /** AI recommendation rules (spec 08 Rules card). excludeOutOfStock OFF lets
-   *  unavailable products appear in recommendation cards. */
+   *  unavailable products appear in recommendation cards. crossSellEnabled OFF
+   *  stops companion products being appended to buy-lane cards (2026-09-10 —
+   *  merchant toggle, available on every plan). */
   recommendationRules: z
-    .object({ excludeOutOfStock: z.boolean().catch(true) })
-    .catch({ excludeOutOfStock: true }),
+    .object({
+      excludeOutOfStock: z.boolean().catch(true),
+      crossSellEnabled: z.boolean().catch(true),
+    })
+    .catch({ excludeOutOfStock: true, crossSellEnabled: true }),
   /** Master training permissions (spec 07 Learn cards, user decision
    *  2026-08-12): independent of per-row learnEnabled. Master OFF ⇒ the AI
    *  must not use that data type at all; per-row flags apply only when the

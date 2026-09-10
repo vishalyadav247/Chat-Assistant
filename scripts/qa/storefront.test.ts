@@ -1212,7 +1212,7 @@ async function main(): Promise<void> {
           "message", "conversation", "contact", "campaign", "planUsage", "shopSettings",
           "widgetSettings", "persona", "guardrails", "handoverConfig", "unresolvedQuestion",
           "analyticsEvent", "metricsDaily", "llmUsageDaily", "faq", "faqCategory", "knowledge",
-          "dataSource", "curatedAnswer", "recommendation", "customRecommendation", "crossSellPair",
+          "dataSource", "curatedAnswer", "recommendation", "crossSellPair",
           "product", "collection", "discount", "syncState", "teamMember", "pushSubscription",
           "appLog", "dataRequest", "redactLog", "promoRedemption", "productMetafieldDefinition",
         ];

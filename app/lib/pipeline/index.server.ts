@@ -492,12 +492,19 @@ export async function* runPipeline(
     },
   );
   if (recommendation && recommendation.score >= curatedThreshold) {
-    const cards = await cardsForShopifyIds(
-      shopId, recommendation.productIds, config.settings.recommendationRules.excludeOutOfStock,
-    );
+    // Pool = pinned products + members of pinned collections, shuffled within
+    // each tier so the same trigger shows different picks on repeat visits
+    // (user decision 2026-09-10), capped at 4 cards.
+    const pool = await recommendationRulePool(shopId, recommendation, {
+      excludeOutOfStock: config.settings.recommendationRules.excludeOutOfStock,
+      priceMax: null,
+      limit: 4,
+    });
+    const cards = pool.map(toCard);
     if (cards.length === 0) {
       trace.step("recommendation_cards", "Recommendation products all unavailable", "miss", {
         pinnedProducts: recommendation.productIds.length,
+        pinnedCollections: recommendation.collectionIds.length,
         effect: "falling through to the router",
       });
     }
@@ -986,10 +993,12 @@ async function* buyLane(args: {
   // clarify path below. Per-product learnEnabled applies only when this is on.
   const learnProducts = args.config.settings.learn.products;
 
-  // Custom recommendations (spec 08): a matched search term constrains the
-  // candidate pool to the merchant's hand-picked products for that occasion.
+  // Merged recommendation rules (spec 08, Option B 2026-09-10): when one of a
+  // rule's trigger phrases appears INSIDE the shopping message, the candidate
+  // pool is constrained to that rule's products/collections. (The same rule's
+  // whole-message semantic match already fired earlier as an instant answer.)
   const constrained = learnProducts
-    ? await customRecommendationPool(args.shopId, args.message, args.priceMax, excludeOutOfStock)
+    ? await keywordRecommendationPool(args.shopId, args.message, args.priceMax, excludeOutOfStock)
     : null;
   let candidates = !learnProducts
     ? []
@@ -1232,8 +1241,11 @@ async function* buyLane(args: {
     }
     let cards = chosen.map(toCard);
     const before = cards.length;
-    // Cross-sell (spec 08): append companions of any anchored card (cap 6 total).
-    cards = await appendCrossSell(args.shopId, cards, excludeOutOfStock);
+    // Cross-sell (spec 08): append companions of any anchored card (cap 6
+    // total) — unless the merchant switched it off (Rules card, 2026-09-10).
+    if (args.config.settings.recommendationRules.crossSellEnabled) {
+      cards = await appendCrossSell(args.shopId, cards, excludeOutOfStock);
+    }
     args.trace.step("model_picks", "Cards decided", chosen.length > 0 ? "hit" : "miss", {
       picksLine: line,
       parsed: picks,
@@ -1993,61 +2005,100 @@ async function saveMessage(
   return row.id;
 }
 
-/**
- * Custom-recommendation constraint (spec 08): case-insensitive search-term
- * inclusion in the shopper message → candidate pool = the recommendation's
- * hand-picked products (stock/price still enforced). Collections deferred
- * (membership not mirrored).
- */
-/** How many collection members one custom rule may pull in. Deliberately far
- *  above the 8 that survive ranking: the price/stock filters below can discard
- *  most of them, and a rule that returns nothing is worse than one that reads
- *  a few more rows. */
+// ── Merged recommendation rules (spec 08, Option B 2026-09-10) ──────────────
+// One rule (Recommendation row) fires two ways: whole-message semantic match →
+// the instant deterministic answer near the top of the pipeline; a trigger
+// phrase CONTAINED in a shopping message → this pool constraint inside the buy
+// lane. Both resolve products + collection members through the same pool, and
+// both SHUFFLE within each tier (explicit picks first, then collection
+// members) so the same trigger shows different picks on repeat visits — while
+// a 100-product collection sweep still cannot bury the merchant's own picks.
+
+/** How many collection members one rule may pull in. Deliberately far above
+ *  what survives ranking: the price/stock filters can discard most of them,
+ *  and a rule that returns nothing is worse than one that reads more rows. */
 const COLLECTION_POOL_LIMIT = 100;
 
-async function customRecommendationPool(
+/** Fisher–Yates copy — the variety requirement (never the same picks twice). */
+function shuffled<T>(items: readonly T[]): T[] {
+  const out = [...items];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+/** Trigger phrase contained in the message → that rule, else null. */
+async function keywordRecommendationPool(
   shopId: string,
   message: string,
   priceMax: number | null,
   excludeOutOfStock: boolean,
 ): Promise<ProductCandidate[] | null> {
   try {
-    const rows = await db.customRecommendation.findMany({
+    const rows = await db.recommendation.findMany({
       where: { shopId, status: "active" },
-      select: { id: true, searchTerms: true, productIds: true, collectionIds: true },
+      select: { id: true, triggerQuestions: true, productIds: true, collectionIds: true },
     });
     const lower = message.toLowerCase();
     // A rule targeting COLLECTIONS is just as valid as one targeting products.
     // Requiring productIds here is what made every collection-only rule a
     // silent no-op: it saved, it looked active, and it could never match.
+    // Full trigger QUESTIONS ("What are your best sellers?") simply never
+    // appear inside a message — those fire on the semantic layer instead.
     const matched = rows.find(
       (r) =>
         (r.productIds.length > 0 || r.collectionIds.length > 0) &&
-        r.searchTerms.some((t) => t.trim().length > 2 && lower.includes(t.trim().toLowerCase())),
+        r.triggerQuestions.some((t) => t.trim().length > 2 && lower.includes(t.trim().toLowerCase())),
     );
     if (!matched) return null;
+    const pool = await recommendationRulePool(shopId, matched, {
+      excludeOutOfStock,
+      priceMax,
+      limit: 8,
+    });
+    return pool.length > 0 ? pool : null;
+  } catch (error) {
+    logError("recommendation_rule_pool_error", error, { shopId });
+    return null;
+  }
+}
 
-    // Explicit products first, then everything in the named collections. The
-    // merchant's own picks outrank a whole-collection sweep.
-    const targetIds = [...matched.productIds];
-    if (matched.collectionIds.length > 0) {
+/**
+ * A rule's product pool as ranked candidates: explicit picks (shuffled), then
+ * collection members (shuffled), stock/price enforced, capped at `limit`.
+ * Shared by the instant semantic layer and the buy-lane keyword constraint.
+ */
+async function recommendationRulePool(
+  shopId: string,
+  rule: { productIds: string[]; collectionIds: string[] },
+  opts: { excludeOutOfStock: boolean; priceMax: number | null; limit: number },
+): Promise<ProductCandidate[]> {
+  try {
+    const explicit = [...rule.productIds];
+    const memberIds: string[] = [];
+    if (rule.collectionIds.length > 0) {
       const members = await db.collectionProduct.findMany({
-        where: { shopId, collectionId: { in: matched.collectionIds } },
+        where: { shopId, collectionId: { in: rule.collectionIds } },
         select: { shopifyProductId: true },
         take: COLLECTION_POOL_LIMIT,
       });
       for (const m of members) {
-        if (!targetIds.includes(m.shopifyProductId)) targetIds.push(m.shopifyProductId);
+        if (!explicit.includes(m.shopifyProductId) && !memberIds.includes(m.shopifyProductId)) {
+          memberIds.push(m.shopifyProductId);
+        }
       }
     }
-    if (targetIds.length === 0) return null;
+    const targetIds = [...explicit, ...memberIds];
+    if (targetIds.length === 0) return [];
 
     const products = await db.product.findMany({
       where: {
         shopId,
         shopifyProductId: { in: targetIds },
-        ...purchasableWhere(excludeOutOfStock),
-        ...(priceMax !== null ? { price: { lte: priceMax } } : {}),
+        ...purchasableWhere(opts.excludeOutOfStock),
+        ...(opts.priceMax !== null ? { price: { lte: opts.priceMax } } : {}),
       },
       select: {
         id: true, shopifyProductId: true, title: true, price: true, stock: true,
@@ -2055,21 +2106,15 @@ async function customRecommendationPool(
         productType: true, tags: true, description: true, metafieldText: true,
       },
     });
-    if (products.length === 0) return null;
-    // Rank by the merchant's own order — explicit picks, then collection
-    // members — and only THEN take the top 8. Letting the database's arbitrary
-    // row order decide would let a 100-product collection sweep bury the
-    // handful of products the merchant actually chose.
-    const rank = new Map(targetIds.map((gid, i) => [gid, i]));
-    const ordered = products
-      .slice()
-      .sort(
-        (a, b) =>
-          (rank.get(a.shopifyProductId) ?? Number.MAX_SAFE_INTEGER) -
-          (rank.get(b.shopifyProductId) ?? Number.MAX_SAFE_INTEGER),
-      )
-      .slice(0, 8);
-    return ordered.map((p, i) => ({
+    if (products.length === 0) return [];
+    // Tiered shuffle: variety inside each tier, but the merchant's explicit
+    // picks always come before the collection sweep.
+    const explicitSet = new Set(explicit);
+    const order = [
+      ...shuffled(products.filter((p) => explicitSet.has(p.shopifyProductId))),
+      ...shuffled(products.filter((p) => !explicitSet.has(p.shopifyProductId))),
+    ].slice(0, opts.limit);
+    return order.map((p, i) => ({
       id: p.id,
       shopifyProductId: p.shopifyProductId,
       title: p.title,
@@ -2090,8 +2135,8 @@ async function customRecommendationPool(
       fused: 1 / (60 + i),
     }));
   } catch (error) {
-    logError("custom_recommendation_error", error, { shopId });
-    return null;
+    logError("recommendation_rule_pool_error", error, { shopId });
+    return [];
   }
 }
 

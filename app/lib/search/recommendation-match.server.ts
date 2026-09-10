@@ -15,6 +15,7 @@ export interface RecommendationMatch {
   id: string;
   title: string;
   productIds: string[];
+  collectionIds: string[];
   score: number;
 }
 
@@ -22,6 +23,7 @@ interface CachedRec {
   id: string;
   title: string;
   productIds: string[];
+  collectionIds: string[];
   vectors: number[][];
 }
 
@@ -35,9 +37,12 @@ declare global {
 async function triggerVectors(shopId: string): Promise<CachedRec[] | null> {
   const rows = await db.recommendation.findMany({
     where: { shopId, status: "active" },
-    select: { id: true, title: true, triggerQuestions: true, productIds: true },
+    select: { id: true, title: true, triggerQuestions: true, productIds: true, collectionIds: true },
   });
-  const candidates = rows.filter((r) => r.productIds.length > 0 && r.triggerQuestions.length > 0);
+  // Collection-only rules are as valid as product rules (merged model 2026-09-10).
+  const candidates = rows.filter(
+    (r) => (r.productIds.length > 0 || r.collectionIds.length > 0) && r.triggerQuestions.length > 0,
+  );
   if (candidates.length === 0) return null;
 
   if (!global.recVectorCache) global.recVectorCache = new Map();
@@ -55,7 +60,13 @@ async function triggerVectors(shopId: string): Promise<CachedRec[] | null> {
     const take = rec.triggerQuestions.length;
     const slice = vectors.slice(cursor, cursor + take);
     cursor += take;
-    return { id: rec.id, title: rec.title, productIds: rec.productIds, vectors: slice };
+    return {
+      id: rec.id,
+      title: rec.title,
+      productIds: rec.productIds,
+      collectionIds: rec.collectionIds,
+      vectors: slice,
+    };
   });
   global.recVectorCache.set(cacheKey, cached);
   if (global.recVectorCache.size > 500) global.recVectorCache.clear();
@@ -85,7 +96,13 @@ export async function recommendationMatch(
     for (const vector of rec.vectors) {
       const score = dot(queryEmbedding, vector);
       if (!best || score > best.score) {
-        best = { id: rec.id, title: rec.title, productIds: rec.productIds, score };
+        best = {
+          id: rec.id,
+          title: rec.title,
+          productIds: rec.productIds,
+          collectionIds: rec.collectionIds,
+          score,
+        };
       }
     }
   }
