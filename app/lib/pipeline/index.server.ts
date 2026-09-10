@@ -13,6 +13,7 @@ import {
   normalizeNumberIds,
   purchasableWhere,
   selectRelevant,
+  stripGenericKeywords,
   TIER_MARGIN,
   type ProductCandidate,
 } from "../search/product-search.server";
@@ -25,7 +26,7 @@ import { requireShopId } from "../tenancy.server";
 import { mergePageContext } from "../widget/page-context.server";
 import { notifyNewConversation, notifyShopperMessage } from "../notify.server";
 import { keywordScan, meaningScan, moderationCheck } from "./guardrail.server";
-import { detectHandover, detectCannotAnswer, executeHandover } from "./handover.server";
+import { detectHandover, detectCannotAnswer, executeHandover, fallbackLeaveMessageForm } from "./handover.server";
 import { loadHistory } from "./history.server";
 import {
   actionInstruction,
@@ -42,6 +43,7 @@ import {
   CHAT_REPLY,
   CURATED_CONFIRM_SYSTEM,
   curatedConfirmUser,
+  discountConfirmUser,
   languageInstruction,
   PRODUCT_DETAIL,
   PRODUCT_RECOMMEND,
@@ -132,6 +134,13 @@ const BLOCKED_MESSAGE = "This chat has been closed by the store team.";
 /** Ranked candidates the reply model may choose cards from (the allow-list).
  *  Cards shown stay ≤ 4 (+ cross-sell); this is what the model gets to READ. */
 const MODEL_CANDIDATES = 8;
+
+// Cards shown per recommendation (user, 2026-09-09). The MINIMUM is a
+// best-effort floor, not a guarantee: it is only reached from the same
+// relevance tier, so a genuinely single-answer question still answers with one
+// product rather than padding to two. The MAXIMUM is hard.
+const MIN_PICKS = 2;
+const MAX_PICKS = 4;
 /** Text when the model returned only a PICKS line and no prose. */
 const PICKS_ONLY_REPLY = "Here's what I found — tell me if you'd like more options.";
 
@@ -738,7 +747,9 @@ export async function* runPipeline(
   if (routed.intent === "buy") {
     yield* buyLane({
       shopId, convoId: convo.id, config, message, queryEmbedding,
-      keywords: routed.keywords, priceMax: routed.price_max,
+      // Generic product nouns are stripped ONCE here so the search and the
+      // tier guards below both see the same list (product-search.server.ts).
+      keywords: stripGenericKeywords(routed.keywords), priceMax: routed.price_max,
       personaPrompt, generationHistory, meterPromise, routed, isTest, track, trace,
     });
     return;
@@ -1167,6 +1178,7 @@ async function* buyLane(args: {
       const seen = new Set<string>();
       chosen = [];
       let widened = 0;
+      let toppedUp = 0;
       for (const id of picks.ids) {
         const candidate = id >= 1 && id <= allowList.length ? candidates[id - 1] : undefined;
         if (!candidate || seen.has(candidate.id)) continue;
@@ -1176,13 +1188,36 @@ async function* buyLane(args: {
         }
         seen.add(candidate.id);
         chosen.push(candidate);
-        if (chosen.length >= 4) break;
+        if (chosen.length >= MAX_PICKS) break;
       }
+      // MIN_PICKS (user, 2026-09-09): one card next to "here's what I'd
+      // suggest" looks thin, so top up to two.
+      //
+      // Only ever from the SAME relevance tier the fallback would have shown —
+      // never by reaching down the list. A shop with one selenite bracelet must
+      // still answer "do you have selenite bracelets" with that one product; a
+      // second, unrelated bracelet added to make up the number is the padding
+      // the precision work removed, and it would be a wrong answer rather than
+      // a thin one.
+      if (chosen.length === 1) {
+        for (const candidate of relevant) {
+          if (chosen.length >= MIN_PICKS) break;
+          if (seen.has(candidate.id)) continue;
+          seen.add(candidate.id);
+          chosen.push(candidate);
+          toppedUp++;
+        }
+      }
+      const tierReason = lexicalComplete
+        ? "literal match"
+        : "only the top tier satisfies every word";
       source =
         chosen.length > 0
           ? constrainToTier
-            ? `model picks (${lexicalComplete ? "literal match" : "only the top tier satisfies every word"} — ${widened} pick(s) outside the tier dropped)`
-            : "model picks"
+            ? `model picks (${tierReason} — ${widened} pick(s) outside the tier dropped)`
+            : toppedUp > 0
+              ? `model picks (+${toppedUp} from the same tier to reach the ${MIN_PICKS}-card minimum)`
+              : "model picks"
           : "fallback tier (picks out of range)";
       if (chosen.length === 0) chosen = relevant;
     } else if (picks?.kind === "none" && lexicalAnchor) {
@@ -1275,7 +1310,7 @@ async function* questionLane(args: {
 }): AsyncIterable<PipelineFrame> {
   const guardrails = args.config.guardrails;
   const minMeaningScore = guardrails?.minMeaningScore ?? 0.3;
-  const [hits, discountContext, collectionContext] = await Promise.all([
+  const [hits, regexDiscountContext, collectionContext] = await Promise.all([
     knowledgeSearch(args.shopId, args.queryEmbedding, 3),
     // Master "Learn discounts" permission (spec 07): OFF ⇒ no discount facts,
     // regardless of per-row learnEnabled.
@@ -1288,6 +1323,7 @@ async function* questionLane(args: {
       : Promise.resolve(""),
   ]);
   const strongEnough = hits.length > 0 && hits[0].score >= minMeaningScore;
+  let discountContext = regexDiscountContext;
 
   args.trace.step(
     "knowledge_search",
@@ -1307,6 +1343,50 @@ async function* questionLane(args: {
       })),
     },
   );
+  // Language-agnostic safety net for the discount question (2026-09-09, user:
+  // "if we are syncing the discounts that means the AI agent should know the
+  // discounts and offers currently available and tell the shopper"). The regex
+  // above is English, but the agent answers in five languages — "kya koi offer
+  // hai?", "¿tienen ofertas?" match nothing, so a store with live discounts in
+  // the table still answered "I'm not sure". When the regex missed AND nothing
+  // else grounded the turn AND there are discounts to name, one 3-token yes/no
+  // confirm decides it (same shape as the curated/block confirms). Zero cost on
+  // the happy path: English phrasings never reach here, and a store with no
+  // active discounts pays one indexed query, no LLM call.
+  let discountConfirmed: boolean | null = null;
+  if (args.config.settings.learn.discounts && !discountContext && !strongEnough) {
+    const facts = await discountFacts(args.shopId);
+    if (facts) {
+      try {
+        const answer = await getLlmProvider().chat(
+          [
+            { role: "system", content: CURATED_CONFIRM_SYSTEM },
+            { role: "user", content: discountConfirmUser(args.message) },
+          ],
+          { shopId: args.shopId, purpose: "router" },
+          { temperature: 0, maxTokens: 3 },
+        );
+        args.trace.countLlm("router");
+        discountConfirmed = answer.trim().toLowerCase().startsWith("y");
+      } catch (error) {
+        // Confirm unavailable → leave the turn exactly as it was. Failing open
+        // here would volunteer discounts on a question that was never about
+        // them, which is worse than the fallback.
+        logError("discount_confirm_error", error, { shopId: args.shopId });
+        discountConfirmed = false;
+      }
+      if (discountConfirmed) discountContext = facts;
+      args.trace.step(
+        "discount_confirm",
+        "Regex missed — is this a discount question anyway?",
+        discountConfirmed ? "hit" : "miss",
+        {
+          rule: "runs only when no knowledge cleared the meaning gate and the shop has active, AI-enabled discounts; catches non-English and unusual phrasings",
+          confirmed: discountConfirmed,
+        },
+      );
+    }
+  }
   args.trace.step(
     "discount_context",
     "Synced discount facts",
@@ -1314,6 +1394,7 @@ async function* questionLane(args: {
     {
       reason: args.config.settings.learn.discounts ? null : "Learn discounts is off",
       injected: Boolean(discountContext),
+      matchedBy: discountContext ? (regexDiscountContext ? "regex" : "confirm") : null,
     },
   );
   args.trace.step(
@@ -1477,6 +1558,28 @@ async function* serveRagFallback(args: {
   yield { type: "message", text: args.fallback };
   const escalation = await maybeEscalateCannotAnswer(args.shopId, args.convoId, args.config);
   yield* escalation;
+  // The fallback SAYS "leave your email" — so offer the box, every time, not
+  // only once the cannot-answer threshold has been crossed. Skipped when the
+  // full escalation already ran (it emits its own form) or when the merchant's
+  // destination collects nothing here.
+  if (escalation.length === 0) {
+    const form = fallbackLeaveMessageForm(args.config.handover);
+    if (form) {
+      yield {
+        type: "handover",
+        data: {
+          destination: args.config.handover.destination,
+          // No extra bubble: the fallback message the shopper just read IS the
+          // ask. Repeating the form's own copy under it says the same thing
+          // twice.
+          messages: [],
+          form,
+          contactMethods: false,
+          aiDormant: false,
+        },
+      };
+    }
+  }
   yield {
     type: "done",
     outcome: escalation.length > 0 ? "handover" : "fell_back",
@@ -1509,11 +1612,17 @@ async function* resumeStream<T>(first: IteratorResult<T>, iterator: AsyncIterato
 // Exported so the QA suite can assert against the REAL pattern. It previously
 // kept its own copy, which meant the test could not tell a fixed regex from a
 // broken one.
+// Widened 2026-09-09 (user: asked "how many offers are running" repeatedly and
+// got the fallback). The synced Discount mirror is the ONLY grounding for this
+// question, so a phrasing that misses here is answered "I'm not sure" while
+// live discounts sit in the table. Whole words throughout, so a product called
+// "Sale Rack" does not turn every mention of it into a discount question.
 export const DISCOUNT_INTENT_RE =
-  /\b(discount|coupon|promo|promotion|voucher|sale|offer|deal)s?\b/i;
+  /\b(discount|coupon|promo|promotion|voucher|sale|offer|deal|bogo|clearance|saving|markdown|price\s*cut|percent\s*off|%\s*off|free\s*ship\w*|buy\s*\d+\s*get)s?\b/i;
 
-async function activeDiscountContext(shopId: string, message: string): Promise<string> {
-  if (!DISCOUNT_INTENT_RE.test(message)) return "";
+/** The discount facts themselves, with no intent gate — so the confirm path can
+ *  first ask whether the shop even has discounts worth a yes/no call. */
+export async function discountFacts(shopId: string): Promise<string> {
   const now = new Date();
   const discounts = await db.discount.findMany({
     where: {
@@ -1527,14 +1636,32 @@ async function activeDiscountContext(shopId: string, message: string): Promise<s
     },
     orderBy: { updatedAt: "desc" },
     take: 6,
-    select: { title: true, summary: true, endsAt: true },
+    select: { title: true, summary: true, code: true, method: true, endsAt: true },
   });
   if (discounts.length === 0) return "";
   const lines = discounts.map((d) => {
     const ends = d.endsAt ? ` (ends ${d.endsAt.toISOString().slice(0, 10)})` : "";
-    return `- ${d.title}${d.summary ? `: ${d.summary}` : ""}${ends}`;
+    // How to claim it — the actionable half of the answer. "There is 20% off"
+    // without "use SAVE20 at checkout" sends the shopper hunting.
+    //
+    // Three states, and the third matters: a code discount whose `code` is
+    // still "" is a row synced before the code column existed (2026-09-09), not
+    // a codeless discount. Saying "applies automatically" there would be a
+    // confident falsehood, so it says nothing about claiming and the prompt's
+    // "never invent" rule keeps the model quiet too.
+    const how = d.code
+      ? ` — use code ${d.code} at checkout`
+      : d.method === "automatic"
+        ? " — applies automatically, no code needed"
+        : "";
+    return `- ${d.title}${d.summary ? `: ${d.summary}` : ""}${how}${ends}`;
   });
-  return `\n\n[Current discounts — the only discounts that exist]\n${lines.join("\n")}`;
+  return `\n\n[Current discounts — the only discounts that exist. Quote the code exactly as written; never invent one.]\n${lines.join("\n")}`;
+}
+
+async function activeDiscountContext(shopId: string, message: string): Promise<string> {
+  if (!DISCOUNT_INTENT_RE.test(message)) return "";
+  return discountFacts(shopId);
 }
 
 // "what do you sell?", "what categories are there?", "do you have a winter

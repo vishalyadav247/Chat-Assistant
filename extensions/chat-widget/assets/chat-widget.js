@@ -1418,6 +1418,26 @@
   }
 
   /**
+   * Which cart path to take. The merchant's Settings → Theme choice decides;
+   * "auto" (the default, and right for nearly everyone) probes as before.
+   *
+   *   horizon → Shopify.actions. Horizon has no <cart-drawer>.renderContents,
+   *             so the Dawn-shaped path finds no drawer and ends up navigating
+   *             the shopper to /cart, straight out of the chat.
+   *   dawn    → /cart/add.js with `sections`, which is what renderContents and
+   *             the cart-icon-bubble swap are built on.
+   *
+   * The setting exists because detection can only ever probe what a theme
+   * exposes: a Dawn fork that also ships the actions runtime looks like both.
+   */
+  function preferCartActions() {
+    var theme = config && config.theme;
+    if (theme === "horizon") return hasCartActions();
+    if (theme === "dawn") return false;
+    return hasCartActions();
+  }
+
+  /**
    * Add via Shopify.actions — the theme decides how its cart renders, so this
    * is the path that works on Horizon.
    *
@@ -1440,11 +1460,53 @@
           beaconAdd(card, snapshot);
           if (config.cartDrawer) {
             closePanel();
-            return window.Shopify.actions.openCart();
+            // The drawer OPENED AND IMMEDIATELY CLOSED AGAIN on Horizon.
+            //
+            // updateCart does not open anything. On a Horizon-shaped theme its
+            // default "dispatches a cart:update event on document for those
+            // components to pick up" (Shopify's Configure-actions reference) —
+            // the theme re-renders its own cart asynchronously, AFTER the
+            // promise we are inside has already resolved. openCart() called
+            // here opened a drawer that the pending re-render then replaced,
+            // which reads as an instant close.
+            //
+            // So let the re-render land first. That is also the order asked
+            // for: update the item, THEN open the drawer.
+            return afterCartRender().then(function () {
+              return window.Shopify.actions.openCart();
+            });
           }
           appendSys("Added " + card.title + " to your cart ✓");
         });
       });
+  }
+
+  /**
+   * Resolve once the theme has finished re-rendering its cart after an update.
+   *
+   * `updateCart` emits `shopify:cart:lines-update` on success and the theme's
+   * own components re-render from it — but that work happens after our promise
+   * resolves, so anything we do in the same tick races it. Waiting for the
+   * event is the precise signal; the timeout is the escape hatch for a theme
+   * that re-renders without emitting, so an add can never hang on the drawer.
+   */
+  function afterCartRender() {
+    return new Promise(function (resolve) {
+      var settled = false;
+      var finish = function () {
+        if (settled) return;
+        settled = true;
+        document.removeEventListener("shopify:cart:lines-update", onUpdate);
+        // One more frame after the event: the listener that re-renders is a
+        // sibling of ours and may not have run yet.
+        requestAnimationFrame(function () {
+          requestAnimationFrame(resolve);
+        });
+      };
+      var onUpdate = function () { finish(); };
+      document.addEventListener("shopify:cart:lines-update", onUpdate);
+      setTimeout(finish, 400);
+    });
   }
 
   /** The analytics that ride every successful add, whichever path made it. */
@@ -1466,7 +1528,7 @@
       window.location.href = "/products/" + card.handle;
       return;
     }
-    if (hasCartActions()) {
+    if (preferCartActions()) {
       return addViaActions(card).catch(function () {
         // Theme or cart rejected it — let the product page handle it.
         window.location.href = "/products/" + card.handle;

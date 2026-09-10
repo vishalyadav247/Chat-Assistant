@@ -51,6 +51,9 @@ export type WidgetConfigPayload =
         customUrl: string;
       };
       cartDrawer: boolean;
+      /** Merchant theme family — decides which cart path the widget uses.
+       *  "auto" probes, as before. */
+      theme: "auto" | "dawn" | "horizon";
       /** Active proactive-chat campaigns (spec 12): priority-ordered, premium
        *  templates already filtered server-side by plan. */
       campaigns: WidgetCampaign[];
@@ -184,6 +187,7 @@ export async function buildWidgetConfig(
       customUrl: config.settings.orderTracking.customUrl,
     },
     cartDrawer: config.settings.cartDrawer,
+    theme: config.settings.theme,
     campaigns,
     avatar,
   };

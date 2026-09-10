@@ -192,7 +192,12 @@ export const shopSettingsSchema = z.object({
       timeFormat: z.enum(TIME_FORMATS).catch(DEFAULT_TIME_FORMAT),
     })
     .catch({ name: "", logoUrl: null, dateFormat: DEFAULT_DATE_FORMAT, timeFormat: DEFAULT_TIME_FORMAT }),
-  theme: z.enum(["auto", "dawn", "refresh", "craft", "custom"]).catch("auto"),
+  // Trimmed to the two theme FAMILIES the cart integration actually has code
+  // paths for, plus auto (2026-09-09). "refresh"/"craft"/"custom" only ever
+  // selected the same Dawn-shaped path as "dawn" while implying the app knew
+  // something specific about them. A stored legacy value degrades to "auto"
+  // through the .catch, which probes and is right for those themes anyway.
+  theme: z.enum(["auto", "dawn", "horizon"]).catch("auto"),
   inbox: z
     .object({ autoResolve: z.boolean().catch(true), after: z.number().int().min(1).catch(60), unit: z.enum(["minute", "hour", "day"]).catch("minute") })
     .catch({ autoResolve: true, after: 60, unit: "minute" }),

@@ -664,14 +664,19 @@ export async function fullCollectionSync(shopDomain: string): Promise<void> {
 
 // ── Discounts ───────────────────────────────────────────────────────────────
 
+// `codes(first: 1)` exists only on the DiscountCode* types — automatic
+// discounts have no code by definition, so the field is (correctly) not
+// selectable there. Validated against the 2026-07 admin schema; needs
+// read_discounts, which the discount sync already holds.
+const DISCOUNT_COMMON = `title summary status startsAt endsAt discountClasses asyncUsageCount`;
 const DISCOUNT_FIELDS = `
           __typename
-          ... on DiscountCodeBasic { title summary status startsAt endsAt discountClasses asyncUsageCount }
-          ... on DiscountCodeBxgy { title summary status startsAt endsAt discountClasses asyncUsageCount }
-          ... on DiscountCodeFreeShipping { title summary status startsAt endsAt discountClasses asyncUsageCount }
-          ... on DiscountAutomaticBasic { title summary status startsAt endsAt discountClasses asyncUsageCount }
-          ... on DiscountAutomaticBxgy { title summary status startsAt endsAt discountClasses asyncUsageCount }
-          ... on DiscountAutomaticFreeShipping { title summary status startsAt endsAt discountClasses asyncUsageCount }
+          ... on DiscountCodeBasic { ${DISCOUNT_COMMON} codes(first: 1) { nodes { code } } }
+          ... on DiscountCodeBxgy { ${DISCOUNT_COMMON} codes(first: 1) { nodes { code } } }
+          ... on DiscountCodeFreeShipping { ${DISCOUNT_COMMON} codes(first: 1) { nodes { code } } }
+          ... on DiscountAutomaticBasic { ${DISCOUNT_COMMON} }
+          ... on DiscountAutomaticBxgy { ${DISCOUNT_COMMON} }
+          ... on DiscountAutomaticFreeShipping { ${DISCOUNT_COMMON} }
 `;
 
 const DISCOUNTS_QUERY = `#graphql
@@ -704,6 +709,7 @@ interface DiscountPayload {
   endsAt?: string | null;
   discountClasses?: string[];
   asyncUsageCount?: number;
+  codes?: { nodes?: Array<{ code?: string | null }> } | null;
 }
 
 /** Row fields shared by full sync and the real-time webhook path. Method and
@@ -715,6 +721,10 @@ function discountRowFields(d: DiscountPayload) {
   return {
     title: d.title ?? "",
     summary: d.summary ?? "",
+    // Automatic discounts have no codes connection at all, so this stays "" —
+    // which is exactly what the agent needs to know (nothing to type at
+    // checkout, the discount applies on its own).
+    code: d.codes?.nodes?.[0]?.code ?? "",
     status: (d.status ?? "active").toLowerCase(),
     method: typename.startsWith("DiscountAutomatic") ? "automatic" : "code",
     discountType: typename.includes("Bxgy")

@@ -181,6 +181,11 @@ model Discount {
   shopifyDiscountId String
   title             String
   summary           String    @default("")
+  // The redeemable code, for code discounts only (automatic discounts have
+  // none, so it stays ""). Synced from `codes(first: 1)` and spoken by the
+  // agent: a shopper told "there is 20% off" but not HOW to claim it has to go
+  // hunting, which is the drop-off the discount sync exists to prevent.
+  code              String    @default("")
   status            String    @default("active")
   // Display fields for the Discounts training table (spec 07):
   // method: code | automatic; discountType: amount_off_order |

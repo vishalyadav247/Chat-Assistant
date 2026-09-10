@@ -360,7 +360,10 @@
 
     // FAQs on in Chatbox settings but none written yet ⇒ no block at all. An
     // empty search box above "No results" reads as broken, not as unconfigured.
-    if (widget.faqs && config.faqAvailable) {
+    // `!== false`, not truthy: a caller that predates the flag (or any future
+    // one that forgets it) keeps the old behaviour instead of silently losing
+    // the block — which is exactly how the Chatbox preview lost its FAQs.
+    if (widget.faqs && config.faqAvailable !== false) {
       hasBlock = true;
       var faqBlk = el("div", "cw-blk");
       var search = el("div", "cw-search");

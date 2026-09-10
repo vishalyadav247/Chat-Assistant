@@ -35,7 +35,7 @@ const generalPayload = z.object({
   timezone: z.string().min(1, "Choose a time zone").max(64),
   dateFormat: z.enum(DATE_FORMATS),
   timeFormat: z.enum(TIME_FORMATS),
-  theme: z.enum(["auto", "dawn", "refresh", "craft", "custom"]),
+  theme: z.enum(["auto", "dawn", "horizon"]),
   inbox: z.object({
     autoResolve: z.boolean(),
     after: z.number().int().min(1, "Auto-resolve delay must be at least 1"),

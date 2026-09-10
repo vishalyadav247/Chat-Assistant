@@ -376,14 +376,12 @@ export function SettingsGeneral(props: {
           <s-select
             label="Storefront theme"
             value={props.theme}
-            details="Helps the widget talk to your theme's cart (count bubble + drawer). Auto-detect works for most stores — pick your theme family only if the cart drawer doesn't open after an add to cart."
+            details="Helps the widget talk to your theme cart (count bubble + drawer). Auto-detect works for most stores — pick a family only if the drawer misbehaves after an add to cart. Dawn covers Dawn and the themes built on it; Horizon covers Horizon."
             onInput={(e) => props.onThemeChange(e.currentTarget.value as Theme)}
           >
             <s-option value="auto">Auto-detect (recommended)</s-option>
             <s-option value="dawn">Dawn</s-option>
-            <s-option value="refresh">Refresh</s-option>
-            <s-option value="craft">Craft</s-option>
-            <s-option value="custom">Custom</s-option>
+            <s-option value="horizon">Horizon</s-option>
           </s-select>
           <s-divider />
           <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">

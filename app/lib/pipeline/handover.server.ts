@@ -290,3 +290,47 @@ function dot(a: number[], b: number[]): number {
   for (let i = 0; i < a.length; i++) sum += a[i] * b[i];
   return sum;
 }
+
+/**
+ * The leave-your-email form on its own, with none of the handover side effects.
+ *
+ * WHY (user, 2026-09-09): the fallback reply literally says "leave your email
+ * and our team will get back to you" — and nothing appeared. The form existed,
+ * but only after `cannotAnswer.threshold` CONSECUTIVE dead ends (3 by default),
+ * so the first two shoppers to hit it were invited to do something the widget
+ * never offered. Typing an email into the composer did nothing either: the chat
+ * lane has no idea it was meant to be collecting one.
+ *
+ * Deliberately NOT executeHandover(): that marks the conversation handed over,
+ * can silence the AI and notifies the team. Doing all of that on every single
+ * unanswered question would page a merchant for a typo. This is the form only —
+ * submitting it goes through the same `/handover-form` endpoint and DOES create
+ * the lead and notify, which is the point at which the shopper has actually
+ * asked for a person.
+ *
+ * Returns null when the merchant collects nothing here (contact-methods
+ * destination), so the fallback stays a plain message rather than growing an
+ * empty box.
+ */
+export function fallbackLeaveMessageForm(
+  handover: HandoverConfigData,
+): HandoverFrameData["form"] {
+  if (!handover.triggers.cannotAnswer.enabled) return null;
+  if (handover.destination === "collect_email") {
+    return {
+      replyTime: handover.collectEmail.replyTime,
+      fields: collectToFields(handover.collectEmail.collect),
+      formMessage: handover.collectEmail.formMessage,
+      postSubmitMessage: handover.collectEmail.postSubmitMessage,
+    };
+  }
+  if (handover.destination === "inbox") {
+    return {
+      replyTime: handover.inbox.leaveMessage.replyTime,
+      fields: collectToFields(handover.inbox.leaveMessage.collect),
+      formMessage: handover.inbox.leaveMessage.formMessage,
+      postSubmitMessage: handover.inbox.leaveMessage.postSubmitMessage,
+    };
+  }
+  return null;
+}
