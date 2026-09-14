@@ -51,7 +51,7 @@ overwrite the merchant's per-row choice.
 
 ## Sync
 
-Admin GraphQL (validated 2026-07, scopes `read_content` + `read_online_store_pages`,
+Admin GraphQL (validated 2026-07, scope `read_content` — Page/Blog/Article accept read_content OR read_online_store_pages; the second was dropped as redundant 2026-09-14, QA-P2,
 both already granted):
 
 - `pages(first: 100, after, sortKey: UPDATED_AT, reverse: true)`

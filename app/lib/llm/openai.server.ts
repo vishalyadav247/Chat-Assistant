@@ -144,12 +144,37 @@ export class OpenAiProvider implements LlmProvider {
         stream_options: { include_usage: true },
       }),
     );
-    for await (const chunk of stream) {
-      // The usage chunk carries no choices; record it and keep going.
-      if (chunk.usage) report(ctx, model, chunk.usage);
-      const token = chunk.choices[0]?.delta?.content;
-      if (token) {
-        yield token;
+    let reported = false;
+    let emittedChars = 0;
+    try {
+      for await (const chunk of stream) {
+        // The usage chunk carries no choices; record it and keep going.
+        if (chunk.usage) {
+          report(ctx, model, chunk.usage);
+          reported = true;
+        }
+        const token = chunk.choices[0]?.delta?.content;
+        if (token) {
+          emittedChars += token.length;
+          yield token;
+        }
+      }
+    } finally {
+      // The usage-only chunk arrives LAST, so a consumer that stops iterating
+      // (widget closed, navigation) never reported anything — the most
+      // expensive purpose under-counted under real abandonment rates (spec 23
+      // §4.7). Record a ~4-chars-per-token estimate instead of nothing.
+      if (!reported) {
+        const promptChars = messages.reduce((sum, m) => sum + m.content.length, 0);
+        report(ctx, model, {
+          prompt_tokens: Math.ceil(promptChars / 4),
+          completion_tokens: Math.ceil(emittedChars / 4),
+        });
+        try {
+          stream.controller.abort();
+        } catch {
+          // already closed
+        }
       }
     }
   }

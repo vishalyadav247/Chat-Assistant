@@ -13,7 +13,7 @@ import { bonusQuota } from "../lib/billing/quota-grants.server";
 import { loadShopSettings } from "../lib/settings/save.server";
 import { shopSettingsSchema } from "../lib/settings/schemas";
 import { invalidateShopConfig } from "../lib/config/shop-config.server";
-import { enqueue } from "../lib/jobs/queue.server";
+import { enqueue, enqueueSync } from "../lib/jobs/queue.server";
 import { JOBS } from "../lib/jobs/handlers.server";
 import { KNOWLEDGE_INGEST_JOB } from "../lib/ingestion/knowledge-jobs.server";
 import { rebuildContentBridge } from "../lib/ingestion/content-sync.server";
@@ -537,16 +537,16 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
     switch (intent) {
       // ── Catalog sync + learn toggles ────────────────────────────────────
       case "sync-products":
-        await enqueue(JOBS.catalogSync, { shopDomain });
+        await enqueueSync(JOBS.catalogSync, shopDomain);
         return { intent, ok: true, message: "Product sync started" };
       case "sync-collections":
-        await enqueue(JOBS.collectionSync, { shopDomain });
+        await enqueueSync(JOBS.collectionSync, shopDomain);
         return { intent, ok: true, message: "Collection sync started" };
       case "sync-pages":
-        await enqueue(JOBS.pageSync, { shopDomain });
+        await enqueueSync(JOBS.pageSync, shopDomain);
         return { intent, ok: true, message: "Page sync started" };
       case "sync-blogs":
-        await enqueue(JOBS.articleSync, { shopDomain });
+        await enqueueSync(JOBS.articleSync, shopDomain);
         return { intent, ok: true, message: "Blog sync started" };
 
       // ── Manage metafields (spec 07) ─────────────────────────────────────
@@ -596,7 +596,7 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
         };
       }
       case "sync-discounts":
-        await enqueue(JOBS.discountSync, { shopDomain });
+        await enqueueSync(JOBS.discountSync, shopDomain);
         return { intent, ok: true, message: "Discount sync started" };
       case "learn-master": {
         // Master training permission per data type (spec 07):

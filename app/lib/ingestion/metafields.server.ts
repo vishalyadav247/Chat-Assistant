@@ -652,7 +652,7 @@ export async function applyMetafieldSelection(shopId: string): Promise<{ changed
     where: { shopId },
     select: {
       id: true, title: true, description: true, productType: true, vendor: true, tags: true,
-      metafields: true, metafieldText: true, contentHash: true,
+      variants: true, metafields: true, metafieldText: true, contentHash: true,
     },
   });
 

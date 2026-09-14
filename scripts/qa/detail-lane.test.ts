@@ -241,7 +241,9 @@ async function main(): Promise<void> {
     );
     ok(
       "the check runs only when cards were already shown",
-      /if \(shown\.length > 0\) \{/.test(pipeline),
+      // Spec 23 §4.2 added a second condition to the same guard: chat-routed
+      // small talk ("thanks!") skips the confirm too. No cards ⇒ still no call.
+      /if \(shown\.length > 0 && !plainSmallTalk\) \{/.test(pipeline),
       "a first-turn shopper must not pay for a confirm call",
     );
     ok(

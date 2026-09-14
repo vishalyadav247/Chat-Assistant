@@ -47,6 +47,8 @@ export const JOBS = {
   uninstallPurge: "uninstall-purge",
   knowledgeIngest: "knowledge-ingest",
   customerRedact: "customer-redact",
+  // app_subscriptions/update, off the webhook path (QA-C5). Grouped per shop.
+  subscriptionReconcile: "subscription-reconcile",
   metafieldApply: "metafield-apply",
   metafieldDefinitionsSync: "metafield-definitions-sync",
   teamNotify: "team-notify", // spec 18: browser push + handover email to team members
@@ -158,6 +160,19 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
     // backstop for the fire-and-forget race in cleanupShop: a log row written
     // microseconds after a purge would otherwise outlive its shop.
     await purgeAppLogs().catch((error: unknown) => logError("app_log_purge_error", error));
+    // Debug turn recordings (Admin → Debug, 2026-09-14): 7-day ceiling
+    // regardless of any switch state, plus a hard 20,000-row cap so a
+    // recording window left open cannot grow the table without bound. No
+    // per-shop cutoff: the shortest retention option (7 days) equals this
+    // window, so a shop-level trace sweep could never delete more (QA-U6).
+    await purgeTurnTraces().catch((error: unknown) => logError("turn_trace_purge_error", error));
+    // NULL-embedding telemetry (spec 23 §4.5): every retrieval lane filters
+    // `embedding IS NOT NULL`, so a stuck embed job degrades answers with no
+    // signal anywhere. One cheap grouped count per table, logged per shop when
+    // rows are stranded — /admin/logs is where an operator will see it.
+    await reportNullEmbeddings().catch((error: unknown) =>
+      logError("null_embedding_report_error", error),
+    );
     const rows = await db.shopSettings.findMany({
       select: { shopId: true, settings: true },
     });
@@ -173,6 +188,9 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
       if (old.length === 0) continue;
       const ids = old.map((c) => c.id);
       await db.message.deleteMany({ where: { shopId: row.shopId, conversationId: { in: ids } } });
+      await db.turnTrace.deleteMany({
+        where: { shopId: row.shopId, conversationId: { in: ids } },
+      });
       await db.unresolvedQuestion.deleteMany({
         where: { shopId: row.shopId, conversationId: { in: ids } },
       });
@@ -261,6 +279,17 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
     await deleteProductFromWebhook(job.data.shopDomain, job.data.payload);
   });
 
+  // One job at a time per shop (send groups by shop domain), so an ACTIVE and a
+  // CANCELLED for the same store cannot interleave their reads and writes.
+  await boss.work<ShopJob & { payload: unknown }>(
+    JOBS.subscriptionReconcile,
+    { groupConcurrency: 1 },
+    async ([job]) => {
+      const { reconcileSubscription } = await import("../billing/subscription-reconcile.server");
+      await reconcileSubscription(job.data.shopDomain, job.data.payload);
+    },
+  );
+
   await boss.work<ShopJob & { payload: unknown }>(JOBS.collectionUpsert, async ([job]) => {
     await upsertCollectionFromWebhook(job.data.shopDomain, job.data.payload);
   });
@@ -334,7 +363,7 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
     );
   }
 
-  await boss.work<ShopJob & { customerEmail?: string; customerId?: string }>(
+  await boss.work<ShopJob & { customerEmail?: string; customerId?: string; customerPhone?: string }>(
     JOBS.customerRedact,
     async ([job]) => {
       // Minimal v1: full workflow in feature 17 (.claude/specs/17-compliance-gdpr.md).
@@ -352,19 +381,21 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
         typeof job.data.customerId === "string" && job.data.customerId.trim()
           ? job.data.customerId.trim()
           : undefined;
-      // Review M2: match by email OR Shopify customer id — contacts created
-      // from a logged-in storefront session may have no email.
-      if (!customerEmail && !customerId) return;
-      const contacts = await db.contact.findMany({
-        where: {
-          shopId,
-          OR: [
-            ...(customerEmail ? [{ email: customerEmail }] : []),
-            ...(customerId ? [{ shopifyCustomerId: customerId }] : []),
-          ],
-        },
-        select: { id: true },
+      const customerPhone =
+        typeof job.data.customerPhone === "string" && job.data.customerPhone.trim()
+          ? job.data.customerPhone.trim()
+          : undefined;
+      // The SAME predicate the data-request export uses (QA-C4): email OR
+      // Shopify customer id (numeric or GID — the old numeric-only compare never
+      // matched the GIDs contacts store) OR phone. null ⇒ nothing to match.
+      const { contactMatchWhere, customerIdForms } = await import("../compliance/customer-match.server");
+      const where = contactMatchWhere(shopId, {
+        email: customerEmail,
+        customerId,
+        phone: customerPhone,
       });
+      if (!where) return;
+      const contacts = await db.contact.findMany({ where, select: { id: true } });
       const contactIds = contacts.map((c) => c.id);
       if (contactIds.length > 0) {
         const convos = await db.conversation.findMany({
@@ -373,6 +404,9 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
         });
         const convoIds = convos.map((c) => c.id);
         await db.message.deleteMany({ where: { shopId, conversationId: { in: convoIds } } });
+        // Debug turn recordings of this customer's conversations hold their
+        // message text — erased with them (Admin → Debug, 2026-09-14).
+        await db.turnTrace.deleteMany({ where: { shopId, conversationId: { in: convoIds } } });
         // Unresolved-question copies of this customer's turns go too (audit).
         await db.unresolvedQuestion.deleteMany({
           where: { shopId, conversationId: { in: convoIds } },
@@ -386,7 +420,21 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
       if (customerEmail) {
         await db.dataRequest.updateMany({
           where: { shopId, customerEmail },
-          data: { customerEmail: "[redacted]" },
+          data: { customerEmail: "[redacted]", customerPhone: null },
+        });
+      }
+      // Same for requests identified by customer id / phone (QA-C4 columns).
+      const idForms = customerIdForms(customerId);
+      if (idForms.length > 0) {
+        await db.dataRequest.updateMany({
+          where: { shopId, shopifyCustomerId: { in: idForms } },
+          data: { customerEmail: "[redacted]", customerPhone: null, shopifyCustomerId: null },
+        });
+      }
+      if (customerPhone) {
+        await db.dataRequest.updateMany({
+          where: { shopId, customerPhone },
+          data: { customerEmail: "[redacted]", customerPhone: null },
         });
       }
       await db.redactLog.create({
@@ -398,6 +446,77 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
 
 /** Operator log retention window (spec 21 · volume ceiling rule 3). */
 export const APP_LOG_RETENTION_DAYS = 14;
+
+/** Debug turn recordings (Admin → Debug): retention + hard row ceiling. */
+export const TURN_TRACE_RETENTION_DAYS = 7;
+export const TURN_TRACE_ROW_CEILING = 20_000;
+
+/**
+ * Purge debug turn recordings: everything past the 7-day window, then trim to
+ * the row ceiling oldest-first. Exported so scripts/tests can run it without
+ * the scheduler.
+ */
+export async function purgeTurnTraces(now = new Date()): Promise<void> {
+  const cutoff = new Date(now.getTime() - TURN_TRACE_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+  await db.turnTrace.deleteMany({ where: { createdAt: { lt: cutoff } } });
+  // Erasure backstop (QA-C4), mirroring purgeAppLogs: a turn saved just after
+  // cleanupShop / an uninstall must not outlive its shop. Rows of uninstalled
+  // shops and of shops that no longer exist go every night, whatever their age.
+  const liveShops = await db.shop.findMany({ where: { uninstalledAt: null }, select: { id: true } });
+  await db.turnTrace.deleteMany({ where: { shopId: { notIn: liveShops.map((s) => s.id) } } });
+  // And turns with no conversation (legacy rows from before capture skipped them).
+  await db.turnTrace.deleteMany({ where: { conversationId: "" } });
+  const total = await db.turnTrace.count();
+  if (total > TURN_TRACE_ROW_CEILING) {
+    const boundary = await db.turnTrace.findMany({
+      orderBy: { createdAt: "desc" },
+      skip: TURN_TRACE_ROW_CEILING - 1,
+      take: 1,
+      select: { createdAt: true },
+    });
+    if (boundary[0]) {
+      await db.turnTrace.deleteMany({ where: { createdAt: { lt: boundary[0].createdAt } } });
+    }
+  }
+}
+
+/**
+ * NULL-embedding telemetry (spec 23 §4.5). Every retrieval lane filters
+ * `embedding IS NOT NULL`, so rows a failed/stuck embed job left behind are
+ * invisible to the agent AND to every dashboard — the merchant just sees "the
+ * AI doesn't know my new products". One grouped count per vector table, one
+ * warn line per affected shop, nightly. Exported for scripts/tests.
+ */
+export async function reportNullEmbeddings(): Promise<void> {
+  const [products, knowledge, curated] = await Promise.all([
+    db.$queryRaw<{ shopId: string; n: bigint }[]>`
+      SELECT "shopId", count(*)::bigint AS n FROM "products"
+      WHERE "embedding" IS NULL AND "learnEnabled" = true GROUP BY "shopId"`,
+    db.$queryRaw<{ shopId: string; n: bigint }[]>`
+      SELECT "shopId", count(*)::bigint AS n FROM "knowledge"
+      WHERE "embedding" IS NULL GROUP BY "shopId"`,
+    db.$queryRaw<{ shopId: string; n: bigint }[]>`
+      SELECT "shopId", count(*)::bigint AS n FROM "curated_answers"
+      WHERE "embedding" IS NULL AND "status" = 'published' GROUP BY "shopId"`,
+  ]);
+  const perShop = new Map<string, Record<string, number>>();
+  const fold = (rows: { shopId: string; n: bigint }[], key: string) => {
+    for (const row of rows) {
+      const entry = perShop.get(row.shopId) ?? {};
+      entry[key] = Number(row.n);
+      perShop.set(row.shopId, entry);
+    }
+  };
+  fold(products, "products");
+  fold(knowledge, "knowledgeChunks");
+  fold(curated, "curatedAnswers");
+  for (const [shopId, counts] of perShop) {
+    logWarn("null_embeddings", "rows are invisible to the agent until embedded", {
+      shopId,
+      ...counts,
+    });
+  }
+}
 
 /**
  * Purge the operator log: anything past the retention window, plus anything
@@ -451,6 +570,8 @@ export async function cleanupShop(shopDomain: string): Promise<void> {
   // Order matters only for readability — no FK constraints between domain tables.
   await db.$transaction([
     db.message.deleteMany({ where: { shopId } }),
+    // Debug turn recordings hold shopper text (Admin → Debug, 2026-09-14).
+    db.turnTrace.deleteMany({ where: { shopId } }),
     db.conversation.deleteMany({ where: { shopId } }),
     db.contact.deleteMany({ where: { shopId } }),
     db.analyticsEvent.deleteMany({ where: { shopId } }),
@@ -547,6 +668,7 @@ export async function countShopRows(
   const where = { where: { shopId } };
   const counts: Array<[string, number]> = [
     ["messages", await db.message.count(where)],
+    ["turn_traces", await db.turnTrace.count(where)],
     ["conversations", await db.conversation.count(where)],
     ["contacts", await db.contact.count(where)],
     ["analytics_events", await db.analyticsEvent.count(where)],

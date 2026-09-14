@@ -3,7 +3,15 @@ import type { Prisma } from "@prisma/client";
 import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
 import { invalidateShopConfig } from "../config/shop-config.server";
-import { handoverConfigSchema, shopSettingsSchema, type HandoverConfigData } from "../settings/schemas";
+import {
+  handoverConfigSchema,
+  shopSettingsSchema,
+  STORE_INFO_MAX,
+  type HandoverConfigData,
+} from "../settings/schemas";
+import { loadShopSettings } from "../settings/save.server";
+import { syncStoreInfoKnowledge } from "../ingestion/knowledge-ingest.server";
+import { logError } from "../log.server";
 import { getQuota } from "../billing/plans.server";
 
 // Instructions save workflow (spec 08): General tab → Persona + Guardrails,
@@ -40,6 +48,12 @@ const generalSchema = z.object({
   autoDetectLanguage: z.boolean(),
   bannedTopics: z.array(z.string().min(1).max(100)).max(50),
   fallbackMessage: z.string().max(500),
+  /** Store info (Instructions → General). Optional: a caller that does not send
+   *  it leaves the saved text untouched. */
+  storeInfoAbout: z.string().max(STORE_INFO_MAX).optional(),
+  /** Store scope + off-topic message (QA-A3). Optional like storeInfoAbout. */
+  scope: z.string().max(300).optional(),
+  offTopicMessage: z.string().max(300).optional(),
 });
 export type GeneralInstructionsData = z.infer<typeof generalSchema>;
 
@@ -79,6 +93,8 @@ export async function saveGeneralInstructions(
     behaviours: data.behaviours.trim(),
     defaultLanguage: data.defaultLanguage,
     autoDetectLanguage: data.autoDetectLanguage,
+    ...(data.scope !== undefined ? { scope: data.scope.trim() } : {}),
+    ...(data.offTopicMessage !== undefined ? { offTopicMessage: data.offTopicMessage.trim() } : {}),
   };
   const bannedTopics = [...new Set(data.bannedTopics.map((t) => t.trim()).filter(Boolean))];
   const guardrailsData = {
@@ -98,6 +114,30 @@ export async function saveGeneralInstructions(
       create: { shopId, ...guardrailsData },
     }),
   ]);
+
+  if (data.storeInfoAbout !== undefined) {
+    const about = data.storeInfoAbout.trim();
+    const current = await loadShopSettings(shopId);
+    if (about !== current.storeInfo.about) {
+      const next = shopSettingsSchema.parse({
+        ...current,
+        storeInfo: { ...current.storeInfo, about },
+      });
+      await db.shopSettings.upsert({
+        where: { shopId },
+        update: { settings: next as unknown as Prisma.InputJsonObject },
+        create: { shopId, settings: next as unknown as Prisma.InputJsonObject },
+      });
+      // Rebuild the store_info knowledge bridge so the AI answers from the new
+      // text on the next turn. Fail-soft like the FAQ bridge: the text is
+      // saved either way, and an embedding outage must not fail the save.
+      try {
+        await syncStoreInfoKnowledge(shopId);
+      } catch (error) {
+        logError("store_info_knowledge_sync_error", error, { shopId });
+      }
+    }
+  }
   invalidateShopConfig(shopId);
 }
 

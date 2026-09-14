@@ -217,7 +217,7 @@ AI override unreachable from merchant/shopper input, no cross-surface leakage).
 
 ## Out of scope / later
 
-- Admin roles / audit log (all operators are still equal — an invited account has the same powers as root, apart from root being undeletable).
+- A full admin-roles model / general audit log. **One exception exists since 2026-09-14 (QA-C3):** `platform_admins.role` (`owner` | `admin`; the oldest account was migrated to owner) gates **Admin → Debug** — see the section below. Otherwise invited operators have the same powers as root, apart from root being undeletable.
 - Forgot-password email flow (root: edit `ADMIN_PASSWORD` in `.env` and restart; invited: another operator removes and re-adds the account).
 - Per-shop overrides or plan assignment from the panel (use `scripts/set-plan.ts`).
 - Embedding-model switching (requires re-embed pipeline + column dim strategy).
@@ -303,3 +303,13 @@ and make it glassmorphism ui and the ui should be mobile first."*
   **A shop already on it keeps every quota, keeps being billed, and still sees
   it as its current plan** — hiding withdraws an offer, it never downgrades
   anyone, and a page that hid the merchant's own plan would be lying.
+
+## Debug turn recordings (QA-C3, 2026-09-14)
+
+Replaces the global `turnTracingEnabled` runtime flag (now ignored) and the old Test AI Turn inspector.
+
+- **Owner-only.** Loader, action and nav entry require `requireOwnerAdmin` (role `owner` or the root env account); other operators get 403 and no nav item.
+- **Per-store allowlist with auto-off.** The operator picks up to `MAX_TRACE_SHOPS` (20) stores and a duration (1 / 4 / 24 h, default 4) → `app_secrets` key `admin:turn-tracing` `{shopIds, until, startedBy}`. `isTracingShop(shopId)` is cached ≤5 s and fails closed; `proxy.chat.tsx` records a turn only for listed stores until `until`.
+- **Production lock.** `turnTracingAllowed()` is false when `NODE_ENV=production` unless `ALLOW_TURN_TRACING=true` — set it only after the privacy policy (debug-access clause) and the PCD answers are published.
+- **Audit.** Start / stop / clear and every list and detail view are logged (`logWarn`, `turn_trace_viewed`). Delete all needs a confirm modal. Detail route: `/admin/debug/:shopId/:conversationId` (reads by shopId AND conversationId, QA-S1).
+- **Data limits.** A row is capped at 32 KB (responses trimmed first, then step details, then the oldest LLM calls); no row without a live conversation; 7-day retention + 20 000-row ceiling (`purgeTurnTraces`); deleted with the conversation on retention / redact / uninstall; excluded from data-request exports (spec 17).

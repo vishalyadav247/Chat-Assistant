@@ -35,13 +35,14 @@ export async function loadHistory(
   });
   if (!convo) return { routerHistory: [], generationHistory: [] };
 
+  const historyWhere = {
+    conversationId,
+    shopId,
+    role: { in: ["in", "out"] },
+    ...(opts.excludeMessageId ? { id: { not: opts.excludeMessageId } } : {}),
+  };
   const fetched = await db.message.findMany({
-    where: {
-      conversationId,
-      shopId,
-      role: { in: ["in", "out"] },
-      ...(opts.excludeMessageId ? { id: { not: opts.excludeMessageId } } : {}),
-    },
+    where: historyWhere,
     orderBy: { createdAt: "desc" },
     take: ROUTER_WINDOW + 40, // window + summarization lookback
     select: { role: true, content: true },
@@ -49,7 +50,14 @@ export async function loadHistory(
   const rows = fetched.reverse();
 
   const recent = rows.slice(-ROUTER_WINDOW);
-  const olderCount = Math.max(0, rows.length - ROUTER_WINDOW);
+  // olderCount must be the TRUE count of messages older than the window, not
+  // the capped fetch length: a thread past ~50 messages saturates the fetch,
+  // olderCount would freeze at 40, and the refresh condition below would never
+  // fire again — silently losing everything that ages out of the window. Only
+  // pay the count query once the fetch is actually saturated.
+  const totalCount =
+    fetched.length < ROUTER_WINDOW + 40 ? rows.length : await db.message.count({ where: historyWhere });
+  const olderCount = Math.max(0, totalCount - ROUTER_WINDOW);
 
   let summary = convo.summary;
   if (
@@ -59,11 +67,19 @@ export async function loadHistory(
     // The previous summary goes back in: the lookback below is only 50 rows,
     // so on a long thread the opening messages are already gone and a
     // from-scratch refresh would drop what they said with them.
-    summary = await summarize(rows.slice(0, rows.length - ROUTER_WINDOW), shopId, convo.summary ?? "");
-    await db.conversation.update({
-      where: { id: convo.id },
-      data: { summary, summaryMessageCount: olderCount },
-    });
+    const refreshed = await summarize(rows.slice(0, rows.length - ROUTER_WINDOW), shopId, convo.summary ?? "");
+    if (refreshed) {
+      // Only persist a real summary — the fold returns "" on LLM failure, and
+      // storing that would wipe the prior summary AND mark these messages as
+      // summarized, losing them for good.
+      summary = refreshed;
+      await db.conversation.updateMany({
+        where: { id: convo.id, shopId },
+        data: { summary, summaryMessageCount: olderCount },
+      });
+    } else if (convo.summary) {
+      summary = convo.summary;
+    }
   }
 
   const summaryMsg: ChatMessage[] = summary

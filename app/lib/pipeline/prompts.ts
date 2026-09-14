@@ -6,7 +6,11 @@
 // (router: product asks for a purpose are buy and never a banned topic;
 // product replies open with a PICKS line — see PRODUCT_RECOMMEND), 2026-09-11
 // (router: questions about the store itself are `question`; CHAT_REPLY states
-// no store facts; the persona reads the merchant's Behaviours box).
+// no store facts; the persona reads the merchant's Behaviours box), 2026-09-14
+// (QA report: router off_topic covers creative/general tasks; CHAT_REPLY does
+// no tasks; PRODUCT_RECOMMEND grounds every stated quality and never suggests
+// outside the candidates; PRODUCT_DETAIL also covers a NAMED product and answers
+// stock plainly with no alternatives — golden 25/25 incl. 5 new cases).
 
 export const ROUTER = [
   "You are the router for a shop chat assistant. Classify the latest message.",
@@ -15,6 +19,9 @@ export const ROUTER = [
   "keywords = 1 to 4 product words when intent is buy, otherwise an empty array. Write keywords in English even when the message is in another language.",
   "Set blocked = true and blocked_reason = the matching topic copied from the list ONLY if the message is about one of the store's BANNED TOPICS listed below. Judge by MEANING and handle negation. Asking for products for a purpose (for stress, for sleep, for a gift) is a product request, not a banned topic; block only when the shopper asks for advice or information about the banned topic itself.",
   "Set off_topic = true and off_topic_reason = the topic if the message is unrelated to the STORE SCOPE listed below (a different domain/industry), even if it is harmless. Greetings and small talk are NOT off_topic.",
+  // QA-A3, tuning event 2026-09-14: "write me a poem about the ocean" routed
+  // chat and got a poem. Only honoured when a STORE SCOPE is configured (code).
+  "Creative writing (poems, stories, jokes, essays), general knowledge, homework, coding and any other general-assistant task that is not about this store or its products are also off_topic.",
 ].join(" ");
 
 export const SUMMARY_SYSTEM =
@@ -49,8 +56,11 @@ export function summaryUser(prior: string, transcript: string): string {
 // answered "visits are not available to the public" against a store page that
 // said Saturdays 10–2 (tuning event 2026-09-11, with the router's widened
 // `question`).
+// QA-A3 (tuning event 2026-09-14): the chat lane is greetings, thanks and small
+// talk only — it must not carry out tasks (a poem, an essay, code) even for a
+// store with no configured scope, where the router's off_topic is not honoured.
 export const CHAT_REPLY =
-  "Reply in ONE short sentence, no products. You have no store facts here: never state hours, locations, policies, prices or people — if asked, say you're not sure and offer to help.";
+  "Reply in ONE short sentence, no products. You have no store facts here: never state hours, locations, policies, prices or people — if asked, say you're not sure and offer to help. Do not write poems, stories, essays or code, or do other general tasks — say you're here to help with this store.";
 
 export const QUESTION_ANSWER =
   "Answer using ONLY the store info below. If it isn't there, say you're not sure and offer support. 1-3 sentences.";
@@ -69,8 +79,14 @@ export const PRODUCT_RECOMMEND = [
   "Each candidate has an id. First decide which candidates genuinely ARE what the shopper asked for, from the title, type, tags and the quoted description fragment. Identity words — a colour, stone, material, size, month, number or name — must describe THIS product: in its title/type/tags, or in a fragment about the product itself. A fragment about something else (an outfit to pair with, a crystal to cleanse with, another month) does not count, however often the word appears. Features and purposes (keeps drinks hot, blocks RFID, for stress, a gift) count when the title or fragment states them, and may match by meaning.",
   "Aim for 2 to 4 picks, and never more than 4. Still never pad: one right product beats four half-fits, so pick 1 when only one genuinely fits, and `PICKS: none` is a valid answer.",
   "Your FIRST line must be exactly `PICKS: <ids>` — only the fitting ids, best first (example: `PICKS: 3, 1`) — or `PICKS: none` if nothing fits.",
-  "Then reply to the shopper in 1-2 short sentences: say why the pick(s) fit (use the matched details), then offer to help more. If nothing fits, say so honestly and offer the closest alternative.",
-  "The shopper sees product cards (name, price, image) next to your reply, so do NOT repeat product names or prices in your text — say 'this one' or 'these picks'.",
+  // QA-A7 / A4, tuning event 2026-09-14: "keeps you warm" for a rain jacket and
+  // "soothing" for rose quartz were never in the data, and "offer the closest
+  // alternative" produced alternatives that were not among the candidates.
+  "Then reply to the shopper in 1-2 short sentences: say why the pick(s) fit using ONLY qualities stated in their title, type, tags or fragment — never add a benefit the data does not state (warm, soothing, durable…) — then offer to help more. If nothing fits, say so honestly and ask one short question to find out what they're after; never describe or suggest a product that is not in the candidate JSON.",
+  // Spec 23 §3.4: the card claim is conditional — after `PICKS: none` no cards
+  // render, and prose that names a candidate anyway points at a product the
+  // shopper cannot see.
+  "When you give picks, the shopper sees product cards (name, price, image) next to your reply, so do NOT repeat product names or prices in your text — say 'this one' or 'these picks'. After `PICKS: none` there are no cards, so do not name or describe any candidate.",
 ].join(" ");
 
 // Product-detail lane (2026-09-07, production behaviour report). A shopper who
@@ -113,8 +129,12 @@ export function detailConfirmUser(msg: string, shownTitles: string[]): string {
   ].join("\n");
 }
 
+// QA-A4 (tuning event 2026-09-14): the lane also answers a question about a
+// product the shopper NAMES ("is the Mulberry Silk Pillowcase in stock?"),
+// which used to go to RAG and invent a "notify me" option and alternatives.
 export const PRODUCT_DETAIL = [
-  "The shopper is asking about a product they have already been shown. Answer about THAT product only.",
+  "The shopper is asking about a specific product — one they were already shown, or one they named. Answer about THAT product only.",
+  "For stock or availability, use the product data's \"in stock\" / \"out of stock\" — if it is out of stock, say so plainly and stop there: do not offer similar, alternative or other products, and never mention restock dates, waitlists or notify-me options unless the data states them.",
   "Use ONLY the product data below. Never invent a material, measurement, ingredient, certification, delivery time or discount. If the data does not say, say plainly that it is not listed and offer to check with the team.",
   "Your FIRST line must be exactly `DETAIL: <id>` — the one product you are answering about (example: `DETAIL: 2`). If you genuinely cannot tell which one they mean, use `DETAIL: none` and your reply must ask which one.",
   "Then answer in 1-4 short sentences. Lead with the specific thing they asked for. Add only the specifications that bear on their question — do not recite the whole record.",
@@ -124,8 +144,15 @@ export const PRODUCT_DETAIL = [
 
 export const CURATED_CONFIRM_SYSTEM = "Reply with only yes or no.";
 
-export function curatedConfirmUser(msg: string, question: string): string {
-  return `Does this shopper message mean the same as the question: ${question}\nMessage: ${msg}`;
+// Spec 23 §3.8 (tuning event 2026-09-14): the previous shopper turn rides
+// along, because a borderline follow-up is often anaphoric ("and the popular
+// ones?") and confirming it against the curated question alone is a coin flip.
+// Still a 3-token yes/no.
+export function curatedConfirmUser(msg: string, question: string, priorShopperTurn = ""): string {
+  const context = priorShopperTurn.trim()
+    ? `The shopper's previous message, for context: ${priorShopperTurn.trim().slice(0, 200)}\n`
+    : "";
+  return `${context}Does this shopper message mean the same as the question: ${question}\nMessage: ${msg}`;
 }
 
 // Router block confirm (2026-09-01). The router's blocked flag is a one-shot

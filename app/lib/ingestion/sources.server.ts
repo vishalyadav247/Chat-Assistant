@@ -126,10 +126,11 @@ export async function listSources(shopId: string, typeFilter?: string): Promise<
     where: {
       shopId,
       status: { not: "suggested" },
-      // Pages/Blogs bridges (spec 22) are managed on their own Training tabs;
+      // Pages/Blogs bridges (spec 22) are managed on their own Training tabs, and
+      // the store_info bridge in Instructions → General;
       // listing them here would offer Edit/Delete on something the merchant
       // controls elsewhere. An explicit typeFilter still reaches them.
-      ...(typeFilter ? { type: typeFilter } : { type: { notIn: ["store_pages", "blog_articles"] } }),
+      ...(typeFilter ? { type: typeFilter } : { type: { notIn: ["store_pages", "blog_articles", "store_info"] } }),
     },
     orderBy: { createdAt: "desc" },
   });
@@ -389,7 +390,8 @@ export const PAGE_CANDIDATE_CAP = 200;
 /**
  * List ALL Online Store pages (published and draft) as connector candidates —
  * the merchant picks which to sync. Selection quota is enforced at save time,
- * not here. Needs the read_online_store_pages scope.
+ * not here. Needs read_content (Page accepts read_content OR read_online_store_pages —
+ * verified on shopify.dev 2026-09-14; the app requests only read_content, QA-P2).
  */
 export async function fetchShopPages(
   shopDomain: string,

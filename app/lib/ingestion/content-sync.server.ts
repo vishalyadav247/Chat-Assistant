@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import db from "../../db.server";
 import { unauthenticated } from "../../shopify.server";
 import { recordEvent } from "../analytics/events.server";
@@ -157,6 +158,7 @@ export async function fullPageSync(shopDomain: string): Promise<ContentSyncResul
   if (!shopId) return null;
   const cap = await syncCap(shopId, "pages");
   const { nodes, capped } = await collect<PageNode>(shopDomain, PAGES_QUERY, "pages", cap);
+  const tombstones = await loadLearnTombstones(shopId, "pages");
 
   const before = new Map(
     (
@@ -176,16 +178,36 @@ export async function fullPageSync(shopDomain: string): Promise<ContentSyncResul
     await db.storePage.upsert({
       where: { shopId_shopifyPageId: { shopId, shopifyPageId: node.id } },
       // learnEnabled only on CREATE: a draft arrives off; the merchant's later
-      // per-row choice is never overwritten by a sync.
-      create: { shopId, shopifyPageId: node.id, ...fields, learnEnabled: fields.isPublished },
+      // per-row choice is never overwritten by a sync. A pruned-then-recreated
+      // row consults the tombstones (spec 23 §4.6) so an explicit learn-off
+      // choice survives the round trip.
+      create: {
+        shopId,
+        shopifyPageId: node.id,
+        ...fields,
+        learnEnabled: fields.isPublished && !tombstones.disabled.has(node.id),
+      },
       update: fields,
     });
     seen.push(node.id);
   }
-  // Correct on a capped run too — see PAGES_QUERY.
+  // Correct on a capped run too — see PAGES_QUERY. Rows about to be pruned
+  // leave their learn-off choice behind as a tombstone (and clear a stale one
+  // when pruned while enabled).
+  const pruning = await db.storePage.findMany({
+    where: { shopId, shopifyPageId: { notIn: seen } },
+    select: { shopifyPageId: true, learnEnabled: true },
+  });
+  for (const row of pruning) {
+    if (row.learnEnabled) tombstones.disabled.delete(row.shopifyPageId);
+    else tombstones.disabled.add(row.shopifyPageId);
+  }
   const pruned = (await db.storePage.deleteMany({ where: { shopId, shopifyPageId: { notIn: seen } } }))
     .count;
-  if (pruned > 0) changed = true;
+  if (pruned > 0) {
+    changed = true;
+    await saveLearnTombstones(shopId, tombstones);
+  }
 
   await db.syncState.upsert({
     where: { shopId },
@@ -202,6 +224,7 @@ export async function fullArticleSync(shopDomain: string): Promise<ContentSyncRe
   if (!shopId) return null;
   const cap = await syncCap(shopId, "blogs");
   const { nodes, capped } = await collect<ArticleNode>(shopDomain, ARTICLES_QUERY, "articles", cap);
+  const tombstones = await loadLearnTombstones(shopId, "blogs");
 
   const before = new Map(
     (
@@ -220,15 +243,31 @@ export async function fullArticleSync(shopDomain: string): Promise<ContentSyncRe
     }
     await db.blogArticle.upsert({
       where: { shopId_shopifyArticleId: { shopId, shopifyArticleId: node.id } },
-      create: { shopId, shopifyArticleId: node.id, ...fields, learnEnabled: fields.isPublished },
+      create: {
+        shopId,
+        shopifyArticleId: node.id,
+        ...fields,
+        learnEnabled: fields.isPublished && !tombstones.disabled.has(node.id),
+      },
       update: fields,
     });
     seen.push(node.id);
   }
+  const pruningArticles = await db.blogArticle.findMany({
+    where: { shopId, shopifyArticleId: { notIn: seen } },
+    select: { shopifyArticleId: true, learnEnabled: true },
+  });
+  for (const row of pruningArticles) {
+    if (row.learnEnabled) tombstones.disabled.delete(row.shopifyArticleId);
+    else tombstones.disabled.add(row.shopifyArticleId);
+  }
   const pruned = (
     await db.blogArticle.deleteMany({ where: { shopId, shopifyArticleId: { notIn: seen } } })
   ).count;
-  if (pruned > 0) changed = true;
+  if (pruned > 0) {
+    changed = true;
+    await saveLearnTombstones(shopId, tombstones);
+  }
 
   await db.syncState.upsert({
     where: { shopId },
@@ -238,6 +277,50 @@ export async function fullArticleSync(shopDomain: string): Promise<ContentSyncRe
   await recordEvent(shopId, "articles_synced", { articles: seen.length, capped, pruned });
   if (changed) await rebuildContentBridge(shopId, "blogs", { inline: true });
   return { synced: seen.length, capped, pruned, changed };
+}
+
+// ── Learn-choice tombstones (spec 23 §4.6) ──────────────────────────────────
+// Cap-driven pruning deletes rows, and learnEnabled is only set on create — so
+// a page the merchant explicitly excluded came back LEARN-ENABLED when churn
+// pushed it out of the top-N and an edit brought it back. Disabled GIDs are
+// remembered on the kind's bridge source (metadata.learnDisabled) and
+// consulted on re-create; a row pruned while ENABLED clears its stale entry.
+
+const LEARN_TOMBSTONE_CAP = 2000;
+
+interface LearnTombstones {
+  sourceId: string;
+  disabled: Set<string>;
+}
+
+async function loadLearnTombstones(shopId: string, kind: ContentKind): Promise<LearnTombstones> {
+  const sourceId = await ensureBridgeSource(shopId, kind);
+  const row = await db.dataSource.findFirst({
+    where: { id: sourceId, shopId },
+    select: { metadata: true },
+  });
+  const list = (row?.metadata as { learnDisabled?: unknown } | null)?.learnDisabled;
+  return {
+    sourceId,
+    disabled: new Set(
+      Array.isArray(list) ? list.filter((x): x is string => typeof x === "string") : [],
+    ),
+  };
+}
+
+async function saveLearnTombstones(shopId: string, tombstones: LearnTombstones): Promise<void> {
+  const row = await db.dataSource.findFirst({
+    where: { id: tombstones.sourceId, shopId },
+    select: { metadata: true },
+  });
+  const meta = {
+    ...((row?.metadata ?? {}) as Record<string, unknown>),
+    learnDisabled: [...tombstones.disabled].slice(-LEARN_TOMBSTONE_CAP),
+  };
+  await db.dataSource.updateMany({
+    where: { id: tombstones.sourceId, shopId },
+    data: { metadata: meta as Prisma.InputJsonValue },
+  });
 }
 
 /** The kind's bridge DataSource, created on first use. */

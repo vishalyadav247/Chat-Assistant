@@ -19,6 +19,7 @@ import {
   type StoredMetafield,
 } from "./metafields.server";
 import { logError, logWarn } from "../log.server";
+import { htmlToText } from "./fetchers.server";
 
 // Catalog sync (spec 02). Full paged sync + webhook-driven single upserts.
 // Re-embeds ONLY when the embedding text (title/type/vendor/tags/description/
@@ -44,7 +45,7 @@ const PRODUCTS_QUERY = `#graphql
         featuredMedia { preview { image { url } } }
         priceRangeV2 { minVariantPrice { amount } }
         totalInventory
-        variants(first: 10) {
+        variants(first: 50) {
           nodes {
             id title price availableForSale
             metafields(first: 30) { nodes { namespace key type value definition { id } } }
@@ -61,7 +62,7 @@ const PRODUCT_METAFIELDS_QUERY = `#graphql
   query CatalogSyncProductMetafields($id: ID!) {
     product(id: $id) {
       metafields(first: 100) { nodes { namespace key type value definition { id } } }
-      variants(first: 10) {
+      variants(first: 50) {
         nodes { title metafields(first: 30) { nodes { namespace key type value definition { id } } } }
       }
     }
@@ -327,7 +328,13 @@ export async function upsertProductFromWebhook(shopDomain: string, payload: unkn
     }
   }
 
-  const description = stripHtml(p.body_html ?? "");
+  // Same text pipeline as everything else (hardening spec 23 §2.6): the old
+  // bare tag-strip never decoded entities, so "&amp;"/"&nbsp;" literals landed
+  // in the description after every webhook — junk tokens in the vector and the
+  // tsvector — and, because the full sync stores Shopify's decoded
+  // `description`, the contentHash flipped on every webhook↔sync alternation,
+  // re-embedding the product with no real change.
+  const description = htmlToText(p.body_html ?? "").text.replace(/\s+/g, " ").trim();
   const webhookVariants = (p.variants ?? []) as Array<{
     id?: number;
     title?: string;
@@ -452,10 +459,6 @@ async function upsertProducts(shopId: string, products: SyncedProduct[]): Promis
   }
 
   await embedProducts(shopId, toEmbed);
-}
-
-function stripHtml(html: string): string {
-  return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 }
 
 // ── Collections ─────────────────────────────────────────────────────────────

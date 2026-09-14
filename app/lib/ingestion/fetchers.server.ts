@@ -291,6 +291,12 @@ export function htmlToText(html: string): HtmlText {
   let text = html
     .replace(/<!--[\s\S]*?-->/g, " ")
     .replace(/<(script|style|noscript|template|svg|head)[^>]*>[\s\S]*?<\/\1>/gi, " ")
+    // Page chrome CONTENT goes too (spec 23 §3.7): a crawled page previously
+    // kept every menu item, footer link and cookie line as body text, so each
+    // chunk of a sizing guide started with "Free shipping over $50 | Menu |
+    // Home | Shop…" — spurious similarity for unrelated queries. <header> is
+    // deliberately kept: inside articles it often holds the real title.
+    .replace(/<(nav|footer|aside)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
     .replace(/<\s*(br|hr)\s*\/?>/gi, "\n")
     .replace(/<\/?(p|div|li|ul|ol|h[1-6]|tr|td|th|table|section|article|header|footer|blockquote|pre|figure|nav|main|aside|form)\b[^>]*>/gi, "\n")
     .replace(/<[^>]+>/g, " ");
@@ -328,5 +334,9 @@ export async function fetchPageText(rawUrl: string): Promise<CrawledPage> {
   }
   const { title, text } = htmlToText(result.text);
   if (!text) throw new SafeFetchError("page has no readable text", result.url);
-  return { url: result.url, title: title || result.url, text };
+  // SEO tails off the topic (spec 23 §3.7): "<title>" is usually "Page Title |
+  // 40% Off | BrandName" and the whole thing was prepended to every chunk's
+  // embedding. Keep the first segment unless it is uselessly short.
+  const trimmed = title.split(/\s*[|–—]\s*/)[0]?.trim() ?? "";
+  return { url: result.url, title: (trimmed.length >= 3 ? trimmed : title) || result.url, text };
 }

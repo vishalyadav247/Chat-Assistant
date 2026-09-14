@@ -470,6 +470,15 @@ Run from the repo root with `PRISMA_CLIENT_ENGINE_TYPE=binary npx tsx <path>`.
 Every suite prints `PASS`/`FAIL` per case, ends with `N passed, M failed`, and exits non-zero on
 failure. The HTTP suites additionally require `npm run dev` to be running on `:3000`.
 
+**Run the HTTP suites (routing, ui-embedded, ui-web, storefront, ui-admin) ONE AT A TIME against a
+quiet server** — one dev server (not several `dev:tunnel` instances), no other suite running, no
+sync in progress. Two runs against the same fixture shops, or a second dev server whose pg-boss
+worker picks up the jobs a suite queues, produce duplicate rows and missing fixtures that look like
+product bugs. `scripts/qa/http.ts` (QA-T4) retries the reachability gate with backoff (1→16 s) and
+gives every request a 30 s timeout with one retry on a connection failure (POSTs only when the
+connection was refused) — that absorbs a cold start, not a shared server. Run `npm run qa:preflight`
+first; it also checks the curated QA fixtures are in their intended state with no marker text (QA-T3).
+
 | Suite | Area | Needs dev server |
 |---|---|---|
 | `scripts/qa/plan-gates.test.ts` | B | no |
@@ -483,6 +492,7 @@ failure. The HTTP suites additionally require `npm run dev` to be running on `:3
 | `scripts/qa/cache.test.ts` | M | no |
 | `scripts/qa/perf-queries.test.ts` | L | no |
 | `scripts/qa/features.test.ts` | E, I, Q | no |
+| `scripts/qa/human-mode.test.ts` | G (HS1–HS11, AI off = human support) | no |
 | `scripts/qa/routing.test.ts` | J | **yes** |
 | `scripts/qa/auth-sessions.test.ts` | K | **yes** |
 | `scripts/qa/ui-embedded.test.ts` | R | **yes** |
@@ -495,6 +505,9 @@ failure. The HTTP suites additionally require `npm run dev` to be running on `:3
 | `scripts/qa/quota-grants.test.ts` | Z | no |
 | `scripts/qa/preflight.ts` | — (environment health, run first) | no |
 | `scripts/qa/data-sources.test.ts` | AA — every data source reaches the answer; every switch removes it | only for the queued-rebuild check (the app's job worker) |
+| `scripts/qa/conversations.test.ts` | AB — real multi-turn shopper conversations, pass rates over N runs (`npm run eval:conversations`) | no |
+| `scripts/qa/pipeline-hardening.test.ts` | PH-1.1 … PH-4.8 — spec 23 acceptance criteria (fake model + stubbed Shopify; one live check when `OPENAI_API_KEY` is set) | no |
+| `scripts/qa/qa-fixes.test.ts` | QF-* — QA-FIX-PLAN-2026-09-14 gaps not covered elsewhere (Debug recording controls, erasure, webhook enqueue, landing page, config) | for the HTTP cases (skipped with a SKIP line when unreachable) |
 
 Seeding: `scripts/qa/seed-curated.ts` (curated fixtures), `scripts/qa/perf-seed.ts` (synthetic
 volume — **remove it again afterwards**).

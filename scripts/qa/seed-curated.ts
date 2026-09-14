@@ -25,141 +25,12 @@ for (const line of readFileSync(join(process.cwd(), ".env"), "utf-8").split(/\r?
   }
 }
 
-const DEV_SHOP_DOMAIN = "dev-shop.myshopify.com";
-const TAG = "[qa-fixture]"; // talking-point marker so --reset only removes ours
-
-interface Fixture {
-  question: string;
-  synonyms: string[];
-  products: string[]; // product titles, resolved to shopifyProductId
-  talkingPoints: string;
-  status: "draft" | "published";
-  priority: "low" | "normal" | "high";
-}
-
-const FIXTURES: Fixture[] = [
-  {
-    question: "what is your return policy",
-    synonyms: ["how do I return something", "can I send it back", "CAN I SEND IT BACK"],
-    products: [],
-    talkingPoints: "30 days from delivery.\nItems must be unworn with tags attached.\nRefunds land 5-7 business days after we receive the parcel.",
-    status: "published",
-    priority: "high",
-  },
-  {
-    question: "how long does shipping take",
-    synonyms: ["delivery time", "when will my order arrive", "shipping speed"],
-    products: [],
-    talkingPoints: "Standard 3-5 business days.\nExpress 1-2 business days.\nCut-off is 2pm local time.",
-    status: "published",
-    priority: "high",
-  },
-  {
-    // NEAR_MISS pair A1 — deliberately close to "how long does shipping take"
-    // but about cost, not time. Should NOT be returned for a timing question.
-    question: "how much does shipping cost",
-    synonyms: ["shipping fee", "delivery charge", "is shipping free"],
-    products: [],
-    talkingPoints: "Free over $50.\nFlat $5.95 below that.\nExpress is $12.95.",
-    status: "published",
-    priority: "normal",
-  },
-  {
-    question: "do you ship internationally",
-    synonyms: ["overseas delivery", "international orders", "do you ship outside the US"],
-    products: [],
-    talkingPoints: "We ship to 40 countries.\nDuties are calculated at checkout.\nInternational delivery is 7-14 business days.",
-    status: "published",
-    priority: "normal",
-  },
-  {
-    question: "what payment methods do you accept",
-    synonyms: ["can I pay with paypal", "do you take apple pay", "payment options"],
-    products: [],
-    talkingPoints: "All major cards, PayPal, Apple Pay, Google Pay and Shop Pay.\nWe do not accept cheques or bank transfer.",
-    status: "published",
-    priority: "normal",
-  },
-  {
-    question: "how do I track my order",
-    synonyms: ["where is my package", "order status", "tracking number"],
-    products: [],
-    talkingPoints: "A tracking link is emailed when the parcel ships.\nYou can also use the Track order screen in this chat.",
-    status: "published",
-    priority: "high",
-  },
-  {
-    question: "what size should I order",
-    synonyms: ["sizing help", "size guide", "do your clothes run small"],
-    products: ["Cotton Crew T-Shirt", "Down Puffer Jacket"],
-    talkingPoints: "Our fit is true to size.\nBetween sizes: size up for outerwear, down for tees.\n<b>Full size chart</b> is linked on every product page.",
-    status: "published",
-    priority: "normal",
-  },
-  {
-    question: "what do you have for cold weather",
-    synonyms: ["winter gear", "warm clothing", "something for the snow"],
-    products: ["Fleece Beanie", "Chunky Knit Scarf", "Down Puffer Jacket"],
-    talkingPoints: "Layer the beanie and scarf with the puffer.\nThe puffer is rated to -15C.",
-    status: "published",
-    priority: "normal",
-  },
-  {
-    // NEAR_MISS pair B1 — sits near the seeded "what should I buy for winter".
-    // Both are winter intents; the matcher must pick ONE deterministically
-    // rather than flip-flopping between them run to run.
-    question: "what should I wear when it rains",
-    synonyms: ["rain gear", "waterproof options", "wet weather"],
-    products: ["Waterproof Rain Jacket", "Compact Travel Umbrella"],
-    talkingPoints: "The rain jacket is fully seam-sealed.\nThe umbrella folds to 24cm and fits a bag.",
-    status: "published",
-    priority: "normal",
-  },
-  {
-    question: "do you offer gift wrapping",
-    synonyms: ["gift wrap", "can you wrap it", "gift packaging"],
-    products: [],
-    talkingPoints: "Gift wrap is $4.50 per item.\nAdd a free handwritten note at checkout.",
-    status: "published",
-    priority: "low",
-  },
-  {
-    question: "can I change or cancel my order",
-    synonyms: ["cancel order", "change my address", "edit my order"],
-    products: [],
-    talkingPoints: "We can change anything within 60 minutes of ordering.\nAfter that the warehouse has picked it and you'll need to return it.",
-    status: "published",
-    priority: "high",
-  },
-  {
-    question: "do you have a loyalty program",
-    synonyms: ["rewards points", "membership discount", "loyalty scheme"],
-    products: [],
-    talkingPoints: "Earn 1 point per dollar.\n100 points = $5 off.\nPoints never expire.",
-    status: "published",
-    priority: "low",
-  },
-  {
-    // Draft on purpose — must NEVER match at runtime (published-only filter).
-    question: "when is your black friday sale",
-    synonyms: ["holiday sale", "next discount event"],
-    products: [],
-    talkingPoints: "Not announced yet. Draft answer, should not be served.",
-    status: "draft",
-    priority: "normal",
-  },
-  {
-    // HTML + script body in talking points — proves sanitizeTalkingPoints
-    // strips tags AND drops script/style bodies rather than keeping inner text.
-    question: "are your products ethically made",
-    synonyms: ["sustainability", "where are your products made", "ethical sourcing"],
-    products: [],
-    talkingPoints:
-      "<p>All factories are audited annually.</p>\n<script>alert('xss')</script>\n<b>Organic cotton</b> where the fabric allows.",
-    status: "published",
-    priority: "normal",
-  },
-];
+import {
+  CURATED_FIXTURES,
+  DEV_SHOP_DOMAIN,
+  LEGACY_FIXTURE_TAG,
+  stripLegacyTag,
+} from "./curated-fixtures";
 
 async function main(): Promise<void> {
   const reset = process.argv.includes("--reset");
@@ -174,7 +45,13 @@ async function main(): Promise<void> {
 
   if (reset) {
     const removed = await db.curatedAnswer.deleteMany({
-      where: { shopId: shop.id, talkingPoints: { contains: TAG } },
+      where: {
+        shopId: shop.id,
+        OR: [
+          { question: { in: CURATED_FIXTURES.map((f) => f.question) } },
+          { talkingPoints: { contains: LEGACY_FIXTURE_TAG } },
+        ],
+      },
     });
     console.log(`removed ${removed.count} previous qa fixtures`);
   }
@@ -191,14 +68,26 @@ async function main(): Promise<void> {
   let failedCount = 0;
   const warnings: string[] = [];
 
-  for (const fx of FIXTURES) {
+  for (const fx of CURATED_FIXTURES) {
     const existing = await db.curatedAnswer.findFirst({
       where: { shopId: shop.id, question: fx.question },
-      select: { id: true },
+      select: { id: true, talkingPoints: true, status: true },
     });
     if (existing) {
       skipped++;
-      console.log(`  SKIP  ${fx.question} (already present)`);
+      // Rows seeded before QA-T3 carry the marker in shopper-visible text, and
+      // an old preflight --fix may have published the draft-on-purpose one.
+      // The embedding is built from the question, so neither needs a re-embed.
+      const cleaned = stripLegacyTag(existing.talkingPoints);
+      if (cleaned !== existing.talkingPoints || existing.status !== fx.status) {
+        await db.curatedAnswer.update({
+          where: { id: existing.id, shopId: shop.id },
+          data: { talkingPoints: cleaned, status: fx.status },
+        });
+        console.log(`  FIX   ${fx.question} (marker removed / status back to ${fx.status})`);
+      } else {
+        console.log(`  SKIP  ${fx.question} (already present)`);
+      }
       continue;
     }
 
@@ -213,7 +102,7 @@ async function main(): Promise<void> {
       question: fx.question,
       synonyms: fx.synonyms,
       productIds,
-      talkingPoints: `${fx.talkingPoints}\n${TAG}`,
+      talkingPoints: fx.talkingPoints,
       status: fx.status,
       priority: fx.priority,
     });

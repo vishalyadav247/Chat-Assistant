@@ -123,15 +123,26 @@ async function main(): Promise<void> {
   }
 
   // ── 2. Trigger: negative sentiment (opt-in) ───────────────────────────────
+  // Spec 23 §3.5: frustration implies a prior interaction, so the trigger needs
+  // an AI reply already in the conversation; and the caps/punctuation
+  // heuristics need a negative WORD alongside (all-caps typing and "???" alone
+  // are habit/impatience, not frustration). A negative emoji stands on its own.
   console.log("\n[trigger: negative_sentiment]");
   const sentimentOn = handoverConfigSchema.parse({ triggers: { negativeSentiment: { enabled: true } } });
-  eq("ALL CAPS", await detectText("THIS ORDER IS COMPLETELY BROKEN", sentimentOn), "negative_sentiment");
-  eq("repeated punctuation", await detectText("where is my order???", sentimentOn), "negative_sentiment");
-  eq("angry emoji", await detectText("my parcel never arrived 😡", sentimentOn), "negative_sentiment");
-  eq("thumbs down emoji", await detectText("not helpful 👎", sentimentOn), "negative_sentiment");
-  eq("calm message does not trigger", await detectText("where is my order?", sentimentOn), null);
-  eq("short caps word does not trigger (< 8 letters)", await detectText("HELP", sentimentOn), null);
-  eq("opt-in respected: disabled → no trigger", await detectText("THIS ORDER IS COMPLETELY BROKEN", defaults), null);
+  const upset = await newConversation();
+  const detectUpset = (message: string, handover: Handover = sentimentOn) =>
+    H.detectHandover({ shopId, conversationId: upset.id, message, queryEmbedding: null, handover });
+  eq("pre-answer: nothing fires before the AI has replied", await detectUpset("THIS ORDER IS COMPLETELY BROKEN"), null);
+  await aiSays(upset.id, "Let me check that for you.", "question");
+  eq("ALL CAPS + negative word", await detectUpset("THIS ORDER IS COMPLETELY BROKEN"), "negative_sentiment");
+  eq("repeated punctuation + negative word", await detectUpset("this is ridiculous???"), "negative_sentiment");
+  eq("angry emoji", await detectUpset("my parcel never arrived 😡"), "negative_sentiment");
+  eq("thumbs down emoji", await detectUpset("not helpful 👎"), "negative_sentiment");
+  eq("enthusiastic caps do not trigger", await detectUpset("SHOW ME RED BRACELETS PLEASE"), null);
+  eq("impatient ??? without negative words does not trigger", await detectUpset("do you ship to canada???"), null);
+  eq("calm message does not trigger", await detectUpset("where is my order?"), null);
+  eq("short caps word does not trigger (< 8 letters)", await detectUpset("HELP"), null);
+  eq("opt-in respected: disabled → no trigger", await detectUpset("THIS ORDER IS COMPLETELY BROKEN", defaults), null);
   note(
     'spec 10 lists "2+ thumbs-down" as a negative-sentiment signal; only a 👎 CHARACTER in the ' +
       "message is detected. The widget's survey/rating feedback is never fed into detectHandover, " +
@@ -161,7 +172,15 @@ async function main(): Promise<void> {
   const shortRepeater = await newConversation();
   for (let i = 0; i < 4; i++) await shopperSays(shortRepeater.id, "hi");
   eq("very short repeats are ignored", await detectIn(shortRepeater.id, "hi", repeatCfg), null);
-  // A paraphrase is NOT caught — this is the documented divergence.
+  // Typo-level rephrasing counts as a repeat (spec 23 §3.5, trigram ≥ 0.85).
+  const typoRepeater = await newConversation();
+  await shopperSays(typoRepeater.id, "where is my refund");
+  await shopperSays(typoRepeater.id, "where is my refund");
+  await shopperSays(typoRepeater.id, "where is my refundd");
+  eq("typo-level rephrase still counts", await detectIn(typoRepeater.id, "where is my refundd", repeatCfg), "repeated_question");
+  // A true paraphrase is NOT caught — this is the documented divergence
+  // (matching it would need embeddings of past messages, which the per-turn
+  // budget does not allow).
   const paraphraser = await newConversation();
   await shopperSays(paraphraser.id, "where is my refund");
   await shopperSays(paraphraser.id, "when will I get my refund");
@@ -204,6 +223,12 @@ async function main(): Promise<void> {
   await aiSays(stuck.id, "Could you rephrase that?", "clarify");
   eq("streak rebuilds", await H.detectCannotAnswer(shopId, stuck.id, cannotCfg), true);
   eq("opt-out respected", await H.detectCannotAnswer(shopId, stuck.id, handoverConfigSchema.parse({ triggers: { cannotAnswer: { enabled: false } } })), false);
+  // Spec 23 §3.5: blocked turns save as banned_${layer} — every banned layer
+  // counts, not just the router's.
+  const kwBlocked = await newConversation();
+  await aiSays(kwBlocked.id, "That's not something I can help with here.", "banned_keyword");
+  await aiSays(kwBlocked.id, "That's not something I can help with here.", "banned_meaning");
+  eq("keyword/meaning guardrail blocks count too", await H.detectCannotAnswer(shopId, kwBlocked.id, cannotCfg), true);
   const fresh = await newConversation();
   eq("a conversation with no AI turns yet → no", await H.detectCannotAnswer(shopId, fresh.id, cannotCfg), false);
 

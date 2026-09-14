@@ -180,6 +180,9 @@ export const surveySchema = z.object({
   triggerKeywords: z.object({ enabled: z.boolean().catch(true), keywords: z.array(z.string().max(50)).catch(["Thank you", "Thanks", "Got it", "That helps", "Perfect"]) }).catch({ enabled: true, keywords: ["Thank you", "Thanks", "Got it", "That helps", "Perfect"] }),
 });
 
+/** Store info text cap — mirrored by the Instructions counter and save schema. */
+export const STORE_INFO_MAX = 1500;
+
 export const shopSettingsSchema = z.object({
   storeInfo: z
     .object({
@@ -190,8 +193,18 @@ export const shopSettingsSchema = z.object({
        *  app/lib/format/datetime.ts with these + Shop.timezone. */
       dateFormat: z.enum(DATE_FORMATS).catch(DEFAULT_DATE_FORMAT),
       timeFormat: z.enum(TIME_FORMATS).catch(DEFAULT_TIME_FORMAT),
+      /** "About your store" (Instructions → General → Store info, 2026-09-14):
+       *  what the store sells, where it is, how to reach it. Reaches the AI as
+       *  the `store_info` knowledge bridge — never as prompt text. */
+      about: z.string().max(STORE_INFO_MAX).catch(""),
     })
-    .catch({ name: "", logoUrl: null, dateFormat: DEFAULT_DATE_FORMAT, timeFormat: DEFAULT_TIME_FORMAT }),
+    .catch({
+      name: "",
+      logoUrl: null,
+      dateFormat: DEFAULT_DATE_FORMAT,
+      timeFormat: DEFAULT_TIME_FORMAT,
+      about: "",
+    }),
   // Trimmed to the two theme FAMILIES the cart integration actually has code
   // paths for, plus auto. "refresh"/"craft"/"custom" only ever
   // selected the same Dawn-shaped path as "dawn" while implying the app knew
@@ -281,6 +294,10 @@ export const handoverConfigSchema = z.object({
     })
     .catch({ cannotAnswer: { enabled: true, threshold: 3 }, repeatedQuestion: { enabled: true, threshold: 3 }, negativeSentiment: { enabled: false } }),
   intentRules: z.array(z.object({ topic: z.string().max(150) })).max(20).catch([]),
+  // Cosine floor for intent-rule topic matching (spec 23 §4.1): a threshold
+  // governing merchant-facing behaviour belongs in stored config, not a code
+  // constant. 0.5 = the value the constant always was.
+  intentRuleThreshold: z.number().min(0).max(1).catch(0.5),
   destination: z.enum(["inbox", "collect_email", "contact_methods"]).catch("inbox"),
   inbox: z
     .object({

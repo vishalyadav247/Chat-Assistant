@@ -47,6 +47,11 @@ export interface GeneralData {
   autoDetectLanguage: boolean;
   bannedTopics: string[];
   fallbackMessage: string;
+  /** Store info text (ShopSettings.storeInfo.about) — the store_info knowledge bridge. */
+  storeInfoAbout: string;
+  /** Store scope + off-topic message (persona columns; QA-A3). */
+  scope: string;
+  offTopicMessage: string;
 }
 
 export interface RecommendationRowData {
@@ -81,6 +86,8 @@ export interface InstructionsActionResult {
   intent: string;
   id?: string;
   error?: string;
+  /** store-info-prefill: the draft built from Shopify, for the merchant to review. */
+  draft?: string;
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -151,6 +158,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     autoDetectLanguage: persona?.autoDetectLanguage ?? false,
     bannedTopics: guardrails?.bannedTopics ?? [],
     fallbackMessage: guardrails?.fallbackMessage ?? "",
+    storeInfoAbout: shopSettingsSchema.parse(settingsRow?.settings ?? {}).storeInfo.about,
+    scope: persona?.scope ?? "",
+    offTopicMessage: persona?.offTopicMessage ?? "",
   };
 
   return {
@@ -171,7 +181,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs): Promise<InstructionsActionResult> => {
-  const { shopId } = await requireShopAccess(request, { permission: "ai_agent" });
+  const { shopId, shopDomain } = await requireShopAccess(request, { permission: "ai_agent" });
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
 
@@ -184,6 +194,10 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<Instructi
 
   try {
     switch (intent) {
+      case "store-info-prefill": {
+        const { buildStoreInfoDraft } = await import("../lib/instructions/store-info.server");
+        return { ok: true, intent, draft: await buildStoreInfoDraft(shopDomain) };
+      }
       case "save-general": {
         await saveGeneralInstructions(shopId, payload);
         return { ok: true, intent };

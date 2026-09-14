@@ -2,6 +2,9 @@ import { Prisma } from "@prisma/client";
 import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
 import { getEmbedDetail, type EmbedStatus } from "../embed-status.server";
+import { loadShopSettings } from "../settings/save.server";
+import { BRIDGE_TYPES } from "../ingestion/content-sync.server";
+import { SHOWABLE_PRODUCT } from "../search/showable";
 import { clampRange } from "../analytics/reports.server";
 import { ANALYTICS_RANGES, ANALYTICS_RANGE_DAYS, type AnalyticsRange } from "../analytics/shared";
 
@@ -170,22 +173,53 @@ export async function dashboardMetrics(
   };
 }
 
-// ── Setup checklist ─────────────────────────────────────────────────────────
+// ── Setup checklist: "Get your AI ready" (spec 13, revised 2026-09-14) ──────
+
+export type ChecklistAction =
+  | { kind: "navigate"; href: string }
+  /** Theme editor — the action a merchant needs is the customiser itself. */
+  | { kind: "external"; url: string }
+  /** Runs every catalogue/content sync from the dashboard (step 1). */
+  | { kind: "sync" }
+  /** Like navigate, but the button stays after the step is done (store info:
+   *  "Completed" + Review), because revisiting is the point. */
+  | { kind: "revisit"; href: string };
 
 export interface ChecklistStep {
-  id: string;
-  label: string;
+  id: "training" | "faqs" | "knowledge" | "instructions" | "chatbox" | "proactive" | "curated" | "embed";
+  title: string;
+  description: string;
   state: "done" | "todo" | "unknown";
-  /** Internal admin route for the deep link. */
-  href: string;
-  linkLabel: string;
-  /** External URL (theme editor). The embed step always uses it: the action a
-   *  merchant needs is the theme customiser, not another admin page. */
-  externalUrl?: string;
-  /** Live status shown on the row, mirroring Settings -> General. */
+  action: ChecklistAction;
+  actionLabel: string;
+  /** Live status badge (the storefront embed), mirroring Settings → General. */
   status?: { tone: "success" | "warning" | "critical" | "neutral"; label: string };
-  /** One line of explanation under the label (draft-theme case). */
+  /** One extra line under the description (draft-theme case). */
   note?: string;
+}
+
+export type TrainingSourceKey = "products" | "collections" | "pages" | "blogs" | "discounts";
+
+export interface TrainingSource {
+  key: TrainingSourceKey;
+  label: string;
+  /** Rows the AI reads: learn switch on AND the type's master Learn switch on. */
+  learned: number;
+  total: number;
+  /** When this source's own sync last finished (ISO) — drives "Syncing…". */
+  syncedAt: string | null;
+  /** The type's master Learn switch (Training tab). Off ⇒ learned is 0 and the
+   *  row must say "Learning off", not "Learned". */
+  masterOn: boolean;
+}
+
+export interface TrainingSummary {
+  sources: TrainingSource[];
+  learnedTotal: number;
+  /** Latest of the per-source sync times. */
+  lastSyncedAt: string | null;
+  /** Product sync is the only one that records running / error. */
+  productStatus: "idle" | "running" | "error";
 }
 
 export interface SetupChecklist {
@@ -193,6 +227,7 @@ export interface SetupChecklist {
   completed: number;
   total: number;
   embedStatus: EmbedStatus;
+  training: TrainingSummary;
 }
 
 /** The same four states Settings → General shows, so the two never disagree. */
@@ -203,21 +238,103 @@ function embedStatusBadge(status: EmbedStatus): ChecklistStep["status"] {
   return { tone: "neutral", label: "Unknown" };
 }
 
+type LearnGroup = { learnEnabled: boolean; _count: { _all: number } }[];
+
+function learnCounts(
+  groups: LearnGroup,
+  masterOn: boolean,
+): { learned: number; total: number; masterOn: boolean } {
+  const total = groups.reduce((sum, g) => sum + g._count._all, 0);
+  const on = groups.find((g) => g.learnEnabled)?._count._all ?? 0;
+  return { learned: masterOn ? on : 0, total, masterOn };
+}
+
+const iso = (date: Date | null | undefined) => (date ? date.toISOString() : null);
+
 export async function setupChecklist(
   shopId: string,
   shopDomain: string,
 ): Promise<SetupChecklist> {
   requireShopId(shopId);
 
-  const [embedDetail, widgetRow, syncState, persona, curatedPublished, activeCampaigns] =
-    await Promise.all([
-      getEmbedDetail(shopDomain),
-      db.widgetSettings.findUnique({ where: { shopId }, select: { id: true } }),
-      db.syncState.findUnique({ where: { shopId }, select: { productSyncAt: true } }),
-      db.persona.findUnique({ where: { shopId }, select: { role: true, behaviours: true } }),
-      db.curatedAnswer.count({ where: { shopId, status: "published" } }),
-      db.campaign.count({ where: { shopId, status: "active" } }),
-    ]);
+  const [
+    embedDetail,
+    widgetRow,
+    syncState,
+    faqsPublished,
+    customSources,
+    curatedPublished,
+    activeCampaigns,
+    settings,
+    productsTotal,
+    productsShowable,
+    collections,
+    pages,
+    articles,
+    discounts,
+  ] = await Promise.all([
+    getEmbedDetail(shopDomain),
+    db.widgetSettings.findUnique({ where: { shopId }, select: { id: true } }),
+    db.syncState.findUnique({ where: { shopId } }),
+    db.faq.count({ where: { shopId, status: "published" } }),
+    // Custom knowledge only: the FAQ / Pages / Blogs bridges are managed on
+    // their own tabs and would otherwise complete this step by themselves.
+    db.dataSource.count({
+      where: { shopId, status: "active", type: { notIn: ["faq", "store_info", ...BRIDGE_TYPES] } },
+    }),
+    db.curatedAnswer.count({ where: { shopId, status: "published" } }),
+    db.campaign.count({ where: { shopId, status: "active" } }),
+    loadShopSettings(shopId),
+    // Products the AI can actually SHOW (QA-U2) — the same SHOWABLE_PRODUCT
+    // rule the pipeline cards with, so a draft or unpublished product with its
+    // learn switch on is not reported as learned.
+    db.product.count({ where: { shopId } }),
+    db.product.count({ where: { shopId, ...SHOWABLE_PRODUCT } }),
+    db.collection.groupBy({ by: ["learnEnabled"], where: { shopId }, _count: { _all: true } }),
+    db.storePage.groupBy({ by: ["learnEnabled"], where: { shopId }, _count: { _all: true } }),
+    db.blogArticle.groupBy({ by: ["learnEnabled"], where: { shopId }, _count: { _all: true } }),
+    db.discount.groupBy({ by: ["learnEnabled"], where: { shopId }, _count: { _all: true } }),
+  ]);
+
+  const learn = settings.learn;
+  const sources: TrainingSource[] = [
+    {
+      key: "products",
+      label: "Products",
+      learned: learn.products ? productsShowable : 0,
+      total: productsTotal,
+      masterOn: learn.products,
+      syncedAt: iso(syncState?.productSyncAt),
+    },
+    {
+      key: "collections",
+      label: "Collections",
+      ...learnCounts(collections, learn.collections),
+      syncedAt: iso(syncState?.collectionSyncAt),
+    },
+    {
+      key: "pages",
+      label: "Pages",
+      ...learnCounts(pages, learn.pages),
+      syncedAt: iso(syncState?.pageSyncAt),
+    },
+    {
+      key: "blogs",
+      label: "Blogs",
+      ...learnCounts(articles, learn.blogs),
+      syncedAt: iso(syncState?.articleSyncAt),
+    },
+    {
+      key: "discounts",
+      label: "Discounts",
+      ...learnCounts(discounts, learn.discounts),
+      syncedAt: iso(syncState?.discountSyncAt),
+    },
+  ];
+  const learnedTotal = sources.reduce((sum, s) => sum + s.learned, 0);
+  const syncTimes = sources.flatMap((s) => (s.syncedAt ? [s.syncedAt] : [])).sort();
+  const productStatus: TrainingSummary["productStatus"] =
+    syncState?.status === "running" || syncState?.status === "error" ? syncState.status : "idle";
 
   const embedStatus = embedDetail.status;
   // Same deep link as Settings → General "Turn on": activateAppId pre-selects
@@ -229,84 +346,115 @@ export async function setupChecklist(
     apiKey && embedStatus !== "on" ? `&activateAppId=${apiKey}/chat-widget` : ""
   }`;
 
+  // Step 1 is done once a sync has run AND the AI can use something from it
+  // (QA-U2): a sync that left every type switched off, or nothing showable, has
+  // not trained the AI on anything.
+  const trained = Boolean(syncState?.productSyncAt) && learnedTotal > 0;
+  const synced = Boolean(syncState?.productSyncAt);
   const steps: ChecklistStep[] = [
     {
-      id: "sync",
-      label: "Sync your product & store data",
-      state: syncState?.productSyncAt ? "done" : "todo",
-      href: "/app/ai-agent/training",
-      linkLabel: "Data Sources",
+      id: "training",
+      title: "Train AI data — catalog & store",
+      description: trained
+        ? `Products, Collections, Pages, Blogs and Discounts — ${learnedTotal.toLocaleString("en-US")} item${learnedTotal === 1 ? "" : "s"} learned.`
+        : synced
+          ? "Synced — but nothing is switched on for your AI yet. Turn learning on for your products or content."
+          : "Sync your products, collections, pages, blogs and discounts so your AI can learn them.",
+      state: trained ? "done" : "todo",
+      action: { kind: "sync" },
+      actionLabel: "Sync now",
+    },
+    {
+      id: "faqs",
+      title: "Train AI data — FAQs",
+      description: "Add the questions shoppers ask most, with your answers.",
+      state: faqsPublished >= 1 ? "done" : "todo",
+      action: { kind: "navigate", href: "/app/ai-agent/training?tab=faqs" },
+      actionLabel: "Add FAQs",
+    },
+    {
+      id: "knowledge",
+      title: "Train AI data — custom knowledge",
+      description: "PDFs, files, policies, or any specific website URL.",
+      state: customSources >= 1 ? "done" : "todo",
+      action: { kind: "navigate", href: "/app/ai-agent/training?tab=knowledge" },
+      actionLabel: "Add sources",
     },
     {
       id: "instructions",
-      label: "Set up your AI agent instructions",
-      state: persona && persona.role.trim() !== "" && persona.behaviours.trim() !== "" ? "done" : "todo",
-      href: "/app/ai-agent/instructions",
-      linkLabel: "Instructions",
+      title: "Add your store info",
+      description:
+        "Tell your AI about your store — what you sell, where you're based and how shoppers can reach you.",
+      // Done once Instructions → General → Store info has text (user decision
+      // 2026-09-14). Seeded instructions exist from install, so "instructions
+      // exist" could never ask the merchant for anything.
+      state: settings.storeInfo.about.trim() ? "done" : "todo",
+      action: { kind: "revisit", href: "/app/ai-agent/instructions#store-info" },
+      actionLabel: settings.storeInfo.about.trim() ? "Review" : "Add store info",
+    },
+    {
+      id: "chatbox",
+      title: "Chatbox settings & appearance",
+      description: "Colours, position and greeting for your storefront widget.",
+      state: widgetRow ? "done" : "todo",
+      action: { kind: "navigate", href: "/app/chatbox" },
+      actionLabel: "Customize",
+    },
+    {
+      id: "proactive",
+      title: "Proactive chat",
+      description: "Trigger messages that reach shoppers before they ask.",
+      state: activeCampaigns >= 1 ? "done" : "todo",
+      action: { kind: "navigate", href: "/app/proactive-chat" },
+      actionLabel: "Create campaign",
     },
     {
       id: "curated",
-      label: "Publish first five curated answers",
-      state: curatedPublished >= 5 ? "done" : "todo",
-      href: "/app/curated-answers",
-      linkLabel: "Curated Answers",
-    },
-    {
-      id: "campaign",
-      label: "Launch a proactive chat campaign",
-      state: activeCampaigns >= 1 ? "done" : "todo",
-      href: "/app/proactive-chat",
-      linkLabel: "Proactive Chat",
-    },
-    {
-      id: "widget",
-      label: "Customize your chatbox widget",
-      state: widgetRow ? "done" : "todo",
-      href: "/app/chatbox",
-      linkLabel: "Chatbox",
+      title: "Curated answers",
+      description: "Hand-write replies for your highest-intent questions.",
+      // One published answer, not five (spec 13 revision: easier to set up).
+      state: curatedPublished >= 1 ? "done" : "todo",
+      action: { kind: "navigate", href: "/app/curated-answers" },
+      actionLabel: "Start",
     },
     {
       id: "embed",
-      // The step used to read "Embed app to your
-      // theme" and send the merchant to Settings — a second admin page that
-      // only offers the same theme-editor link. It also said nothing about the
-      // current state, so a merchant who had already switched it on saw an
-      // apparently unfinished step. Now: plain language about what it does,
-      // the theme editor directly, and the live status Settings shows.
-      label: "Enable the AI agent on your storefront",
+      title: "Enable AI agent on storefront",
+      description: "Turn on the app embed so the chat goes live for shoppers.",
       state: embedStatus === "on" ? "done" : embedStatus === "unknown" ? "unknown" : "todo",
-      // Kept so the row still has an in-admin destination if the editor link is
-      // ever unavailable; externalUrl is what the button actually uses.
-      href: "/app/settings?tab=general",
-      linkLabel:
+      action: { kind: "external", url: themeEditorUrl },
+      actionLabel:
         embedStatus === "on"
-          ? "Open Theme editor"
+          ? "Open theme editor"
           : embedStatus === "unknown"
-            ? "Check in Theme editor"
-            : "Turn on in Theme editor",
-      externalUrl: themeEditorUrl,
+            ? "Check in theme editor"
+            : "Turn on",
       status: embedStatusBadge(embedStatus),
       // "draft" is a real state, not a near-miss of "off": the merchant HAS
-      // turned the embed on, just on a theme that is not live. Saying only
-      // "To do" there reads as "your setup didn't register" and sends them to
-      // redo work they already did. Same wording as Settings → General.
+      // turned the embed on, just on a theme that is not live. Same wording as
+      // Settings → General.
       ...(embedStatus === "draft"
         ? {
             note: `Enabled on ${embedDetail.themeName ?? "an unpublished theme"} — shoppers won't see the chat until that theme is published, or you turn it on for your live theme.`,
           }
         : {}),
-    }
+    },
   ];
 
   // An "unknown" embed status (no read_themes) can't be completed from here,
-  // so it is excluded from the progress total (N of 5) and rendered as an
-  // informational row instead of an incomplete step.
+  // so it is excluded from the progress total and shown as information.
   const countable = steps.filter((step) => step.state !== "unknown");
   return {
     steps,
     completed: countable.filter((step) => step.state === "done").length,
     total: countable.length,
     embedStatus,
+    training: {
+      sources,
+      learnedTotal,
+      lastSyncedAt: syncTimes.length ? syncTimes[syncTimes.length - 1] : null,
+      productStatus,
+    },
   };
 }
 

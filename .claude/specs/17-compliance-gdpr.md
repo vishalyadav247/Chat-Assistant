@@ -17,6 +17,7 @@ Declared in `shopify.app.toml` `compliance_topics` → `/webhooks/compliance`. `
 3. Job compiles export: conversations + messages tied to that email (via Contact) → JSON/CSV artifact stored per shop.
 4. Surfaced in Settings → Privacy (16): list + Download; merchant fulfils to customer. Email notification to merchant.
 5. Status → completed on download; overdue flagged before 30-day SLA.
+6. **Matching (QA-C4, 2026-09-14):** the request stores the payload email, Shopify customer id and phone (`DataRequest.customerEmail?`, `shopifyCustomerId`, `customerPhone`); requests without an email are accepted. Export AND redact share `contactMatchWhere` (`lib/compliance/customer-match.server.ts`): email OR customer id (numeric webhook id and the `gid://shopify/Customer/N` form contacts store — the old numeric-only compare never erased id-only customers) OR phone. **Exports exclude Admin → Debug turn recordings** (owner decision; disclosed in the privacy policy): ≤7-day diagnostics with no data beyond the exported transcript, deleted with the conversations on redact.
 
 ### customers/redact
 1. Enqueue redact job: find Contacts by email/customer id → delete their conversations, messages, contact rows, analytics payload PII for that shop.
@@ -40,7 +41,7 @@ Declared in `shopify.app.toml` `compliance_topics` → `/webhooks/compliance`. `
 
 ## Data retention (16 UI)
 
-- Setting: Forever/90/60/30/7 days. Daily pg-boss cron: delete conversations+messages older than window (per shop), independent of webhooks. Contacts kept (redact/uninstall governs them). Analytics rollups (14) survive (aggregates, no transcripts).
+- Setting: Forever/90/60/30/7 days. **New installs default to 90 days** (QA-P4, 2026-09-14: seeded only when no shop row existed before auth — existing stores keep their setting). Daily pg-boss cron: delete conversations+messages older than window (per shop), independent of webhooks. Contacts kept (redact/uninstall governs them). Analytics rollups (14) survive (aggregates, no transcripts).
 
 ## PII posture
 

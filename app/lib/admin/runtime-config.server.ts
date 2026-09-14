@@ -60,6 +60,9 @@ export const runtimeConfigSchema = z.object({
   // code in hand must not be able to redeem it past the switch.
   promoCodesEnabled: z.boolean().optional(),
   embedStatusEnabled: z.boolean().optional(),
+  // Admin → Debug recording is NOT here any more (QA-C3): it moved to
+  // lib/admin/turn-tracing.server.ts (per-store, time-limited, fail-closed).
+  // A legacy stored `turnTracingEnabled` key is stripped on parse → off.
 });
 
 export type RuntimeConfig = z.infer<typeof runtimeConfigSchema>;

@@ -8,6 +8,7 @@ import { NavigateBridge, SurfaceProvider } from "../lib/ui/surface";
 // they provided, so loading them now would ship dead CSS to every page.
 import adminStylesHref from "../components/admin/admin.css?url";
 import { themeFromCookie } from "../components/admin/theme";
+import { isOwnerAdmin, readAdminSession } from "../lib/admin/admin-auth.server";
 
 // Layout for the ADMIN surface (spec 19) — the company operating the
 // app, not merchants. Never embedded, no App Bridge. Cross-tenant BY DESIGN.
@@ -16,9 +17,16 @@ import { themeFromCookie } from "../components/admin/theme";
 
 // Read once here, for every /admin page: the shell needs the colour theme in
 // the FIRST paint, and only the server can do that without a blocking script.
-export const loader = ({ request }: LoaderFunctionArgs) => ({
-  theme: themeFromCookie(request.headers.get("cookie")),
-});
+//
+// `isOwner` only decides whether the nav SHOWS Debug; the Debug routes enforce
+// it themselves (requireOwnerAdmin) — hiding a link is not access control.
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const session = await readAdminSession(request).catch(() => null);
+  return {
+    theme: themeFromCookie(request.headers.get("cookie")),
+    isOwner: session ? isOwnerAdmin(session) : false,
+  };
+};
 
 export const links: LinksFunction = () => [{ rel: "stylesheet", href: adminStylesHref }];
 

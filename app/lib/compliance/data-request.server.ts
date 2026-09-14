@@ -1,5 +1,6 @@
 import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
+import { contactMatchWhere } from "./customer-match.server";
 
 // customers/data_request export workflow (spec 17).
 //
@@ -74,14 +75,17 @@ export async function buildDataRequestExport(
   // A scrubbed request (customers/redact ran after the data request) or an
   // empty payload email matches no contacts — the export is an empty shell,
   // which is the correct answer post-redaction.
-  const email = request.customerEmail;
-  const contacts =
-    email && email !== REDACTED_EMAIL
-      ? await db.contact.findMany({
-          where: { shopId, email },
-          orderBy: { createdAt: "asc" },
-        })
-      : [];
+  // Same predicate as customer redact (QA-C4): email OR customer id (numeric or
+  // GID) OR phone. A redacted request carries none of them → empty export.
+  const email = request.customerEmail === REDACTED_EMAIL ? null : request.customerEmail;
+  const where = contactMatchWhere(shopId, {
+    email,
+    customerId: request.shopifyCustomerId,
+    phone: request.customerPhone,
+  });
+  const contacts = where
+    ? await db.contact.findMany({ where, orderBy: { createdAt: "asc" } })
+    : [];
   const contactIds = contacts.map((c) => c.id);
 
   const conversations =
@@ -109,7 +113,7 @@ export async function buildDataRequestExport(
 
   const exportData: DataRequestExport = {
     dataRequestId: request.id,
-    customer: { email },
+    customer: { email: request.customerEmail },
     contacts: contacts.map((c) => ({
       id: c.id,
       name: c.name,

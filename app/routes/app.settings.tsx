@@ -130,7 +130,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     dataRequests: dataRequestRows.map((row) => ({
       id: row.id,
       date: formatDate(row.requestedAt),
-      email: row.customerEmail,
+      // Email-less requests (id / phone only, QA-C4) still need a label.
+      email:
+        row.customerEmail ||
+        (row.shopifyCustomerId
+          ? `Shopify customer #${row.shopifyCustomerId.replace("gid://shopify/Customer/", "")}`
+          : row.customerPhone || "Unknown customer"),
       status: row.status,
       dueAt: formatDate(row.dueAt),
       isOverdue: isDataRequestOverdue(row),

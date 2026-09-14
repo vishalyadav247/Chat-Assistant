@@ -116,6 +116,9 @@ async function main(): Promise<void> {
     await contacts({ db, A, B });
     await discounts({ db, A, B, setPlan });
     await pagesBlogs({ db, A, B });
+    await dashboardSetup({ db });
+    await qaFixes({ db, A, B });
+    await qaCoverage({ db, A });
     await orderTracking();
     await notifications({ db, A, B });
     await backgroundJobs({ db, A, B });
@@ -667,7 +670,10 @@ async function knowledgeIngestion(ctx: {
   await db.faq.deleteMany({ where: { shopId: A, question: `${TAG} free-plan import` } });
 
   // File uploads on EVERY plan (feature gate removed 2026-09-10, user
-  // decision) — the file_uploads QUOTA (5) is the only cap.
+  // decision) — the file_uploads QUOTA is the only cap. Earlier sections'
+  // file rows (K8's handbook) are cleared first: the free quota dropped to 2
+  // (2026-09-14) and lingering rows filled it before this section started.
+  await db.dataSource.deleteMany({ where: { shopId: A, type: "file" } });
   const fileOnFree = await createSource(
     A,
     { type: "file", name: `${TAG}-free.txt`, mime: "text/plain", bytes: Buffer.from("free plan file") } as any,
@@ -3479,17 +3485,19 @@ async function gdpr(ctx: { db: any; A: string; B: string }): Promise<void> {
   const logRow = await db.redactLog.findFirst({ where: { shopId: A, type: "customer" } });
   ok("G8 a customer redactLog row is written as the audit marker", Boolean(logRow) && logRow.completedAt !== null);
 
-  // G9 — the undefined-filter trap: a redact with neither email nor id must be
-  // a no-op, not a whole-shop wipe. This is what the handler guards with
-  // `if (!customerEmail && !customerId) return;`
+  // G9 — the undefined-filter trap: a redact with no email, id or phone must be
+  // a no-op, not a whole-shop wipe. The shared matcher returns null for an
+  // empty identity (QA-C4) and the handler returns on null before any delete.
   const handlerSrc = readFileSync(
     join(process.cwd(), "app", "lib", "jobs", "handlers.server.ts"),
     "utf-8",
   );
+  const { contactMatchWhere } = await import("../../app/lib/compliance/customer-match.server");
   ok(
-    "G9 redact with no email AND no customer id returns before any delete",
-    handlerSrc.includes("if (!customerEmail && !customerId) return;"),
-    "guard present in handlers.server.ts",
+    "G9 redact with no email, customer id or phone returns before any delete",
+    contactMatchWhere(A, { email: " ", customerId: undefined, phone: "" }) === null &&
+      handlerSrc.includes("if (!where) return;"),
+    "matcher null + guard present in handlers.server.ts",
   );
 
   // ── shop/redact ───────────────────────────────────────────────────────────
@@ -3590,6 +3598,511 @@ async function gdpr(ctx: { db: any; A: string; B: string }): Promise<void> {
 
   // Recreate shop B so teardown's own assertions still have a row to check.
   await db.shop.update({ where: { id: B }, data: { uninstalledAt: null, name: `${TAG} shop B` } });
+}
+
+// ── Module: QA report fixes (QA-FIX-PLAN-2026-09-14) ───────────────────────
+
+async function qaFixes(ctx: { db: any; A: string; B: string }): Promise<void> {
+  section("QA fixes (2026-09-14)");
+  const { db, A, B } = ctx;
+
+  // QA-S1 — a rate-limited turn must not echo a client-supplied conversationId
+  // (it is unverified at that point and was stored under the caller's shop).
+  {
+    const { runPipeline } = await import("../../app/lib/pipeline/index.server");
+    const sessionId = `${TAG}-s1-session`;
+    const foreign = await db.conversation.create({ data: { shopId: B, sessionId: `${TAG}-b-sess` } });
+    (globalThis as any).rateBuckets ??= new Map();
+    (globalThis as any).rateBuckets.set(`${A}:${sessionId}`, { tokens: 0, at: Date.now() });
+    let done: any = null;
+    for await (const frame of runPipeline({
+      shopId: A,
+      sessionId,
+      conversationId: foreign.id,
+      message: "hello",
+      isTest: true,
+    })) {
+      if ((frame as any).type === "done") done = frame;
+    }
+    (globalThis as any).rateBuckets.delete(`${A}:${sessionId}`);
+    ok(
+      "S1 rate-limited turn returns an empty conversationId, never the client's",
+      done?.outcome === "rate_limited" && done?.conversationId === "",
+      JSON.stringify(done),
+    );
+    const detailSrc = readFileSync(
+      join(process.cwd(), "app/routes/admin.debug.$shopId.$conversationId.tsx"),
+      "utf-8",
+    );
+    ok(
+      "S1 Debug detail reads traces by shopId AND conversationId",
+      /where:\s*\{\s*shopId,\s*conversationId\s*\}/.test(detailSrc),
+    );
+    await db.conversation.deleteMany({ where: { id: foreign.id, shopId: B } });
+  }
+
+  // QA-C3 — Debug recording is per store, time-limited and production-locked.
+  {
+    const tracing = await import("../../app/lib/admin/turn-tracing.server");
+    await tracing.stopTurnTracing();
+    ok("DBG1 recording off → no store is recorded", !(await tracing.isTracingShop(A)));
+    await tracing.startTurnTracing({ shopIds: [A], hours: 1, by: "qa@features" });
+    tracing.resetTurnTracingCache();
+    ok(
+      "DBG2 allowlisted store A is recorded, store B is not",
+      (await tracing.isTracingShop(A)) && !(await tracing.isTracingShop(B)),
+    );
+    const expired = { shopIds: [A], until: new Date(Date.now() - 1000).toISOString(), startedBy: null };
+    ok("DBG3 an expired window records nothing", !tracing.tracingActive(expired));
+    const priorEnv = process.env.NODE_ENV;
+    const priorAllow = process.env.ALLOW_TURN_TRACING;
+    (process.env as any).NODE_ENV = "production";
+    delete process.env.ALLOW_TURN_TRACING;
+    const lockedInProd = !(await tracing.isTracingShop(A));
+    let startRefused = false;
+    try {
+      await tracing.startTurnTracing({ shopIds: [A], hours: 1, by: "qa@features" });
+    } catch {
+      startRefused = true;
+    }
+    (process.env as any).NODE_ENV = priorEnv;
+    if (priorAllow === undefined) delete process.env.ALLOW_TURN_TRACING;
+    else process.env.ALLOW_TURN_TRACING = priorAllow;
+    ok("DBG4 production without ALLOW_TURN_TRACING records nothing and refuses to start", lockedInProd && startRefused);
+    await tracing.stopTurnTracing();
+
+    const { isOwnerAdmin } = await import("../../app/lib/admin/admin-auth.server");
+    const session = (role: string, email: string) =>
+      ({ sessionId: "s", admin: { id: "a", email, name: "x", role } }) as any;
+    ok(
+      "DBG5 only owners (role owner or the root env account) may read recordings",
+      isOwnerAdmin(session("owner", "someone@example.com")) &&
+        !isOwnerAdmin(session("admin", "someone-else@example.com")),
+    );
+  }
+
+  // QA-C4 — no trace without a conversation; no trace after the conversation is gone.
+  {
+    const { observeTurn, TurnCollector } = await import("../../app/lib/pipeline/turn-capture.server");
+    const { createTrace } = await import("../../app/lib/pipeline/trace.server");
+    const run = async (conversationId: string) => {
+      const frames = (async function* () {
+        yield { type: "message", text: "hi" } as any;
+        yield { type: "done", outcome: "chat", conversationId } as any;
+      })();
+      for await (const _frame of observeTurn({
+        shopId: A,
+        shopperText: `${TAG} traced`,
+        frames,
+        trace: createTrace(true),
+        collector: new TurnCollector(),
+      })) {
+        // drain
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300)); // save is fire-and-forget
+    };
+    const before = await db.turnTrace.count({ where: { shopId: A } });
+    await run("");
+    ok("C4a a turn with no conversation writes no trace", (await db.turnTrace.count({ where: { shopId: A } })) === before);
+    await run("conversation-that-does-not-exist");
+    ok("C4b a turn whose conversation is gone writes no trace", (await db.turnTrace.count({ where: { shopId: A } })) === before);
+    const live = await db.conversation.create({ data: { shopId: A, sessionId: `${TAG}-c4-sess` } });
+    await run(live.id);
+    ok("C4c a real conversation's turn is recorded", (await db.turnTrace.count({ where: { shopId: A, conversationId: live.id } })) === 1);
+    await db.turnTrace.deleteMany({ where: { shopId: A, conversationId: live.id } });
+    await db.conversation.deleteMany({ where: { id: live.id, shopId: A } });
+  }
+
+  // QA-U3 / TAI-1 — every sourceLayer the pipeline saves has a merchant label
+  {
+    const { readFileSync, readdirSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const pipelineDir = join(process.cwd(), "app/lib/pipeline");
+    const layers = new Set<string>();
+    for (const file of readdirSync(pipelineDir).filter((f) => f.endsWith(".ts"))) {
+      for (const line of readFileSync(join(pipelineDir, file), "utf8").split("\n")) {
+        if (/^\s*\/\//.test(line)) continue;
+        // `sourceLayer: "x"` or `sourceLayer: cond ? "x" : "y"` — only the value.
+        const m = line.match(/sourceLayer:\s*(?:\w+\s*\?\s*"([a-z_]+)"\s*:\s*"([a-z_]+)"|"([a-z_]+)")/);
+        for (const v of m ? m.slice(1) : []) if (v) layers.add(v);
+      }
+    }
+    const consoleSrc = readFileSync(join(process.cwd(), "app/components/TestAiConsole.tsx"), "utf8");
+    const labelBlock = consoleSrc.slice(consoleSrc.indexOf("const SOURCE_LABELS"), consoleSrc.indexOf("};", consoleSrc.indexOf("const SOURCE_LABELS")));
+    const labelled = new Set([...labelBlock.matchAll(/^\s*([a-z_]+):/gm)].map((m) => m[1]));
+    const missing = [...layers].filter((l) => !labelled.has(l));
+    ok(
+      "TAI1 every sourceLayer written in app/lib/pipeline has a Test AI label (banned_* folds to 'banned')",
+      layers.size >= 10 && missing.length === 0 && labelled.has("banned"),
+      `layers=${layers.size} missing=${missing.join(",")}`,
+    );
+
+    // QA-U4 — mission signals
+    const { sourceKey, looksNonEnglish } = await import("../../app/components/TestAiConsole");
+    ok(
+      "TAI2 banned_keyword / banned_moderation map to the one Blocked topic label",
+      sourceKey("banned_keyword") === "banned" && sourceKey("banned_moderation") === "banned" && sourceKey("curated") === "curated",
+    );
+    ok(
+      "TAI3 language mission: accented English does not fire; Spanish, Hindi and Devanagari do",
+      !looksNonEnglish("café résumé naïve") &&
+        !looksNonEnglish("What is your return policy?") &&
+        looksNonEnglish("¿Cuál es su política de devoluciones?") &&
+        looksNonEnglish("cual es su politica de devoluciones") &&
+        looksNonEnglish("mujhe ek bracelet chahiye") &&
+        looksNonEnglish("क्या आपके पास कंगन है"),
+    );
+    ok(
+      "TAI4 stump mission completes on rag_fallback only (source check)",
+      /stump[\s\S]{0,200}rag_fallback/.test(consoleSrc) || /rag_fallback[\s\S]{0,200}stump/.test(consoleSrc),
+    );
+  }
+}
+
+// ── Module: QA-T2 coverage — Debug limits, dashboard actions, review gate ───
+
+async function qaCoverage(ctx: { db: any; A: string }): Promise<void> {
+  section("QA-T2 coverage (2026-09-14)");
+  const { db, A } = ctx;
+  const { observeTurn, TurnCollector } = await import("../../app/lib/pipeline/turn-capture.server");
+  const { createTrace } = await import("../../app/lib/pipeline/trace.server");
+  const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value), "utf-8");
+
+  // DBG6/7 — a recording row stays under 32 KB, trimmed in the documented order
+  const record = async (conversationId: string, calls: number, promptChars: number, responseChars: number) => {
+    const collector = new TurnCollector();
+    for (let i = 0; i < calls; i++) {
+      const call = collector.record(`call-${i}`, [{ role: "user", content: "p".repeat(promptChars) }]);
+      collector.appendResponse(call, "r".repeat(responseChars));
+    }
+    async function* frames() {
+      yield { type: "done" as const, outcome: "chat", conversationId };
+    }
+    for await (const _frame of observeTurn({
+      shopId: A,
+      shopperText: `${TAG} trim`,
+      frames: frames(),
+      trace: createTrace(true),
+      collector,
+    })) {
+      // drain
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400)); // save is fire-and-forget
+    const row = await db.turnTrace.findFirst({ where: { shopId: A, conversationId }, orderBy: { createdAt: "desc" } });
+    await db.turnTrace.deleteMany({ where: { shopId: A, conversationId } });
+    return row?.payload as any;
+  };
+  const convo = await db.conversation.create({ data: { shopId: A, sessionId: `${TAG}-t2-trim` } });
+  try {
+    // 5 × (6 000 prompt + 4 000 response) ≈ 50 KB: dropping responses alone fits.
+    const light = await record(convo.id, 5, 6_000, 4_000);
+    ok(
+      "DBG6 over 32 KB: LLM responses are trimmed FIRST and every prompt is kept",
+      light && bytes(light) <= 32 * 1024 && light.llmCalls.length === 5 &&
+        light.llmCalls.every((c: any) => c.response === "[trimmed]" && c.messages[0].content.length === 6_000) &&
+        !light.trimmed,
+      light ? `bytes=${bytes(light)} calls=${light.llmCalls.length}` : "no row",
+    );
+    // 12 × 6 000-char prompts ≈ 72 KB: oldest calls go, the final one survives.
+    const heavy = await record(convo.id, 12, 6_000, 100);
+    const purposes = heavy ? heavy.llmCalls.map((c: any) => c.purpose) : [];
+    ok(
+      "DBG7 still over: oldest LLM calls are dropped, the newest prompt is kept, and the row says trimmed",
+      heavy && bytes(heavy) <= 32 * 1024 && heavy.trimmed === true &&
+        purposes.length > 0 && purposes.length < 12 && purposes[purposes.length - 1] === "call-11" && !purposes.includes("call-0"),
+      `bytes=${heavy ? bytes(heavy) : 0} kept=${purposes.join(",")}`,
+    );
+  } finally {
+    await db.conversation.deleteMany({ where: { id: convo.id, shopId: A } });
+  }
+
+  // DBG8 — the nightly purge holds the table at TURN_TRACE_ROW_CEILING, newest kept
+  {
+    const { purgeTurnTraces, TURN_TRACE_ROW_CEILING } = await import("../../app/lib/jobs/handlers.server");
+    const existing = await db.turnTrace.count();
+    const extra = 5;
+    const fill = Math.max(0, TURN_TRACE_ROW_CEILING - existing) + extra;
+    const now = Date.now();
+    // The oldest `extra` rows are ours and sit just inside the 7-day window, so
+    // only the ceiling (not retention) can remove them.
+    const oldest = new Date(now - 7 * 24 * 60 * 60 * 1000 + 60 * 60 * 1000);
+    const rows = Array.from({ length: fill }, (_, i) => ({
+      shopId: A,
+      conversationId: `${TAG}-ceiling-${i}`,
+      shopperText: "",
+      replyText: "",
+      outcome: "chat",
+      payload: {},
+      createdAt: i < extra ? new Date(oldest.getTime() - i * 1000) : new Date(now - 60_000 + (i % 1000)),
+    }));
+    try {
+      for (let i = 0; i < rows.length; i += 5_000) {
+        await db.turnTrace.createMany({ data: rows.slice(i, i + 5_000) });
+      }
+      await purgeTurnTraces(new Date(now));
+      const after = await db.turnTrace.count();
+      const oldestLeft = await db.turnTrace.count({
+        where: { shopId: A, conversationId: { in: rows.slice(0, extra).map((r) => r.conversationId) } },
+      });
+      ok(
+        `DBG8 purge caps turn_traces at ${TURN_TRACE_ROW_CEILING} rows and drops the OLDEST`,
+        after <= TURN_TRACE_ROW_CEILING && after >= TURN_TRACE_ROW_CEILING - extra && oldestLeft === 0,
+        `inserted=${fill} after=${after} oldestLeft=${oldestLeft}`,
+      );
+    } finally {
+      await db.turnTrace.deleteMany({ where: { shopId: A, conversationId: { startsWith: `${TAG}-ceiling-` } } });
+    }
+  }
+
+  // D-SYNC1 — a repeat manual sync inside the window queues nothing new (QA-U1)
+  {
+    const { enqueueSync, SYNC_THROTTLE_SECONDS, getQueue } = await import("../../app/lib/jobs/queue.server");
+    const { JOBS } = await import("../../app/lib/jobs/handlers.server");
+    const domain = `qa-features-throttle-${Date.now()}.myshopify.com`;
+    try {
+      const first = await enqueueSync(JOBS.pageSync, domain);
+      const second = await enqueueSync(JOBS.pageSync, domain);
+      const otherType = await enqueueSync(JOBS.articleSync, domain);
+      ok(
+        `D-SYNC1 same store + job within ${SYNC_THROTTLE_SECONDS}s queues once; another job type is independent`,
+        first === true && second === false && otherType === true,
+        `first=${first} second=${second} other=${otherType}`,
+      );
+    } finally {
+      // Never let the worker run a sync for a store that does not exist.
+      await db.$executeRawUnsafe(`DELETE FROM pgboss.job WHERE data->>'shopDomain' = $1`, domain).catch(() => undefined);
+      await Promise.race([
+        getQueue().boss.stop({ graceful: false }),
+        new Promise((resolve) => setTimeout(resolve, 5000)),
+      ]).catch(() => undefined);
+      global.pgBossGlobal = undefined;
+    }
+  }
+
+  // D-SYNC2 / D-AI1 — dashboard actions need ai_agent (source + rule)
+  {
+    const { can } = await import("../../app/lib/access.server");
+    const src = readFileSync(join(process.cwd(), "app/routes/app._index.tsx"), "utf8");
+    const block = (intent: string) => {
+      const start = src.indexOf(`intent === "${intent}"`);
+      return start < 0 ? "" : src.slice(start, src.indexOf("\n  }\n", start) > 0 ? src.indexOf("\n  }\n", start) : start + 1500);
+    };
+    const guardedBefore = (body: string, write: string) => {
+      const guard = body.indexOf(`can(access.role, access.surface, "ai_agent")`);
+      const effect = body.indexOf(write);
+      return guard >= 0 && effect > guard;
+    };
+    ok(
+      "D-SYNC2 sync-all checks ai_agent before queueing, and uses the throttled enqueueSync",
+      guardedBefore(block("sync-all"), "enqueueSync(") && !/\benqueue\(/.test(block("sync-all")),
+    );
+    ok("D-AI1 enable-ai checks ai_agent before writing aiEnabled", guardedBefore(block("enable-ai"), "aiEnabled: true"));
+    ok(
+      "D-AI2 ai_agent: agents are refused on both surfaces; owners/admins allowed on both",
+      !can("agent", "web", "ai_agent") && !can("agent", "admin", "ai_agent") &&
+        can("owner", "web", "ai_agent") && can("admin", "web", "ai_agent") && can("owner", "admin", "ai_agent"),
+    );
+  }
+
+  // RV1–4 — App Store review prompt gate (app/lib/review.ts)
+  {
+    const { isReviewPromptEligible, REVIEW_MIN_INSTALL_AGE_MS } = await import("../../app/lib/review");
+    const now = new Date("2026-09-14T12:00:00Z");
+    const ago = (ms: number) => new Date(now.getTime() - ms);
+    ok("RV1 no install date → never eligible", !isReviewPromptEligible({ installedAt: null, hasEngaged: true, now }));
+    ok(
+      "RV2 installed under 24 h (and exactly 24 h) → not eligible, even when engaged",
+      !isReviewPromptEligible({ installedAt: ago(REVIEW_MIN_INSTALL_AGE_MS - 1000), hasEngaged: true, now }) &&
+        !isReviewPromptEligible({ installedAt: ago(REVIEW_MIN_INSTALL_AGE_MS), hasEngaged: true, now }),
+    );
+    ok(
+      "RV3 older than 24 h but no real conversation → not eligible",
+      !isReviewPromptEligible({ installedAt: ago(REVIEW_MIN_INSTALL_AGE_MS + 1000), hasEngaged: false, now }),
+    );
+    ok(
+      "RV4 older than 24 h AND engaged → eligible",
+      isReviewPromptEligible({ installedAt: ago(REVIEW_MIN_INSTALL_AGE_MS + 1000), hasEngaged: true, now }),
+    );
+    const reviewSrc = readFileSync(join(process.cwd(), "app/lib/review.server.ts"), "utf8");
+    ok("RV5 engagement counts only non-test conversations (Test AI excluded)", /isTest:\s*false/.test(reviewSrc));
+  }
+}
+
+// ── Module: Dashboard "Get your AI ready" steps (spec 13, 2026-09-14) ──────
+
+async function dashboardSetup(ctx: { db: any }): Promise<void> {
+  section("Dashboard setup steps (spec 13)");
+  const { db } = ctx;
+  const { setupChecklist } = await import("../../app/lib/dashboard/dashboard.server");
+  const { cleanupShop } = await import("../../app/lib/jobs/handlers.server");
+  // A FRESH shop, so every rule is observed flipping from to-do to done.
+  const domain = "qa-features-dashboard.myshopify.com";
+  await cleanupShop(domain).catch(() => undefined);
+  await db.shop.deleteMany({ where: { domain } });
+  const shop = await db.shop.create({ data: { domain, name: `${TAG} dashboard` } });
+  const C = shop.id;
+  const stepState = (list: any, id: string) => list.steps.find((s: any) => s.id === id)?.state;
+
+  try {
+    const fresh = await setupChecklist(C, domain);
+    ok(
+      "DS1 eight steps in the spec order",
+      fresh.steps.map((s: any) => s.id).join(",") ===
+        "training,faqs,knowledge,instructions,chatbox,proactive,curated,embed",
+      fresh.steps.map((s: any) => s.id).join(","),
+    );
+    const countable = fresh.steps.filter((s: any) => s.state !== "unknown").length;
+    ok(
+      "DS2 a fresh shop has nothing done; an unverifiable embed is left out of the total",
+      fresh.completed === 0 && fresh.total === countable,
+      `completed=${fresh.completed} total=${fresh.total} embed=${stepState(fresh, "embed")}`,
+    );
+
+    // FAQs: a draft does not count, a published one does.
+    await db.faq.create({ data: { shopId: C, question: `${TAG} draft faq`, status: "draft" } });
+    const draftOnly = await setupChecklist(C, domain);
+    await db.faq.create({ data: { shopId: C, question: `${TAG} published faq`, status: "published" } });
+    const withFaq = await setupChecklist(C, domain);
+    ok(
+      "DS3 FAQs step: done on the first PUBLISHED FAQ only",
+      stepState(draftOnly, "faqs") === "todo" && stepState(withFaq, "faqs") === "done",
+    );
+
+    // Custom knowledge: bridges and pending sources do not count.
+    await db.dataSource.create({ data: { shopId: C, type: "store_pages", name: "Store pages", status: "active" } });
+    await db.dataSource.create({ data: { shopId: C, type: "faq", name: "FAQ", status: "active" } });
+    await db.dataSource.create({ data: { shopId: C, type: "url", name: `${TAG} url`, status: "pending" } });
+    const bridgesOnly = await setupChecklist(C, domain);
+    await db.dataSource.updateMany({ where: { shopId: C, type: "url" }, data: { status: "active" } });
+    const withSource = await setupChecklist(C, domain);
+    ok(
+      "DS4 custom knowledge step: bridges and pending sources don't complete it; an active URL does",
+      stepState(bridgesOnly, "knowledge") === "todo" && stepState(withSource, "knowledge") === "done",
+    );
+
+    await db.curatedAnswer.create({ data: { shopId: C, question: `${TAG} curated`, status: "published" } });
+    const withCurated = await setupChecklist(C, domain);
+    ok("DS5 curated answers step: done at ONE published answer", stepState(withCurated, "curated") === "done");
+
+    // Training: counts follow the learn switches, the master switch zeroes them.
+    await db.product.createMany({
+      data: [
+        { shopId: C, shopifyProductId: "gid://shopify/Product/990001", title: `${TAG} p1`, learnEnabled: true },
+        { shopId: C, shopifyProductId: "gid://shopify/Product/990002", title: `${TAG} p2`, learnEnabled: true },
+        { shopId: C, shopifyProductId: "gid://shopify/Product/990003", title: `${TAG} p3`, learnEnabled: false },
+        // QA-U2: switched on but NOT showable (draft / off the Online Store) —
+        // the AI can never card these, so they are not "learned".
+        { shopId: C, shopifyProductId: "gid://shopify/Product/990004", title: `${TAG} p4 draft`, learnEnabled: true, status: "draft" },
+        { shopId: C, shopifyProductId: "gid://shopify/Product/990005", title: `${TAG} p5 unpublished`, learnEnabled: true, publishedOnline: false },
+      ],
+    });
+    await db.syncState.upsert({
+      where: { shopId: C },
+      create: { shopId: C, productSyncAt: new Date() },
+      update: { productSyncAt: new Date() },
+    });
+    const trained = await setupChecklist(C, domain);
+    const productsRow = trained.training.sources.find((s: any) => s.key === "products");
+    ok(
+      "DS6 training step done after a product sync; products show 2 of 5 learned (draft + unpublished not counted, QA-U2)",
+      stepState(trained, "training") === "done" && productsRow?.learned === 2 && productsRow?.total === 5,
+      JSON.stringify(productsRow),
+    );
+    await db.shopSettings.upsert({
+      where: { shopId: C },
+      create: { shopId: C, settings: { learn: { products: false } } },
+      update: { settings: { learn: { products: false } } },
+    });
+    const masterOff = await setupChecklist(C, domain);
+    const offRow = masterOff.training.sources.find((s: any) => s.key === "products");
+    ok(
+      "DS7 master Learn products OFF: 0 learned (total unchanged), and the step's item count follows",
+      offRow?.learned === 0 &&
+        offRow?.total === 5 &&
+        offRow?.masterOn === false &&
+        masterOff.training.learnedTotal === 0,
+      JSON.stringify(offRow),
+    );
+    ok(
+      "DS7b synced but nothing learned: the training step goes back to to-do (QA-U2)",
+      stepState(masterOff, "training") === "todo",
+      String(stepState(masterOff, "training")),
+    );
+
+    // Store info: to-do until Instructions → General → Store info has text.
+    const noInfo = masterOff.steps.find((s: any) => s.id === "instructions");
+    ok(
+      "DS9 store info step starts to-do with an 'Add store info' action to the section",
+      noInfo?.state === "todo" &&
+        noInfo?.actionLabel === "Add store info" &&
+        (noInfo?.action as any)?.href === "/app/ai-agent/instructions#store-info",
+      JSON.stringify(noInfo),
+    );
+    const { saveGeneralInstructions } = await import("../../app/lib/instructions/save.server");
+    const { listSources } = await import("../../app/lib/ingestion/sources.server");
+    const general = {
+      role: "You are a helpful assistant.",
+      communicationStyle: "friendly",
+      brandVoice: "Warm.",
+      behaviours: "Be kind.",
+      defaultLanguage: "en",
+      autoDetectLanguage: false,
+      bannedTopics: [],
+      fallbackMessage: "Sorry.",
+    };
+    const aboutText = `${TAG} Zorblax Crystals is a family shop in Jaipur, open Mon–Sat 10am–6pm.`;
+    await saveGeneralInstructions(C, { ...general, storeInfoAbout: aboutText });
+    const withInfo = await setupChecklist(C, domain);
+    const infoStep = withInfo.steps.find((s: any) => s.id === "instructions");
+    const bridge = await db.dataSource.findFirst({ where: { shopId: C, type: "store_info" } });
+    const bridgeChunks = bridge
+      ? await db.knowledge.findMany({ where: { shopId: C, dataSourceId: bridge.id }, select: { body: true } })
+      : [];
+    ok(
+      "DS10 saving store info completes the step (button stays: Review) and embeds it as the store_info source",
+      infoStep?.state === "done" &&
+        infoStep?.actionLabel === "Review" &&
+        infoStep?.action.kind === "revisit" &&
+        bridge?.status === "active" &&
+        bridgeChunks.some((k: any) => k.body.includes("Zorblax Crystals")),
+      `step=${infoStep?.state} bridge=${bridge?.status} chunks=${bridgeChunks.length}`,
+    );
+    // A save that does not send storeInfoAbout must leave it alone.
+    await saveGeneralInstructions(C, general);
+    const kept = (await db.shopSettings.findUnique({ where: { shopId: C } })).settings as any;
+    const listed = await listSources(C);
+    ok(
+      "DS11 a save without store info keeps it, and the bridge is hidden from Custom knowledge",
+      kept.storeInfo?.about === aboutText && !listed.some((s: any) => s.type === "store_info"),
+      `about kept=${kept.storeInfo?.about === aboutText}`,
+    );
+    const { storeInfoDraftFrom } = await import("../../app/lib/instructions/store-info.server");
+    const draft = storeInfoDraftFrom({
+      name: "Luna",
+      description: "Handmade crystal jewellery.",
+      contactEmail: "hi@luna.test",
+      currencyCode: "INR",
+      shipsToCountries: ["IN", "US"],
+      primaryDomain: { host: "luna.test" },
+    });
+    ok(
+      "DS12 Fill from Shopify draft: name, domain, description, shipping, currency, email",
+      draft.includes("Luna is an online store at luna.test.") &&
+        draft.includes("Handmade crystal jewellery.") &&
+        /We ship to: India, United States\./.test(draft) &&
+        draft.includes("Prices are in INR.") &&
+        draft.includes("hi@luna.test"),
+      draft.replace(/\n/g, " | "),
+    );
+    ok(
+      "DS8 completed count matches the done steps",
+      masterOff.completed === masterOff.steps.filter((s: any) => s.state === "done").length,
+      `completed=${masterOff.completed}`,
+    );
+  } finally {
+    await cleanupShop(domain).catch(() => undefined);
+    await db.shop.deleteMany({ where: { domain } });
+  }
 }
 
 // ── Module: Pages & Blogs sync (spec 22) ────────────────────────────────────

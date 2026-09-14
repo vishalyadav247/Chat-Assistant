@@ -11,6 +11,7 @@
  */
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { qaFetch, waitForServer } from "./http";
 
 // Load .env manually (tsx does not) BEFORE importing app modules.
 for (const line of readFileSync(join(process.cwd(), ".env"), "utf-8").split(/\r?\n/)) {
@@ -67,7 +68,7 @@ async function probe(
 ): Promise<Probe> {
   const headers: Record<string, string> = { "user-agent": UA, ...(init.headers ?? {}) };
   if (init.cookie) headers.cookie = init.cookie;
-  const res = await fetch(BASE + path, {
+  const res = await qaFetch(BASE + path, {
     method: init.method ?? "GET",
     headers,
     body: init.body,
@@ -129,6 +130,8 @@ const ADMIN_ROUTES = [
   "admin._index.tsx",
   "admin.access.tsx",
   "admin.ai.tsx",
+  "admin.debug._index.tsx",
+  "admin.debug.$shopId.$conversationId.tsx",
   "admin.login.tsx",
   "admin.logout.tsx",
   "admin.logs.tsx",
@@ -196,8 +199,9 @@ async function main(): Promise<void> {
 
   // Reachability gate — everything below is HTTP.
   try {
-    const res = await fetch(`${BASE}/web/login`, { headers: { "user-agent": UA } });
-    if (!res.ok) throw new Error(`status ${res.status}`);
+    // Backoff gate (QA-T4): a cold dev server is slow, not down.
+    const up = await waitForServer(`${BASE}/web/login`, { headers: { "user-agent": UA } });
+    if (!up.ok) throw new Error(up.error);
   } catch (error) {
     // Never let an unreachable server look like a clean run — record a real
     // failure so the exit code is non-zero and the gap is visible.
@@ -219,10 +223,10 @@ async function main(): Promise<void> {
     ok(`${label} route modules present (${files.length})`, missing.length === 0, missing.join(", "));
   }
   ok("auth.$ present", existsSync(join(ROUTES_DIR, "auth.$.tsx")));
-  // Shop-domain login (J-10). Removed 2026-08-21 on an unverifiable reading of
-  // App Store req 2.3.1, restored 2026-09-07 — see the note in shopify.server.ts.
-  // The card lives on "/" (one form, one place); /auth/login stays as the path
-  // the library is configured to bounce to, and must never 500 on a public URL.
+  // Shop-domain login (J-10 / QA-C1, 2026-09-14). App Store req 2.3.1 — verified
+  // on shopify.dev — forbids asking a merchant to type a myshopify.com URL or shop
+  // domain. No route may render that input; /auth/login stays only as the path
+  // the library bounces to (with ?shop=) and must never 500 on a public URL.
   {
     const toml = readFileSync(join(process.cwd(), "shopify.app.toml"), "utf-8");
     ok("auth.login route present", existsSync(join(ROUTES_DIR, "auth.login.tsx")));
@@ -231,8 +235,6 @@ async function main(): Promise<void> {
       /^\s*export\s+const\s+login\s*=/m.test(readFileSync(join(process.cwd(), "app", "shopify.server.ts"), "utf-8")),
     );
     ok("/auth/login is not a declared redirect_url", !toml.includes("/auth/login"));
-    // The form must live on the public landing page and nowhere else — an
-    // embedded admin route asking for a shop domain would be a real defect.
     const offenders: string[] = [];
     for (const file of readdirSync(ROUTES_DIR, { withFileTypes: true })) {
       if (!file.isFile() || !file.name.endsWith(".tsx")) continue;
@@ -241,10 +243,24 @@ async function main(): Promise<void> {
         offenders.push(file.name);
       }
     }
-    ok("no admin route renders a shop-domain input", offenders.length === 0, offenders.join(", "));
+    ok("no route renders a shop-domain input", offenders.length === 0, offenders.join(", "));
     const landing = readFileSync(join(ROUTES_DIR, "_index", "route.tsx"), "utf-8");
-    ok('_index renders the shop-domain field', /name="shop"/.test(landing) && /<input/.test(landing));
-    ok('_index posts it through login()', /await login\(request\)/.test(landing));
+    ok(
+      "_index has no shop-domain field, myshopify placeholder or login() action (req 2.3.1)",
+      !/name="shop"/.test(landing) &&
+        !/placeholder="[^"]*myshopify/.test(landing) &&
+        !/login\(request\)/.test(landing),
+    );
+    ok(
+      "auth.login is redirect-only (no action)",
+      !/export const action/.test(readFileSync(join(ROUTES_DIR, "auth.login.tsx"), "utf-8")),
+    );
+    const home = await probe("/");
+    ok(
+      "/ renders with no <form> and no shop input",
+      home.status === 200 && !/<form/i.test(home.body) && !/name="shop"/.test(home.body),
+      String(home.status),
+    );
 
     // With ?shop=, /auth/login hands off to the managed-install screen rather
     // than dead-ending a stale bookmark; either way it must not serve a page.
@@ -410,7 +426,7 @@ async function main(): Promise<void> {
     const p = await probe("/admin");
     ok("/admin (signed out) → /admin/login", p.status === 302 && (p.location ?? "").includes("/admin/login"), `${p.status} ${p.location}`);
   }
-  for (const path of ["/admin/access", "/admin/ai", "/admin/logs", "/admin/plans", "/admin/promo-codes", "/admin/settings", "/admin/usage", "/admin/usage/abc123"]) {
+  for (const path of ["/admin/access", "/admin/ai", "/admin/debug", "/admin/debug/shop123/convo123", "/admin/logs", "/admin/plans", "/admin/promo-codes", "/admin/settings", "/admin/usage", "/admin/usage/abc123"]) {
     const p = await probe(path);
     ok(
       `${path} (signed out) → /admin/login?next=`,
@@ -754,6 +770,16 @@ async function main(): Promise<void> {
       for (const path of ["/admin", "/admin/access", "/admin/ai", "/admin/logs", "/admin/plans", "/admin/promo-codes", "/admin/settings", "/admin/usage"]) {
         const p = await probe(path, { cookie });
         ok(`signed-in GET ${path} → 200`, p.status === 200, String(p.status));
+      }
+      // Debug recordings are OWNER-only (QA-C3): a plain operator is refused,
+      // an owner gets in. The throwaway account is role "admin" by default.
+      {
+        const p = await probe("/admin/debug", { cookie });
+        ok("signed-in non-owner GET /admin/debug → 403 (owner-only)", p.status === 403, String(p.status));
+        await db.adminUser.update({ where: { id: admin.id }, data: { role: "owner" } });
+        const owner = await probe("/admin/debug", { cookie });
+        ok("signed-in owner GET /admin/debug → 200", owner.status === 200, String(owner.status));
+        await db.adminUser.update({ where: { id: admin.id }, data: { role: "admin" } });
       }
       {
         const p = await probe("/admin/login", { cookie });

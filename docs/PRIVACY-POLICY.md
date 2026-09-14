@@ -45,10 +45,9 @@ is listed for:
 | Scope | What we read | Why |
 |---|---|---|
 | `read_products` | Product titles, descriptions, images, prices, variants, inventory status | Catalog mirror that grounds every AI recommendation |
-| `read_content` | Metafield definitions | Keeps the merchant's metafield catalog current |
+| `read_content` | Metafield definitions; store pages and blog articles | Keeps the merchant's metafield catalog current; pages and articles the merchant selects become a knowledge source for support answers |
 | `read_discounts` | Discount codes and rules | So the assistant can reference live offers |
 | `read_legal_policies` | The store's own published policies | Knowledge source for policy questions |
-| `read_online_store_pages` | Store pages | Knowledge source for support answers |
 | `read_themes` | **Only** `config/settings_data.json` | Detects whether the chat widget is enabled on the theme. We do not read theme code |
 | `write_app_proxy` | — | Transport for the storefront widget |
 | `write_files` | Merchant-uploaded logo/icon | Widget branding |

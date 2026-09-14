@@ -459,6 +459,29 @@ async function securitySection({ db, COOKIE, TAG, hashToken, operator }: any): P
       `${docPost.status} stored=${row ? JSON.parse(row.value).enforcement : "absent"}`,
     );
   }
+  // 2e-bis. Debug's action (delete recordings / start recording) is same-origin
+  //         gated like every other /admin action (QA-C2).
+  {
+    const shop = await db.shop.findFirst({ select: { id: true } });
+    const probe = shop
+      ? await db.turnTrace.create({
+          data: { shopId: shop.id, conversationId: "qa-c2-probe", shopperText: "probe", replyText: "", outcome: "qa", payload: {} },
+        })
+      : null;
+    const cross = await req("/admin/debug", {
+      method: "POST",
+      cookie: COOKIE,
+      headers: { "content-type": "application/x-www-form-urlencoded", origin: "https://evil.example" },
+      body: new URLSearchParams({ intent: "clear-recordings" }).toString(),
+    });
+    const survived = probe ? await db.turnTrace.findUnique({ where: { id: probe.id } }) : null;
+    ok(
+      "cross-origin POST /admin/debug deletes nothing (sameOrigin guard)",
+      !probe || Boolean(survived),
+      `${cross.status} probe=${probe ? (survived ? "kept" : "DELETED") : "no shop"}`,
+    );
+    if (probe) await db.turnTrace.deleteMany({ where: { id: probe.id } });
+  }
   // 2f. Not framable — including with the ?shop= param that used to opt a page
   //     into the embedded CSP branch.
   for (const path of [...ALL_ADMIN, "/admin/login", "/admin/login?shop=dev-shop.myshopify.com", "/admin/plans?shop=dev-shop.myshopify.com"]) {

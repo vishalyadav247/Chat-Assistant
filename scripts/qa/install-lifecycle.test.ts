@@ -167,9 +167,23 @@ async function main() {
   );
   const recCount = await db.recommendation.count({ where: { shopId } });
   check("seeded app recommendations", recCount === 2, `${recCount}`);
+  // QA-P4 (owner decision 2026-09-14): new installs default to 90-day transcript retention.
+  const freshSettings = await db.shopSettings.findUnique({ where: { shopId } });
+  check(
+    "new install defaults transcript retention to 90 days",
+    (freshSettings?.settings as { retentionDays?: number } | undefined)?.retentionDays === 90,
+    JSON.stringify((freshSettings?.settings as { retentionDays?: number } | undefined)?.retentionDays),
+  );
 
   // Idempotency: afterAuth also fires on every token refresh.
+  // An EXISTING store must never be moved to the new default: drop the settings
+  // row (a store that never saved settings) and re-authenticate.
+  await db.shopSettings.deleteMany({ where: { shopId } });
   await onShopAuthenticated(FRESH);
+  check(
+    "re-auth of an existing store does NOT seed the 90-day default (keeps Keep forever)",
+    (await db.shopSettings.count({ where: { shopId } })) === 0,
+  );
   check(
     "afterAuth is idempotent (no duplicate persona/guardrails/recommendations)",
     (await db.persona.count({ where: { shopId } })) === 1 &&

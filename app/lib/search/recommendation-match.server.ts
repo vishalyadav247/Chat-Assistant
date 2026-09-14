@@ -29,11 +29,17 @@ interface CachedRec {
 
 declare global {
   // eslint-disable-next-line no-var
-  var recVectorCache: Map<string, CachedRec[]> | undefined;
+  var recVectorCache: Map<string, Map<string, number[][]>> | undefined;
 }
 
 /** Trigger vectors for this shop's active recommendations, embedding on a miss.
- *  Null when the shop has none to match against. */
+ *  Null when the shop has none to match against.
+ *
+ *  Only the VECTORS are cached (keyed by trigger text) — title and
+ *  product/collection ids always come from the rows just fetched. The cache
+ *  used to return them too, so a merchant editing a recommendation's product
+ *  set without touching its triggers served the old products until the process
+ *  restarted (hardening spec 23 §1.4). */
 async function triggerVectors(shopId: string): Promise<CachedRec[] | null> {
   const rows = await db.recommendation.findMany({
     where: { shopId, status: "active" },
@@ -46,31 +52,45 @@ async function triggerVectors(shopId: string): Promise<CachedRec[] | null> {
   if (candidates.length === 0) return null;
 
   if (!global.recVectorCache) global.recVectorCache = new Map();
+  const cache = global.recVectorCache;
   const fingerprint = candidates
     .map((r) => `${r.id}:${r.triggerQuestions.join("|")}`)
     .join("||");
   const cacheKey = `${shopId}:${fingerprint}`;
-  const hit = global.recVectorCache.get(cacheKey);
-  if (hit) return hit;
+  let vectorsByRecId = cache.get(cacheKey);
 
-  const texts = candidates.flatMap((rec) => rec.triggerQuestions);
-  const vectors = await embedTexts(texts, { shopId });
-  let cursor = 0;
-  const cached = candidates.map((rec) => {
-    const take = rec.triggerQuestions.length;
-    const slice = vectors.slice(cursor, cursor + take);
-    cursor += take;
-    return {
-      id: rec.id,
-      title: rec.title,
-      productIds: rec.productIds,
-      collectionIds: rec.collectionIds,
-      vectors: slice,
-    };
-  });
-  global.recVectorCache.set(cacheKey, cached);
-  if (global.recVectorCache.size > 500) global.recVectorCache.clear();
-  return cached;
+  if (!vectorsByRecId) {
+    const texts = candidates.flatMap((rec) => rec.triggerQuestions);
+    const vectors = await embedTexts(texts, { shopId });
+    let cursor = 0;
+    vectorsByRecId = new Map();
+    for (const rec of candidates) {
+      const take = rec.triggerQuestions.length;
+      vectorsByRecId.set(rec.id, vectors.slice(cursor, cursor + take));
+      cursor += take;
+    }
+    // Drop this shop's superseded fingerprints (trigger edits would otherwise
+    // pile up dead entries), then evict oldest-first — a whole-cache clear()
+    // here would cold-start every tenant at once.
+    for (const key of cache.keys()) {
+      if (key.startsWith(`${shopId}:`)) cache.delete(key);
+    }
+    cache.set(cacheKey, vectorsByRecId);
+    while (cache.size > 500) {
+      const oldest = cache.keys().next().value;
+      if (oldest === undefined) break;
+      cache.delete(oldest);
+    }
+  }
+
+  const byRecId = vectorsByRecId;
+  return candidates.map((rec) => ({
+    id: rec.id,
+    title: rec.title,
+    productIds: rec.productIds,
+    collectionIds: rec.collectionIds,
+    vectors: byRecId.get(rec.id) ?? [],
+  }));
 }
 
 /** Fill the trigger-vector cache off the hot path (widget boot). Never throws.

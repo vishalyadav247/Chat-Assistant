@@ -81,50 +81,84 @@ export async function ingestSource(shopId: string, sourceId: string): Promise<In
       }
     }
 
-    // Replace rows (idempotent re-sync), then write embeddings via raw UPDATE —
-    // the Prisma client cannot touch Unsupported("vector") columns.
-    await db.knowledge.deleteMany({ where: { shopId, dataSourceId: source.id } });
-    const rowIds: string[] = [];
-    for (const chunk of chunks) {
-      const row = await db.knowledge.create({
-        data: { shopId, dataSourceId: source.id, topic: chunk.topic, body: chunk.body },
-      });
-      rowIds.push(row.id);
-    }
+    // Embed BEFORE touching the DB: a failed fetch or embed call must leave
+    // the previous chunk set fully intact and serving (hardening spec 23 §1.3).
+    let vectors: number[][] | null = null;
     if (chunks.length > 0 && runtimeConfig().openaiApiKey) {
-      const vectors = await embedTexts(chunks.map((c) => `${c.topic}. ${c.body}`), { shopId });
-      for (let i = 0; i < rowIds.length; i++) {
-        await db.$executeRaw(Prisma.sql`
-          UPDATE "knowledge" SET "embedding" = ${toSqlVector(vectors[i])}::vector
-          WHERE "id" = ${rowIds[i]} AND "shopId" = ${shopId}
-        `);
-      }
+      vectors = await embedTexts(chunks.map((c) => `${c.topic}. ${c.body}`), { shopId });
+    } else if (chunks.length > 0) {
+      // Chunks without embeddings can never be retrieved — make the skip
+      // loud instead of showing a green source with a dead index (§4.4).
+      const { logWarn } = await import("../log.server");
+      logWarn("embedding_skipped", "knowledge ingest ran without an OpenAI key — chunks are not retrievable", {
+        shopId,
+        sourceId: source.id,
+        chunks: chunks.length,
+      });
     }
 
     delete meta.error;
+    delete meta.consecutiveFailures;
     const status = meta.desiredStatus === "inactive" ? "inactive" : "active";
-    await db.dataSource.updateMany({
-      where: { id: source.id, shopId },
-      data: {
-        status,
-        chunkCount: chunks.length,
-        lastSyncedAt: new Date(),
-        metadata: meta as Prisma.InputJsonValue,
+
+    // Swap the chunk set atomically. The advisory xact lock serializes
+    // concurrent rebuilds of the same source (two overlapping runs would
+    // otherwise interleave delete/insert into duplicated chunks); the
+    // transaction means a mid-rebuild reader still sees the previous complete
+    // set, never a half-built one. Embeddings go in via raw UPDATE — the
+    // Prisma client cannot touch Unsupported("vector") columns.
+    await db.$transaction(
+      async (tx) => {
+        await tx.$executeRaw(Prisma.sql`
+          SELECT pg_advisory_xact_lock(hashtext(${shopId}), hashtext(${`knowledge:${source.id}`}))
+        `);
+        await tx.knowledge.deleteMany({ where: { shopId, dataSourceId: source.id } });
+        for (let i = 0; i < chunks.length; i++) {
+          const row = await tx.knowledge.create({
+            data: { shopId, dataSourceId: source.id, topic: chunks[i].topic, body: chunks[i].body },
+          });
+          if (vectors) {
+            await tx.$executeRaw(Prisma.sql`
+              UPDATE "knowledge" SET "embedding" = ${toSqlVector(vectors[i])}::vector
+              WHERE "id" = ${row.id} AND "shopId" = ${shopId}
+            `);
+          }
+        }
+        await tx.dataSource.updateMany({
+          where: { id: source.id, shopId },
+          data: {
+            status,
+            chunkCount: chunks.length,
+            lastSyncedAt: new Date(),
+            metadata: meta as Prisma.InputJsonValue,
+          },
+        });
       },
-    });
+      { timeout: 120_000, maxWait: 15_000 },
+    );
     return { sourceId: source.id, chunkCount: chunks.length };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    // The previous chunks survived (nothing is deleted before the transaction
+    // commits), so they keep serving as the last good set while the source is
+    // flagged. consecutiveFailures gates the weekly retry sweep (§1.2).
+    const keptChunks = await db.knowledge
+      .count({ where: { shopId, dataSourceId: source.id } })
+      .catch(() => 0);
+    const failures =
+      (typeof meta.consecutiveFailures === "number" ? meta.consecutiveFailures : 0) + 1;
     await db.dataSource
       .updateMany({
         where: { id: source.id, shopId },
         data: {
           status: "error",
-          // A failed crawl indexed nothing, so it must not keep consuming the
-          // "N of M pages used" meter (QA D9).
           metadata: {
             ...meta,
-            pagesUsed: 0,
+            // A failed FIRST crawl indexed nothing, so it must not consume the
+            // "N of M pages used" meter (QA D9). When old chunks were kept,
+            // the meter keeps reflecting them.
+            ...(keptChunks === 0 ? { pagesUsed: 0 } : {}),
+            consecutiveFailures: failures,
             error: message.slice(0, 500),
           } as Prisma.InputJsonValue,
         },
@@ -145,6 +179,24 @@ export async function syncFaqKnowledge(shopId: string): Promise<IngestResult> {
   if (!source) {
     source = await db.dataSource.create({
       data: { shopId, type: "faq", name: FAQ_SOURCE_NAME, status: "pending" },
+    });
+  }
+  return ingestSource(shopId, source.id);
+}
+
+export const STORE_INFO_SOURCE_NAME = "Store info";
+
+/**
+ * Store info → knowledge bridge: one `type=store_info` data source rebuilt
+ * from ShopSettings.storeInfo.about. Call after the text changes. Hidden from
+ * the Custom knowledge list — the merchant edits it in Instructions.
+ */
+export async function syncStoreInfoKnowledge(shopId: string): Promise<IngestResult> {
+  requireShopId(shopId);
+  let source = await db.dataSource.findFirst({ where: { shopId, type: "store_info" } });
+  if (!source) {
+    source = await db.dataSource.create({
+      data: { shopId, type: "store_info", name: STORE_INFO_SOURCE_NAME, status: "pending" },
     });
   }
   return ingestSource(shopId, source.id);
@@ -285,6 +337,25 @@ async function loadDocs(
       }
       const body = asString(meta.body);
       return body ? [{ topic: asString(meta.title) || name || "Store policy", body }] : [];
+    }
+    // Store info bridge (Instructions → General → Store info). One doc: the
+    // merchant's "About your store" text, headed by the store name so "who
+    // are you?" / "where are you based?" retrieve it. Empty text ⇒ zero chunks.
+    case "store_info": {
+      const [{ loadShopSettings }, shop] = await Promise.all([
+        import("../settings/save.server"),
+        db.shop.findUnique({ where: { id: shopId }, select: { name: true } }),
+      ]);
+      const settings = await loadShopSettings(shopId);
+      const about = settings.storeInfo.about.trim();
+      if (!about) return [];
+      const storeName = settings.storeInfo.name.trim() || shop?.name?.trim() || "";
+      return [
+        {
+          topic: storeName ? `About ${storeName}` : "About the store",
+          body: storeName ? `Store name: ${storeName}\n\n${about}` : about,
+        },
+      ];
     }
     case "faq": {
       const faqs = await db.faq.findMany({

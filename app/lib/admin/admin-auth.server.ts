@@ -18,6 +18,8 @@ export interface AdminUser {
   id: string;
   email: string;
   name: string;
+  /** owner | admin (QA-C3). Root (the env-managed account) is always an owner. */
+  role: string;
 }
 
 export interface AdminSessionInfo {
@@ -85,7 +87,7 @@ export async function readAdminSession(request: Request): Promise<AdminSessionIn
   await adminIdentity();
   const row = await db.adminSession.findUnique({
     where: { tokenHash: hashToken(raw) },
-    include: { admin: { select: { id: true, email: true, name: true } } },
+    include: { admin: { select: { id: true, email: true, name: true, role: true } } },
   });
   if (!row) return null;
   if (row.expiresAt.getTime() <= Date.now()) {
@@ -116,6 +118,25 @@ export async function requireAdminUser(request: Request): Promise<AdminSessionIn
     const search = url.search && !url.search.includes("_routes=") ? url.search : "";
     const next = adminSafeNext(pathname + search);
     throw redirect(`/admin/login${next === "/admin" ? "" : `?next=${encodeURIComponent(next)}`}`);
+  }
+  return session;
+}
+
+/**
+ * Owner = the env-managed root account (the company's own login) or an account
+ * whose role is "owner". Only owners may read Admin → Debug recordings, which
+ * hold shopper message text — PCD level 2 limits staff access (QA-C3).
+ */
+export function isOwnerAdmin(info: AdminSessionInfo): boolean {
+  const root = rootAdminEmail();
+  return info.admin.role === "owner" || (root !== "" && info.admin.email.toLowerCase() === root);
+}
+
+/** requireAdminUser + owner check; a non-owner gets a 403, never the data. */
+export async function requireOwnerAdmin(request: Request): Promise<AdminSessionInfo> {
+  const session = await requireAdminUser(request);
+  if (!isOwnerAdmin(session)) {
+    throw new Response("Only the account owner can open Debug recordings.", { status: 403 });
   }
   return session;
 }
@@ -258,7 +279,7 @@ export async function adminIdentity(): Promise<AdminUser | null> {
           where: { email: creds.email },
           update: {},
           create: { email: creds.email, name: "Admin", passwordHash: ROOT_HASH },
-          select: { id: true, email: true, name: true },
+          select: { id: true, email: true, name: true, role: true },
         });
         if (changed) {
           // Root's own sessions were issued against the OLD pair — including
@@ -346,7 +367,7 @@ export async function verifyAdminLogin(
     return invalid;
   }
   await clearFailures(row);
-  return { ok: true, admin: { id: row.id, email: row.email, name: row.name } };
+  return { ok: true, admin: { id: row.id, email: row.email, name: row.name, role: row.role } };
 }
 
 // ── Operator accounts (created at /admin/access) ───────────────────────────

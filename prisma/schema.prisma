@@ -676,6 +676,10 @@ model DataRequest {
   id            String    @id @default(cuid())
   shopId        String
   customerEmail String
+  /// From the customers/data_request payload, so the export matches contacts the
+  /// same way customer redact does: email OR Shopify customer id OR phone (QA-C4).
+  shopifyCustomerId String?
+  customerPhone     String?
   status        String    @default("pending") // pending | ready | completed
   requestedAt   DateTime  @default(now())
   dueAt         DateTime
@@ -783,6 +787,9 @@ model AdminUser {
   passwordHash String
   failedLogins Int            @default(0) // per-account lockout (parity with TeamMember)
   lockedUntil  DateTime?
+  /// owner | admin. Only an owner may read Admin → Debug recordings (shopper
+  /// text) — PCD level 2 staff-access limit (QA-C3, 2026-09-14).
+  role         String         @default("admin")
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
   sessions     AdminSession[]
@@ -825,6 +832,31 @@ model AppLog {
   @@index([shopId, occurredAt])
   @@index([level, event, occurredAt])
   @@map("app_logs")
+}
+
+// ── Turn traces (Admin → Debug, 2026-09-14) ────────────────────────────────
+// One row per RECORDED storefront chat turn: the shopper's message, the reply,
+// and the full decision trail INCLUDING the exact prompts sent to the LLM.
+// Recording is an operator switch (runtime config `turnTracingEnabled`,
+// off by default) — this exists to debug the pipeline against real
+// conversations, not as a log. Contains shopper text, so it is fully inside
+// GDPR scope: shop purge, customer redact and the retention job all delete it;
+// the retention job also enforces the 7-day / 20,000-row ceilings.
+model TurnTrace {
+  id             String   @id @default(cuid())
+  shopId         String
+  conversationId String
+  shopperText    String   @default("")
+  replyText      String   @default("")
+  /** done-frame outcome for the turn (curated | buy | question | … ). */
+  outcome        String   @default("")
+  /** { steps, summary, llmCalls: [{purpose, messages, response}] } ≤ 32 KB. */
+  payload        Json
+  createdAt      DateTime @default(now())
+
+  @@index([shopId, conversationId, createdAt])
+  @@index([createdAt])
+  @@map("turn_traces")
 }
 
 // ── Promo codes (spec 15 · discount coupons) — operator-owned, cross-tenant BY DESIGN ──

@@ -24,6 +24,7 @@ import { execSync } from "node:child_process";
 import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { qaFetch, waitForServer } from "./http";
 
 // Load .env manually (tsx does not) BEFORE importing app modules.
 for (const line of readFileSync(join(process.cwd(), ".env"), "utf-8").split(/\r?\n/)) {
@@ -130,7 +131,7 @@ async function get(
   extra: Params = {},
   opts: SignOpts = {},
 ): Promise<{ status: number; body: string; json: any; headers: Headers }> {
-  const res = await fetch(proxyUrl(path, shop, extra, opts), {
+  const res = await qaFetch(proxyUrl(path, shop, extra, opts), {
     headers: { Accept: "application/json" },
     signal: AbortSignal.timeout(30_000),
   });
@@ -152,7 +153,7 @@ async function post(
   opts: SignOpts = {},
   extra: Params = {},
 ): Promise<{ status: number; body: string; json: any; headers: Headers }> {
-  const res = await fetch(proxyUrl(path, shop, extra, opts), {
+  const res = await qaFetch(proxyUrl(path, shop, extra, opts), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: typeof payload === "string" ? payload : JSON.stringify(payload),
@@ -381,14 +382,8 @@ async function main(): Promise<void> {
   try {
     // ── 0. preconditions ────────────────────────────────────────────────────
     section("0. Preconditions");
-    let reachable = false;
-    try {
-      const probe = await fetch(`${BASE}/proxy/ping`, { signal: AbortSignal.timeout(10_000) });
-      reachable = probe.status === 400; // unsigned → appProxy rejects
-      await probe.text();
-    } catch {
-      reachable = false;
-    }
+    // Backoff gate (QA-T4): unsigned → appProxy rejects with 400 once the app is up.
+    const reachable = (await waitForServer(`${BASE}/proxy/ping`, { ready: (res) => res.status === 400 })).ok;
     if (!ok("server reachable at " + BASE, reachable, "unsigned /proxy/ping returns 400")) {
       throw new Error("dev server not reachable — start `npm run dev` first");
     }

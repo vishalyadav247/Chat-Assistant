@@ -63,7 +63,8 @@ We share data only with the services required to run the App:
 Beyond these, we disclose data only if required by law. Merchants are notified of any material change to our sub-processors via an update to this policy.
 <h3>9. Retention &amp; deletion</h3>
 <ul>
- 	<li><strong>Chat transcripts and contacts</strong> — the retention window is <strong>set by the merchant</strong> in Settings → Privacy &amp; Data Requests: 7, 30, 60 or 90 days, or <em>Keep forever</em>. The default is <em>Keep forever</em>, so a merchant who wants a shorter window must choose one. A nightly job deletes anything past the chosen window.</li>
+ 	<li><strong>Chat transcripts and contacts</strong> — the retention window is <strong>set by the merchant</strong> in Settings → Privacy &amp; Data Requests: 7, 30, 60 or 90 days, or <em>Keep forever</em>. Stores that install ChatConvert on or after [PUBLISH DATE] start at <strong>90 days</strong>; stores installed earlier keep the setting they already have. A merchant can change the window at any time, and a nightly job deletes anything past the chosen window.</li>
+ 	<li><strong>Diagnostic recordings</strong> — kept for at most <strong>7 days</strong>, then deleted automatically, and also deleted earlier with the conversation they belong to (retention window, shopper redaction, uninstall). See section 11.</li>
  	<li><strong>Operational logs</strong> — 14 days, then deleted.</li>
  	<li><strong>Store configuration, catalog mirror and knowledge sources</strong> — kept for as long as the App is installed.</li>
  	<li><strong>After uninstall</strong> — billing stops immediately, and there is a <strong>7-day grace period</strong> so an accidental uninstall or a quick reinstall does not lose the merchant's setup. After 7 days, <strong>every record belonging to that store is permanently deleted</strong> — conversations, messages, contacts, analytics, knowledge content and configuration. This is well inside the 30-day deadline Shopify sets for its <code>shop/redact</code> request.</li>
@@ -73,7 +74,7 @@ Beyond these, we disclose data only if required by law. Merchants are notified o
 <h3>10. Shopify compliance webhooks (GDPR)</h3>
 ChatConvert implements all three of Shopify's mandatory privacy webhooks:
 <ul>
- 	<li><code>customers/data_request</code> — we create a request the merchant can fulfil from the App's Privacy page within Shopify's 30-day deadline, producing an export of every contact record, conversation, full message transcript and unresolved question tied to that customer's email.</li>
+ 	<li><code>customers/data_request</code> — we create a request the merchant can fulfil from the App's Privacy page within Shopify's 30-day deadline, producing an export of every contact record, conversation, full message transcript and unresolved question tied to that customer — matched by the email, Shopify customer ID or phone number in Shopify's request. The export does <strong>not</strong> include diagnostic recordings (section 11): they hold no data beyond the transcript already exported, exist for at most 7 days, and are deleted with the shopper's conversations on redaction.</li>
  	<li><code>customers/redact</code> — we permanently delete that shopper's conversations, messages, contact record and any captured email for the requesting store.</li>
  	<li><code>shop/redact</code> — we permanently delete all of the store's data, as described in section 9.</li>
 </ul>
@@ -84,6 +85,7 @@ ChatConvert implements all three of Shopify's mandatory privacy webhooks:
  	<li>API keys and provider secrets are encrypted at rest, never returned to the browser, and never written to logs.</li>
  	<li>The App authenticates with Shopify session tokens; we never collect or store Shopify login credentials. Admin sessions use HttpOnly cookies, team passwords are stored only as hashes, and repeated failed logins lock the account.</li>
  	<li>Storefront requests are verified through Shopify's signed app-proxy mechanism, and every Shopify webhook is HMAC-verified before any processing.</li>
+ 	<li><strong>Diagnostic recordings (support only).</strong> To investigate a reported problem with the assistant's answers, a senior Progryss engineer can switch on recording for <strong>one named store</strong> for a limited time (1, 4 or 24 hours; it switches itself off). While on, each chat turn on that store is saved with the shopper's message, the assistant's reply, the steps the assistant took and the instructions sent to the AI model — which contain the conversation so far and snippets of the store's own content. Recording is off by default, is never enabled for all stores at once, can be read only by owner-level Progryss staff, and every view is logged. Recordings are kept for at most 7 days (section 9).</li>
  	<li>Data may be processed on servers outside your country (including the United States). Where required, transfers rely on recognised safeguards such as Standard Contractual Clauses.</li>
 </ul>
 No system is perfectly secure. If we become aware of a breach affecting personal data, we will notify affected merchants without undue delay and cooperate with them as the controller.

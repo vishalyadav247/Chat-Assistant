@@ -17,10 +17,12 @@ import { THEME_COOKIE, isThemePref } from "./theme";
 //
 // NOT a security boundary — every loader/action calls requireAdminUser.
 
-const NAV: { href: string; label: string; icon: IconName; end?: boolean }[] = [
+const NAV: { href: string; label: string; icon: IconName; end?: boolean; ownerOnly?: boolean }[] = [
   { href: "/admin", label: "Overview", icon: "home", end: true },
   { href: "/admin/usage", label: "Usage", icon: "chart" },
   { href: "/admin/logs", label: "Logs", icon: "alert" },
+  // Owner-only (QA-C3): filtered out of the rendered nav for other admins.
+  { href: "/admin/debug", label: "Debug", icon: "bug", ownerOnly: true },
   { href: "/admin/ai", label: "AI model", icon: "wand" },
   { href: "/admin/plans", label: "Plans", icon: "card" },
   { href: "/admin/promo-codes", label: "Coupons", icon: "tag" },
@@ -47,7 +49,8 @@ export function AdminShell(props: { adminEmail: string; children: ReactNode }) {
 
   // The layout loader read the cookie server-side, so the first paint is
   // already in the right theme — no flash, no blocking inline script.
-  const layout = useRouteLoaderData("routes/admin") as { theme?: string } | undefined;
+  const layout = useRouteLoaderData("routes/admin") as { theme?: string; isOwner?: boolean } | undefined;
+  const nav = NAV.filter((item) => !item.ownerOnly || layout?.isOwner);
   const [theme, setTheme] = useState<ThemePref>(
     isThemePref(layout?.theme) ? layout.theme : "system",
   );
@@ -122,7 +125,7 @@ export function AdminShell(props: { adminEmail: string; children: ReactNode }) {
           </div>
 
           <nav className="cca-nav" ref={navRef}>
-            {NAV.map((item) => {
+            {nav.map((item) => {
               const active = item.end
                 ? location.pathname === item.href
                 : location.pathname.startsWith(item.href);

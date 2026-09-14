@@ -181,6 +181,18 @@ async function main() {
     await db.unresolvedQuestion.create({
       data: { shopId: a, conversationId: convo.id, question: `Unresolved ${secret}` },
     });
+    // Admin → Debug recording (2026-09-14): holds shopper text, must be erased
+    // with the customer and purged with the shop.
+    await db.turnTrace.create({
+      data: {
+        shopId: a,
+        conversationId: convo.id,
+        shopperText: `Hi, ${secret}`,
+        replyText: `Reply about ${secret}`,
+        outcome: "question",
+        payload: { steps: [], llmCalls: [] },
+      },
+    });
     return { contact, convo };
   };
   const x = await seedCustomer(X_EMAIL, X_SECRET, { shopifyCustomerId: "9001" });
@@ -225,6 +237,16 @@ async function main() {
   check(
     "unresolved question X deleted",
     (await db.unresolvedQuestion.count({ where: { shopId: a, conversationId: x.convo.id } })) === 0,
+  );
+  check(
+    "debug turn recording X deleted",
+    (await db.turnTrace.count({ where: { shopId: a, conversationId: x.convo.id } })) === 0,
+  );
+  check(
+    "debug turn recordings Y/Z intact",
+    (await db.turnTrace.count({
+      where: { shopId: a, conversationId: { in: [y.convo.id, z.convo.id] } },
+    })) === 2,
   );
   check(
     "DataRequest X email scrubbed",
@@ -286,6 +308,41 @@ async function main() {
   const afterDownload = await db.dataRequest.findUnique({ where: { id: requestY.id } });
   check("request completed after download", afterDownload?.status === "completed" && afterDownload.completedAt !== null);
 
+  // ── 2b. email-less customer, id-only (QA-C4) ──────────────────────────────
+  // Contacts store the customer id as a GID; the webhooks send the NUMERIC id.
+  // The export and redact share one predicate, so both must reach this contact.
+  console.log("\n2b. email-less customer matched by Shopify id (export + redact)…");
+  const W_SECRET = "W-SECRET-idonly-7731";
+  const contactW = await db.contact.create({
+    data: { shopId: a, name: "W", type: "customer", shopifyCustomerId: "gid://shopify/Customer/9101" },
+  });
+  const convoW = await db.conversation.create({
+    data: { shopId: a, sessionId: "sess-w", contactId: contactW.id },
+  });
+  await db.message.create({
+    data: { shopId: a, conversationId: convoW.id, role: "in", author: "shopper", content: W_SECRET },
+  });
+  const requestW = await db.dataRequest.create({
+    data: { shopId: a, customerEmail: "", shopifyCustomerId: "9101", dueAt: new Date(Date.now() + 30 * day) },
+  });
+  const exportW = await buildDataRequestExport(a, requestW.id);
+  check(
+    "id-only data request exports the GID contact's transcript",
+    exportW.contacts.length === 1 && JSON.stringify(exportW).includes(W_SECRET),
+    `contacts=${exportW.contacts.length}`,
+  );
+  await customerRedact([{ data: { shopDomain: DOMAIN_A, customerId: "9101" } as never }]);
+  check(
+    "id-only customers/redact erases the same contact + messages",
+    (await db.contact.count({ where: { shopId: a, id: contactW.id } })) === 0 &&
+      (await db.message.count({ where: { shopId: a, conversationId: convoW.id } })) === 0,
+  );
+  check(
+    "id-only redact scrubs the matching data request's identifiers",
+    (await db.dataRequest.findUnique({ where: { id: requestW.id } }))?.shopifyCustomerId === null,
+  );
+  check("id-only redact leaves customer Y intact", (await db.contact.count({ where: { shopId: a, email: Y_EMAIL } })) === 1);
+
   // ── 3. retention purge (per-shop window) ──────────────────────────────────
   console.log("\n3. retention-purge job handler (shop A retentionDays=30)…");
   const oldConvo = await db.conversation.create({
@@ -297,9 +354,23 @@ async function main() {
   await db.unresolvedQuestion.create({
     data: { shopId: a, conversationId: oldConvo.id, question: "old unresolved" },
   });
+  // A debug recording OLDER than the global 7-day trace window (2026-09-14).
+  await db.turnTrace.create({
+    data: {
+      shopId: a,
+      conversationId: oldConvo.id,
+      shopperText: "old transcript",
+      payload: { steps: [], llmCalls: [] },
+      createdAt: new Date(Date.now() - 10 * day),
+    },
+  });
   await retentionPurge([{ data: {} as never }]);
   check("40-day-old conversation purged", (await db.conversation.count({ where: { shopId: a, id: oldConvo.id } })) === 0);
   check("old messages purged", (await db.message.count({ where: { shopId: a, conversationId: oldConvo.id } })) === 0);
+  check(
+    "old debug recording purged (7-day trace window)",
+    (await db.turnTrace.count({ where: { shopId: a, conversationId: oldConvo.id } })) === 0,
+  );
   check(
     "old unresolved question purged",
     (await db.unresolvedQuestion.count({ where: { shopId: a, conversationId: oldConvo.id } })) === 0,
@@ -339,6 +410,7 @@ async function main() {
     ["shop_settings", await db.shopSettings.count({ where: { shopId: a } })],
     ["conversations", await db.conversation.count({ where: { shopId: a } })],
     ["messages", await db.message.count({ where: { shopId: a } })],
+    ["turn_traces", await db.turnTrace.count({ where: { shopId: a } })],
     ["contacts", await db.contact.count({ where: { shopId: a } })],
     ["analytics_events", await db.analyticsEvent.count({ where: { shopId: a } })],
     ["metrics_daily", await db.metricsDaily.count({ where: { shopId: a } })],
@@ -387,6 +459,25 @@ async function main() {
       (await db.message.count({ where: { shopId: b } })) === 1 &&
       (await db.dataRequest.count({ where: { shopId: b } })) === 1,
   );
+
+  // ── 4b. a debug trace saved AFTER the purge dies in the nightly sweep ─────
+  // (QA-C4) Turn capture saves fire-and-forget after the turn, so a row can
+  // land after cleanupShop. purgeTurnTraces drops rows of uninstalled shops.
+  console.log("\n4b. late debug trace after cleanupShop is swept by purgeTurnTraces…");
+  const { purgeTurnTraces } = await import("../app/lib/jobs/handlers.server");
+  await db.turnTrace.create({
+    data: { shopId: a, conversationId: "late-convo", shopperText: "late shopper text", payload: {} },
+  });
+  const liveBTrace = await db.turnTrace.create({
+    data: { shopId: b, conversationId: convoB.id, shopperText: "shop B live", payload: {} },
+  });
+  await purgeTurnTraces();
+  check("late trace for the uninstalled shop is gone", (await db.turnTrace.count({ where: { shopId: a } })) === 0);
+  check(
+    "installed shop B's recent trace kept (tenancy)",
+    (await db.turnTrace.count({ where: { id: liveBTrace.id } })) === 1,
+  );
+  await db.turnTrace.deleteMany({ where: { id: liveBTrace.id } });
 
   // ── 5. webhook-driven jobs never materialise a Shop row (QA D11a) ─────────
   console.log("\n5. unknown-shop webhook jobs must not create a Shop row…");

@@ -19,6 +19,12 @@ for (const line of readFileSync(join(process.cwd(), ".env"), "utf-8").split(/\r?
     process.env[match[1]] = match[2].replace(/^["']|["']$/g, "");
   }
 }
+// The store-info chain (instructions/settings save → files.server) imports
+// shopify.server, which throws on an empty app URL / API key (QA-T1).
+process.env.SHOPIFY_API_KEY ||= "qa-placeholder-key";
+process.env.SHOPIFY_API_SECRET ||= "qa-placeholder-secret";
+process.env.SHOPIFY_APP_URL ||= "http://localhost:3000";
+process.env.SCOPES ||= "read_products";
 
 const SHOP_DOMAIN = "plan-gates-test.myshopify.com";
 let passed = 0;

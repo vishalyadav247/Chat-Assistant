@@ -1,4 +1,6 @@
+import type { Prisma } from "@prisma/client";
 import db from "../db.server";
+import { shopSettingsSchema } from "./settings/schemas";
 import { enqueue } from "./jobs/queue.server";
 import { JOBS } from "./jobs/handlers.server";
 import { resolveShopId } from "./tenancy.server";
@@ -7,6 +9,9 @@ import { logError } from "./log.server";
 // Install/afterAuth bootstrap (specs 02/08): shop row, default persona +
 // guardrails + seeded app recommendations, initial catalog sync. Idempotent —
 // afterAuth also fires on token refresh.
+
+/** Default transcript retention for stores installing after 2026-09-14 (QA-P4). */
+export const NEW_INSTALL_RETENTION_DAYS = 90;
 
 const DEFAULT_GUARDRAILS = {
   answerOnlyFromKnowledge: true,
@@ -49,6 +54,21 @@ export async function onShopAuthenticated(shopDomain: string): Promise<void> {
     const guardrails = await db.guardrails.findUnique({ where: { shopId } });
     if (!guardrails) {
       await db.guardrails.create({ data: { shopId, ...DEFAULT_GUARDRAILS } });
+    }
+
+    // Transcript retention defaults to 90 days for NEW installs (QA-P4, owner
+    // decision 2026-09-14). `before === null` means this store had no row until
+    // this authentication — afterAuth also fires on token refresh, so keying on
+    // "no settings row" would silently move existing stores off "Keep forever".
+    // Existing stores keep whatever they have; merchants can change it anytime.
+    if (!before) {
+      const settingsRow = await db.shopSettings.findUnique({ where: { shopId }, select: { id: true } });
+      if (!settingsRow) {
+        const settings = shopSettingsSchema.parse({ retentionDays: NEW_INSTALL_RETENTION_DAYS });
+        await db.shopSettings.create({
+          data: { shopId, settings: settings as unknown as Prisma.InputJsonObject },
+        });
+      }
     }
 
     // Seed app recommendations (spec 08) once.

@@ -42,3 +42,5 @@ shopify.app.*.toml
 # A binary in git conflicts on every merge that touches it, and the diff is
 # unreadable, so the generator is the source of truth and this is not tracked.
 scripts/qa/test-matrix.xlsx
+# Conversation-eval run outputs (npm run eval:conversations) — local baselines.
+scripts/qa/results/

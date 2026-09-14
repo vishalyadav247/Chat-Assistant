@@ -5,7 +5,9 @@ import { resolveShopId } from "../lib/tenancy.server";
 import { runPipeline } from "../lib/pipeline/index.server";
 import { pageContextSchema } from "../lib/widget/page-context.server";
 import { sseResponse } from "../lib/sse.server";
-import { createTimingTrace, type TimingTrace } from "../lib/pipeline/trace.server";
+import { createTimingTrace, createTrace, type TimingTrace } from "../lib/pipeline/trace.server";
+import { observeTurn, TurnCollector } from "../lib/pipeline/turn-capture.server";
+import { isTracingShop } from "../lib/admin/turn-tracing.server";
 import { logWarn } from "../lib/log.server";
 
 // Storefront chat endpoint (POST /apps/chatconvert/chat → SSE stream).
@@ -37,7 +39,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   const shopId = await resolveShopId(session.shop);
+  // Admin → Debug: while the operator records THIS store (per-store allowlist,
+  // time-limited, production-locked — QA-C3), run the FULL decision trace and
+  // capture the exact LLM prompts; the finished turn persists to turn_traces.
+  // The check is a ≤5 s cached read that fails closed; the default path below
+  // is byte-for-byte what it always was.
+  const recording = await isTracingShop(shopId);
   const timing = createTimingTrace();
+  const trace = recording ? createTrace(true) : timing;
   const frames = runPipeline(
     {
       shopId,
@@ -48,10 +57,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       pageContext: parsed.data.pageContext,
       userAgent: request.headers.get("user-agent")?.slice(0, 300) ?? undefined,
     },
-    timing,
+    trace,
   );
 
-  return sseResponse(logSlowTurns(frames, timing, shopId), request.signal);
+  const observed = recording
+    ? observeTurn({
+        shopId,
+        shopperText: parsed.data.message,
+        frames,
+        trace,
+        collector: new TurnCollector(),
+      })
+    : logSlowTurns(frames, timing, shopId);
+  return sseResponse(observed, request.signal);
 };
 
 /** A turn slower than this is worth a log line naming the stage that ate it. */

@@ -56,6 +56,12 @@ try {
 } catch {
   /* no .env — rely on ambient environment */
 }
+// App modules transitively import shopify.server, which throws on an empty app
+// URL / API key when run outside `shopify app dev` (QA-T1).
+process.env.SHOPIFY_API_KEY ||= "qa-placeholder-key";
+process.env.SHOPIFY_API_SECRET ||= "qa-placeholder-secret";
+process.env.SHOPIFY_APP_URL ||= "http://localhost:3000";
+process.env.SCOPES ||= "read_products";
 
 const args = process.argv.slice(2);
 const FORCE = args.includes("--force");
@@ -123,7 +129,7 @@ async function main() {
           where: { shopId },
           select: {
             id: true, title: true, description: true, productType: true, vendor: true,
-            tags: true, metafieldText: true, contentHash: true,
+            tags: true, variants: true, metafieldText: true, contentHash: true,
           },
         });
         return rows.map((p) => {

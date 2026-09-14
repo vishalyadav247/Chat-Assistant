@@ -52,7 +52,7 @@ export function AssistantPill(props: { online: boolean }) {
           animation: props.online ? "cc-pulse 2s ease-in-out infinite" : undefined,
         }}
       />
-      {props.online ? "Assistant online" : "Assistant off"}
+      {props.online ? "Assistant on" : "Assistant off"}
     </span>
   );
 }

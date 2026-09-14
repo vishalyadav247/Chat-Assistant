@@ -45,7 +45,7 @@
 ## Tab: Privacy & Data Requests (UI here; workflows in 17)
 
 - **Customer data requests**: explainer (Shopify sends requests; ChatConvert compiles chat data for that email; **30-day SLA**), request list (date, customer, status, Download export) + empty state.
-- **Data retention**: "Keep transcripts for" select Forever/90/60/30/7 days + Save; deletion runs daily; independent of Shopify webhooks.
+- **Data retention**: "Keep transcripts for" select Forever/90/60/30/7 days + Save (new installs start at 90 days, QA-P4); deletion runs daily; independent of Shopify webhooks.
 - **How redaction works** info card (customers/redact deletes that customer's conversations; shop/redact ~48h after uninstall purges all; only stored customer info = optional email).
 
 ## Implementation deltas (2026-08-06 build)

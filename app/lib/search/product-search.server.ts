@@ -321,7 +321,13 @@ export function normalizeNumberIds(text: string): string {
 function messageTerms(message: string, exclude: Set<string>, priceMax: number | null): string[] {
   const out: string[] = [];
   const priceToken = priceMax !== null ? String(Math.round(priceMax)) : "";
-  for (const word of normalizeNumberIds(message).toLowerCase().split(/[^a-z0-9]+/)) {
+  // Unicode-aware split (spec 23 §3.10): the old [^a-z0-9] class treated every
+  // accented or non-Latin character as a separator, so "bracelet élégant"
+  // shattered into garbage fragments ("l", "gant") that could false-match, and
+  // Hindi/CJK messages tokenized to nothing. Whole non-English words simply
+  // find no rows in the English-stemmed index — an honest miss the vector lane
+  // then carries — which beats fragments scoring bogus coverage.
+  for (const word of normalizeNumberIds(message).toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
     if (word.length === 0 || FILLER.has(word) || exclude.has(word)) continue;
     // "bracelets" when the router already said "bracelet": the same concept
     // would otherwise be counted twice (once per tier) for every product.
@@ -341,8 +347,9 @@ function messageTerms(message: string, exclude: Set<string>, priceMax: number | 
 // ── Typo tolerance ──────────────────────────────────────────────────────────
 // Shoppers misspell ("rulling", "sugget"). A message word whose stem doesn't
 // exist anywhere in this shop's catalog is snapped to the closest catalog
-// lexeme by trigram similarity (≥ 0.5) — pure JS over a per-shop lexicon from
-// ts_stat, cached 10 min. No extension, no LLM call.
+// lexeme by trigram similarity (≥ 0.6, with a clear-winner margin over the
+// runner-up) — pure JS over a per-shop lexicon from ts_stat, cached 10 min.
+// No extension, no LLM call.
 
 declare global {
   // eslint-disable-next-line no-var
@@ -432,20 +439,89 @@ async function correctTerms(shopId: string, terms: string[]): Promise<string[]> 
     if (lexicon.words.has(term)) continue; // spelled like something in the catalog
     // Plural/inflection guard: "bracelets" vs "bracelet" — same stem, no fix.
     if (lexicon.words.has(term.replace(/s$/, "")) || lexicon.words.has(term + "s")) continue;
+    // Floor 0.6 with a clear-winner margin (hardening spec 23 §3.6): at 0.5
+    // with no margin, a real word for something the shop doesn't sell
+    // ("anklet") could snap to a near-spelling of an unrelated catalog word —
+    // confident retrieval of the wrong product instead of an honest "we don't
+    // carry that". An ambiguous typo (two lexemes near-tied) is left alone too.
     let best = "";
-    let bestScore = 0.5;
+    let bestScore = 0;
+    let runnerUp = 0;
     for (const word of lexicon.list) {
       if (Math.abs(word.length - term.length) > 2) continue;
       const score = trigramSimilarity(term, word);
       if (score > bestScore) {
+        runnerUp = bestScore;
         bestScore = score;
         best = word;
+      } else if (score > runnerUp && word !== best) {
+        runnerUp = score;
       }
     }
-    if (best) fixes.set(term, best);
+    if (best && bestScore >= 0.6 && bestScore - runnerUp >= 0.08) fixes.set(term, best);
   }
   if (fixes.size === 0) return terms;
   return terms.map((t) => fixes.get(t) ?? t);
+}
+
+function tsqFor(term: { t: string; phrase: boolean }): Prisma.Sql {
+  return term.phrase
+    ? Prisma.sql`phraseto_tsquery('english', ${term.t})`
+    : Prisma.sql`plainto_tsquery('english', ${term.t})`;
+}
+
+// ── Per-shop document-frequency cache (spec 23 §4.3) ────────────────────────
+// Same 10-minute lifecycle and eviction shape as the lexicon cache above. A
+// repeat of a term within the TTL costs no SQL; only terms not yet counted
+// are added to the aggregate scan.
+
+declare global {
+  // eslint-disable-next-line no-var
+  var dfCacheStore: Map<string, { at: number; n: number; df: Map<string, number> }> | undefined;
+}
+
+async function termDocumentFrequencies(
+  shopId: string,
+  terms: { t: string; phrase: boolean }[],
+): Promise<{ n: number; df: Map<string, number> } | null> {
+  if (!global.dfCacheStore) global.dfCacheStore = new Map();
+  const store = global.dfCacheStore;
+  let entry = store.get(shopId);
+  if (!entry || Date.now() - entry.at >= LEXICON_TTL_MS) {
+    entry = { at: Date.now(), n: -1, df: new Map() };
+    store.delete(shopId);
+    store.set(shopId, entry);
+    if (store.size > LEXICON_MAX_ENTRIES) {
+      for (const key of [...store.keys()].slice(0, store.size - LEXICON_MAX_ENTRIES)) {
+        store.delete(key);
+      }
+    }
+  }
+  const cache = entry;
+  const keyOf = (term: { t: string; phrase: boolean }) => `${term.phrase ? "p" : "w"}:${term.t}`;
+  const seen = new Set<string>();
+  const missing = terms.filter((term) => {
+    const key = keyOf(term);
+    if (cache.df.has(key) || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  if (cache.n >= 0 && missing.length === 0) return { n: cache.n, df: cache.df };
+
+  const dfExprs = missing.map(
+    (term, i) =>
+      Prisma.sql`count(*) FILTER (WHERE "searchText" @@ ${tsqFor(term)})::int AS d${Prisma.raw(String(i))}`,
+  );
+  const row = (
+    await db.$queryRaw<Record<string, number>[]>(Prisma.sql`
+      SELECT count(*)::int AS n${missing.length > 0 ? Prisma.sql`, ${Prisma.join(dfExprs, ", ")}` : Prisma.empty}
+      FROM "products"
+      WHERE "shopId" = ${shopId} AND "learnEnabled" = true AND "status" = 'active' AND "publishedOnline" = true`)
+  )[0];
+  if (!row) return null;
+  cache.n = Number(row.n ?? 0);
+  missing.forEach((term, i) => cache.df.set(keyOf(term), Number(row[`d${i}`] ?? 0)));
+  return { n: cache.n, df: cache.df };
 }
 
 /** OR of one plainto_tsquery per term (stemmed). Empty terms → null. */
@@ -468,15 +544,33 @@ async function keywordSearch(
 ): Promise<RawRow[]> {
   // Router keywords get the same identity-number spelling as the index — the
   // model is as likely to echo the shopper's "no 5" as to write "number 5".
-  const routerTerms = keywords
+  const rawRouterTerms = keywords
     .map((k) => normalizeNumberIds(k).trim().toLowerCase())
     .filter((k) => k.length > 0);
+  // Typo correction covers router keywords too (hardening spec 23 §2.5): the
+  // router faithfully echoes the shopper's misspelling ("rulling"), and the
+  // message tier EXCLUDES router-echoed words — so without this, the typo sat
+  // uncorrected in the high-weight tier and the correction layer never saw it.
+  // Single words only; multi-word phrases would snap against single lexemes.
+  const routerTerms = await (async () => {
+    const single = rawRouterTerms.filter((t) => !t.includes(" "));
+    if (single.length === 0) return rawRouterTerms;
+    const corrected = await correctTerms(shopId, single);
+    const fixes = new Map(single.map((t, i) => [t, corrected[i]]));
+    return rawRouterTerms.map((t) => fixes.get(t) ?? t);
+  })().catch((error) => {
+    logError("term_correction_error", error, { shopId });
+    return rawRouterTerms;
+  });
+  // The message-tier exclusion holds BOTH spellings, so a corrected router
+  // term neither re-enters the message tier as the raw typo nor double-counts.
+  const excludeFromMessage = new Set([...rawRouterTerms, ...routerTerms]);
   const msgTerms = await correctTerms(
     shopId,
-    messageTerms(message, new Set(routerTerms), priceMax),
+    messageTerms(message, excludeFromMessage, priceMax),
   ).catch((error) => {
     logError("term_correction_error", error, { shopId });
-    return messageTerms(message, new Set(routerTerms), priceMax);
+    return messageTerms(message, excludeFromMessage, priceMax);
   });
   // Adjacent shopper words ("ruling number", "number 8") as phrases: a product
   // where the words sit TOGETHER outranks ones that merely contain both
@@ -506,42 +600,32 @@ async function keywordSearch(
     ...msgTerms.map((t) => ({ t, w: 1, phrase: false })),
     ...phraseTerms.map((t) => ({ t, w: 2, phrase: true })),
   ];
-  const tsq = (term: { t: string; phrase: boolean }) =>
-    term.phrase
-      ? Prisma.sql`phraseto_tsquery('english', ${term.t})`
-      : Prisma.sql`plainto_tsquery('english', ${term.t})`;
+  const tsq = tsqFor;
 
   // Phrases are built from adjacent shopper words after filler removal, so
   // adjacency can be accidental ("sign is Cancer" → "sign cancer"). A phrase
   // only counts toward coverage when it narrows the catalog beyond its own
   // rarest word: that word must match ≥ 4 products and the pair at most half
   // of them — "number 8" (number/8 in dozens, the pair in two) yes; "sign
-  // cancer" ("cancer" alone already narrows to two) no. One cheap
-  // document-frequency scan per turn.
+  // cancer" ("cancer" alone already narrows to two) no. Document frequencies
+  // are cached per shop with the lexicon's 10-min lifecycle (spec 23 §4.3):
+  // the aggregate-FILTER scan is O(catalog × terms) with no GIN help, and it
+  // used to run on nearly every product turn.
   if (phraseTerms.length > 0) {
-    const dfExprs = allTerms.map(
-      (term, i) => Prisma.sql`count(*) FILTER (WHERE "searchText" @@ ${tsq(term)})::int AS d${Prisma.raw(String(i))}`,
-    );
-    const dfRow = (
-      await db.$queryRaw<Record<string, number>[]>(Prisma.sql`
-        SELECT count(*)::int AS n, ${Prisma.join(dfExprs, ", ")}
-        FROM "products"
-        WHERE "shopId" = ${shopId} AND "learnEnabled" = true AND "status" = 'active' AND "publishedOnline" = true`)
-    )[0];
-    const n = Number(dfRow?.n ?? 0);
-    if (n > 0) {
-      const dfOf = (t: string) => {
-        const idx = allTerms.findIndex((x) => x.t === t && !x.phrase);
-        return idx >= 0 ? Number(dfRow[`d${idx}`] ?? 0) : 0;
-      };
-      allTerms.forEach((term, i) => {
-        if (!term.phrase) return;
-        const df = Number(dfRow[`d${i}`] ?? 0);
+    const stats = await termDocumentFrequencies(shopId, allTerms).catch((error) => {
+      logError("df_scan_error", error, { shopId });
+      return null;
+    });
+    if (stats && stats.n > 0) {
+      const dfOf = (t: string) => stats.df.get(`w:${t}`) ?? 0;
+      for (const term of allTerms) {
+        if (!term.phrase) continue;
+        const df = stats.df.get(`p:${term.t}`) ?? 0;
         const [a, b] = term.t.split(" ");
         const minWordDf = Math.min(dfOf(a), dfOf(b));
         const informative = df > 0 && minWordDf >= 4 && df * 2 <= minWordDf;
         term.w = informative ? 2 : 0;
-      });
+      }
     }
   }
   // Field-aware per-term score: full weight when the word sits in the title /

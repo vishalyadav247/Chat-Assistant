@@ -4,7 +4,7 @@
  *   npm run qa:preflight
  *
  * Several suites deliberately mutate GLOBAL state — the golden eval parks the
- * `[qa-fixture]` curated answers, overage.test.ts rewrites `admin:plans`,
+ * QA-fixture curated answers, overage.test.ts rewrites `admin:plans`,
  * model-portability writes AI overrides — and each restores it in a `finally`.
  * A `finally` does not run when the process is killed, so an interrupted run
  * leaves the environment altered and the NEXT run fails for reasons that have
@@ -42,22 +42,89 @@ function report(name: string, clean: boolean, detail: string, fixed?: string): v
 async function main(): Promise<void> {
   const db = (await import("../../app/db.server")).default;
 
-  // ── 1. Curated fixtures parked by an interrupted golden eval ──────────────
-  const parked = await db.curatedAnswer.count({
-    where: { talkingPoints: { contains: "[qa-fixture]" }, status: "draft" },
-  });
-  if (parked > 0 && FIX) {
-    await db.curatedAnswer.updateMany({
-      where: { talkingPoints: { contains: "[qa-fixture]" }, status: "draft" },
-      data: { status: "published" },
-    });
+  // ── 1. Curated fixtures in their INTENDED state (QA-T3) ───────────────────
+  // Identified by question on the dev shop. The old check republished every
+  // tagged draft — including the draft-on-purpose "black friday" fixture,
+  // which is how a reply saying "Draft answer, should not be served" went live.
+  const {
+    DEV_SHOP_DOMAIN,
+    PUBLISHED_FIXTURE_QUESTIONS,
+    DRAFT_FIXTURE_QUESTIONS,
+    LEGACY_FIXTURE_TAG,
+    stripLegacyTag,
+  } = await import("./curated-fixtures");
+  const devShop = await db.shop.findUnique({ where: { domain: DEV_SHOP_DOMAIN }, select: { id: true } });
+  if (devShop) {
+    const shopId = devShop.id;
+    const parkedWhere = { shopId, question: { in: PUBLISHED_FIXTURE_QUESTIONS }, status: "draft" };
+    const leakedDraftWhere = { shopId, question: { in: DRAFT_FIXTURE_QUESTIONS }, status: "published" };
+    const [parked, leakedDrafts] = await Promise.all([
+      db.curatedAnswer.count({ where: parkedWhere }),
+      db.curatedAnswer.count({ where: leakedDraftWhere }),
+    ]);
+    if (FIX) {
+      if (parked > 0) await db.curatedAnswer.updateMany({ where: parkedWhere, data: { status: "published" } });
+      if (leakedDrafts > 0) await db.curatedAnswer.updateMany({ where: leakedDraftWhere, data: { status: "draft" } });
+    }
+    report(
+      "curated fixtures are in their intended draft / published state",
+      parked === 0 && leakedDrafts === 0,
+      `${parked} parked as draft by an interrupted golden run, ${leakedDrafts} draft-on-purpose fixture(s) published`,
+      FIX && (parked > 0 || leakedDrafts > 0) ? `republished ${parked}, unpublished ${leakedDrafts}` : undefined,
+    );
+
+    // ── 1b. No fixture marker / "draft" wording in shopper-visible text ─────
+    // Curated talking points are served verbatim; FAQ answers are shown in the
+    // widget. Anything published must read like a real store answer.
+    const [curatedLeaks, faqLeaks] = await Promise.all([
+      db.curatedAnswer.findMany({
+        where: {
+          shopId,
+          status: "published",
+          OR: [
+            { talkingPoints: { contains: LEGACY_FIXTURE_TAG } },
+            { talkingPoints: { contains: "should not be served", mode: "insensitive" } },
+            { talkingPoints: { contains: "draft answer", mode: "insensitive" } },
+          ],
+        },
+        select: { id: true, question: true, talkingPoints: true },
+      }),
+      db.faq.findMany({
+        where: {
+          shopId,
+          status: "published",
+          OR: [
+            { answerHtml: { contains: LEGACY_FIXTURE_TAG } },
+            { question: { contains: LEGACY_FIXTURE_TAG } },
+            { answerHtml: { contains: "should not be served", mode: "insensitive" } },
+          ],
+        },
+        select: { id: true, question: true },
+      }),
+    ]);
+    const markerRows = curatedLeaks.filter((row) => row.talkingPoints.includes(LEGACY_FIXTURE_TAG));
+    if (FIX) {
+      for (const row of markerRows) {
+        await db.curatedAnswer.update({
+          where: { id: row.id, shopId },
+          data: { talkingPoints: stripLegacyTag(row.talkingPoints) },
+        });
+      }
+    }
+    report(
+      "no QA-fixture marker or draft wording in published shopper-visible text",
+      curatedLeaks.length === 0 && faqLeaks.length === 0,
+      [
+        ...curatedLeaks.map((row) => `curated "${row.question}"`),
+        ...faqLeaks.map((row) => `FAQ "${row.question}"`),
+      ].join(", "),
+      FIX && markerRows.length > 0
+        ? `stripped the marker from ${markerRows.length} curated answer(s); anything else needs a manual edit`
+        : undefined,
+    );
+  } else {
+    console.log(`  NOTE  ${DEV_SHOP_DOMAIN} not seeded — fixture checks skipped`);
   }
-  report(
-    "[qa-fixture] curated answers are published",
-    parked === 0,
-    `${parked} still parked as draft`,
-    parked > 0 && FIX ? `republished ${parked}` : undefined,
-  );
 
   // ── 2. Plan config left mid-test ─────────────────────────────────────────
   // The `enforcement` switch was REMOVED on 2026-09-08, so a stored value is

@@ -35,6 +35,8 @@ import {
   type ChatAction,
 } from "./actions.server";
 import { splitDetailStream, splitPicksStream } from "./picks.server";
+import { SHOWABLE_PRODUCT } from "../search/showable";
+import { canned, recommendationBanner, type PersonaLanguage } from "./canned.server";
 import { route } from "./router.server";
 import { shopperContext } from "./shopper.server";
 import {
@@ -53,6 +55,7 @@ import {
   DETAIL_CANDIDATES,
   detailSnippet,
   isDetailFollowUp,
+  namedProductsForAvailability,
   shownProducts,
 } from "./detail.server";
 import { logError } from "../log.server";
@@ -125,19 +128,13 @@ function variantIds(
   return { variantId: numeric, variantGid: gid };
 }
 
-const DEFAULT_FALLBACK =
-  "I'm not sure about that one — leave your email and our team will get back to you.";
-const CLARIFY_MESSAGE = "I couldn't find a match — what kind of item are you after?";
-const BUSY_MESSAGE = "You're sending messages very quickly — give me a few seconds and try again.";
-const CAP_MESSAGE = "Our chat assistant is offline right now — leave your email and we'll follow up.";
-/** First reply in human-support mode (AI agent not activated — the team
- *  answers from the Inbox). Sent once per conversation: the flip to
- *  mode="human" below routes every later turn through the human-mode branch.
- *  Merchant-editable (shopSettingsSchema.humanModeMessage, Settings →
- *  Chatbox tab) — this constant is the default for a blank value. */
-const HUMAN_WAIT_MESSAGE =
-  "Thanks for reaching out! Our team is helping other customers right now — we'll connect you with an agent shortly.";
-const BLOCKED_MESSAGE = "This chat has been closed by the store team.";
+// Deterministic shopper-facing strings (clarify, fallback, cap, blocked topic,
+// order status, human-support wait, chat closed, picks-only) live in
+// canned.server.ts, localized for a fixed non-English persona language
+// (hardening spec 23 §3.9). Merchant-authored texts always win over them.
+// QA-A5: order-status questions go to the widget's Track order screen.
+const ORDER_STATUS_RE =
+  /\b(where(?:'s| is)? my (?:order|package|parcel)|track(?:ing)? (?:my |an )?order|order status|status of my order|has my order (?:shipped|been shipped|arrived)|when will my order (?:arrive|ship|come)|order\s*#?\s*\d{3,})\b/i;
 /** Ranked candidates the reply model may choose cards from (the allow-list).
  *  Cards shown stay ≤ 4 (+ cross-sell); this is what the model gets to READ. */
 const MODEL_CANDIDATES = 8;
@@ -148,8 +145,6 @@ const MODEL_CANDIDATES = 8;
 // product rather than padding to two. The MAXIMUM is hard.
 const MIN_PICKS = 2;
 const MAX_PICKS = 4;
-/** Text when the model returned only a PICKS line and no prose. */
-const PICKS_ONLY_REPLY = "Here's what I found — tell me if you'd like more options.";
 
 export async function* runPipeline(
   input: PipelineInput,
@@ -163,8 +158,14 @@ export async function* runPipeline(
   // Rate limit before any spend (bucket keyed shop+session — tenancy audit).
   if (!consumeToken(`${shopId}:${input.sessionId}`)) {
     trace.step("rate_limit", "Per-session rate limit", "hit", { bucket: "shopId:sessionId" });
-    yield { type: "message", text: BUSY_MESSAGE };
-    yield { type: "done", outcome: "rate_limited", conversationId: input.conversationId ?? "" };
+    // Config is deliberately not loaded before the rate gate, so this one
+    // stays in English — a rate-limited turn must stay cheap.
+    yield { type: "message", text: canned("busy", null) };
+    // Never echo the CLIENT's conversationId: it is unverified here (the
+    // shop+session ownership check runs later), and echoing it let a storefront
+    // plant turns under another store's conversation in Admin → Debug (QA-S1).
+    // Clients keep their current conversation when the id is empty.
+    yield { type: "done", outcome: "rate_limited", conversationId: "" };
     return;
   }
 
@@ -204,7 +205,7 @@ export async function* runPipeline(
   // stays silent and the widget locks its composer on this outcome.
   if (convo.blocked) {
     trace.step("visitor_blocked", "Visitor blocked by the team", "hit", { stored: false });
-    yield { type: "message", text: BLOCKED_MESSAGE };
+    yield { type: "message", text: canned("chatClosed", config.persona) };
     yield { type: "done", outcome: "visitor_blocked", conversationId: convo.id };
     return;
   }
@@ -243,7 +244,9 @@ export async function* runPipeline(
       where: { id: convo.id, shopId },
       data: { mode: "human" },
     });
-    const waitText = config.settings.humanModeMessage?.trim() || HUMAN_WAIT_MESSAGE;
+    // Merchant-editable (shopSettingsSchema.humanModeMessage, Settings →
+    // Chatbox tab); the canned string is the default for a blank value.
+    const waitText = config.settings.humanModeMessage?.trim() || canned("humanWait", config.persona);
     await saveMessage(shopId, convo.id, {
       role: "out", author: "system", content: waitText, sourceLayer: "human",
     });
@@ -259,7 +262,7 @@ export async function* runPipeline(
       aiEnabled: config.aiEnabled,
       reason: config.aiEnabled ? "usage cap reached" : "AI switched off in settings",
     });
-    const text = CAP_MESSAGE;
+    const text = canned("cap", config.persona);
     await saveMessage(shopId, convo.id, { role: "out", author: "system", content: text, sourceLayer: "cap" });
     yield { type: "message", text };
     yield { type: "done", outcome: "ai_unavailable", conversationId: convo.id };
@@ -267,7 +270,7 @@ export async function* runPipeline(
   }
 
   const guardrails = config.guardrails;
-  const fallback = guardrails?.fallbackMessage?.trim() || DEFAULT_FALLBACK;
+  const fallback = guardrails?.fallbackMessage?.trim() || canned("fallback", config.persona);
   // previousLastMessageAt is the row's lastMessageAt BEFORE this turn touched
   // it — the 30-min session rule in usage.server.ts needs that value (QA D13).
   const meterPromise = tickConversation({
@@ -307,7 +310,7 @@ export async function* runPipeline(
     { topics: guardrails?.bannedTopics ?? [], matched: kwHit?.topic ?? null },
   );
   if (kwHit) {
-    yield* await finishBlocked(shopId, convo.id, fallback, kwHit.layer, meterPromise, track);
+    yield* await finishBlocked(shopId, convo.id, kwHit.layer, meterPromise, track, config.persona);
     return;
   }
 
@@ -364,18 +367,25 @@ export async function* runPipeline(
   // recommendations — only the waiting overlaps.
   const curatedThreshold = guardrails?.curatedMatchThreshold ?? 0.8;
   const curatedBorderline = guardrails?.curatedBorderline ?? 0.65;
+  // All three layers treat a transient failure as a MISS (logged), never as a
+  // dead turn — the embedding and router money is already spent, and the
+  // pipeline can still answer from search/RAG (hardening spec 23 §2.2).
   const meaningPromise = guardrails
-    ? meaningScan(shopId, queryEmbedding, guardrails)
+    ? meaningScan(shopId, queryEmbedding, guardrails).catch((error) => {
+        logError("meaning_scan_error", error, { shopId });
+        return null;
+      })
     : Promise.resolve(null);
   // The raw message goes in too: curatedMatch runs a second lane that matches
   // the merchant's own synonym phrasings exactly, which no embedding can.
-  const curatedPromise = curatedMatch(shopId, queryEmbedding, message);
+  const curatedPromise = curatedMatch(shopId, queryEmbedding, message).catch((error) => {
+    logError("curated_match_error", error, { shopId });
+    return null;
+  });
   const recommendationPromise = recommendationMatch(shopId, queryEmbedding).catch((error) => {
     logError("recommendation_match_error", error, { shopId });
     return null;
   });
-  settle(meaningPromise);
-  settle(curatedPromise);
 
   // ── Handover intent rules (needs the embedding) ───────────────────────────
   if (config.handover.intentRules.length === 0) {
@@ -423,7 +433,7 @@ export async function* runPipeline(
       });
     }
     if (meaningHit) {
-      yield* await finishBlocked(shopId, convo.id, fallback, meaningHit.layer, meterPromise, track);
+      yield* await finishBlocked(shopId, convo.id, meaningHit.layer, meterPromise, track, config.persona);
       return;
     }
   }
@@ -449,6 +459,34 @@ export async function* runPipeline(
       pinnedProducts: curated?.productIds.length ?? 0,
     },
   );
+  // ── Order status → the Track order screen (QA-A5, tuning event 2026-09-14) ─
+  // "where is my order #1234?" was caught by a BORDERLINE curated answer whose
+  // text said "use the Track order screen" with no button to press. When order
+  // tracking is effective for this shop (switch AND plan), an order-status
+  // question gets the button deterministically — zero generation calls. A
+  // curated answer at or above the SERVE threshold still wins: that is the
+  // merchant's own wording for exactly this question.
+  const orderActions = availableActions(config.widget).filter((a) => a.key === "track_order");
+  if (
+    orderActions.length > 0 &&
+    ORDER_STATUS_RE.test(message) &&
+    !(curated && curated.score >= curatedThreshold)
+  ) {
+    trace.step("order_status", "Order-status question → Track order screen", "hit", {
+      rule: "order-status words, order tracking effective, no curated answer at the serve threshold",
+      curatedScore: curated?.score ?? null,
+    });
+    const orderStatusReply = canned("orderStatus", config.persona);
+    await saveMessage(shopId, convo.id, {
+      role: "out", author: "ai", content: orderStatusReply, sourceLayer: "order_status",
+    });
+    await meterPromise;
+    yield { type: "message", text: orderStatusReply };
+    yield { type: "actions", actions: orderActions };
+    yield { type: "done", outcome: "order_status", conversationId: convo.id };
+    return;
+  }
+
   if (curated && curated.score >= curatedBorderline) {
     // Learn products OFF ⇒ no product data reaches the shopper (spec 07), so a
     // curated answer's pinned products are withheld, not looked up.
@@ -458,10 +496,16 @@ export async function* runPipeline(
         : Promise.resolve([]);
     let use = curated.score >= curatedThreshold;
     if (!use) {
+      // The previous shopper turn rides along (spec 23 §3.8): borderline
+      // follow-ups are often anaphoric and meaningless without it. The history
+      // promise is already in flight from the fan-out above.
+      const priorShopperTurn = await historyPromise
+        .then((h) => [...h.routerHistory].reverse().find((m) => m.role === "user")?.content ?? "")
+        .catch(() => "");
       const answer = await getLlmProvider().chat(
         [
           { role: "system", content: CURATED_CONFIRM_SYSTEM },
-          { role: "user", content: curatedConfirmUser(message, curated.question) },
+          { role: "user", content: curatedConfirmUser(message, curated.question, priorShopperTurn) },
         ],
         { shopId, purpose: "router" },
         { temperature: 0, maxTokens: 3 },
@@ -554,7 +598,7 @@ export async function* runPipeline(
       });
     }
     if (cards.length > 0) {
-      const text = `${recommendation.title} — here are our picks:`;
+      const text = recommendationBanner(recommendation.title, config.persona);
       await saveMessage(shopId, convo.id, {
         role: "out",
         author: "ai",
@@ -605,7 +649,7 @@ export async function* runPipeline(
     flagged: moderationHit?.topic ?? null,
   });
   if (moderationHit) {
-    yield* await finishBlocked(shopId, convo.id, fallback, "moderation", meterPromise, track);
+    yield* await finishBlocked(shopId, convo.id, "moderation", meterPromise, track, config.persona);
     return;
   }
   // The router may only enforce a policy the MERCHANT configured. With no
@@ -675,7 +719,7 @@ export async function* runPipeline(
     },
   );
   if (routerBlocks) {
-    yield* await finishBlocked(shopId, convo.id, fallback, "router", meterPromise, track);
+    yield* await finishBlocked(shopId, convo.id, "router", meterPromise, track, config.persona);
     return;
   }
   // Same contract for off_topic: it exists to enforce the merchant's STORE
@@ -699,9 +743,7 @@ export async function* runPipeline(
   );
   if (routed.off_topic && scopeConfigured) {
     trace.step("off_topic", "Off-topic redirect", "hit", { reason: routed.off_topic_reason });
-    const text =
-      config.persona?.offTopicMessage?.trim() ||
-      "I can only help with our store's products and orders.";
+    const text = config.persona?.offTopicMessage?.trim() || canned("offTopic", config.persona);
     await saveMessage(shopId, convo.id, {
       role: "out", author: "ai", content: text, sourceLayer: "off_topic", intent: routed,
     });
@@ -715,13 +757,14 @@ export async function* runPipeline(
     trace.step("router_parse_failed", "Router JSON unparseable after retry", "error", {
       effect: "clarify (never defaults to buy)",
     });
+    const clarifyText = canned("clarify", config.persona);
     await saveMessage(shopId, convo.id, {
-      role: "out", author: "ai", content: CLARIFY_MESSAGE, sourceLayer: "clarify",
+      role: "out", author: "ai", content: clarifyText, sourceLayer: "clarify",
     });
     await track("turn_fell_back", { reason: "router_parse_failed" });
     await recordUnresolved(shopId, convo.id, message, "fell_back", isTest);
     await meterPromise;
-    yield { type: "message", text: CLARIFY_MESSAGE };
+    yield { type: "message", text: clarifyText };
     const escalation = await maybeEscalateCannotAnswer(shopId, convo.id, config);
     yield* escalation;
     yield {
@@ -765,7 +808,27 @@ export async function* runPipeline(
   // check, no cost — with the 3-token confirm deciding.
   if (config.settings.learn.products) {
     const shown = await shownProducts(shopId, convo.id);
-    if (shown.length > 0) {
+    // Cost pre-filter (spec 23 §4.2): once cards existed, EVERY later turn
+    // paid this confirm — including "thanks!". A chat-routed message with no
+    // question mark, no digits, none of the shown titles' words and
+    // greeting-length is not a detail question; when in doubt, the confirm
+    // still runs.
+    const titleWords = new Set(
+      shown.flatMap((p) => p.title.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 4)),
+    );
+    const msgLower = message.toLowerCase();
+    const plainSmallTalk =
+      routed.intent === "chat" &&
+      message.trim().length <= 30 &&
+      !message.includes("?") &&
+      !/\d/.test(message) &&
+      ![...titleWords].some((w) => msgLower.includes(w));
+    if (shown.length > 0 && plainSmallTalk) {
+      trace.step("detail_confirm", "Follow-up about a product already shown?", "skip", {
+        reason: "chat-routed small talk with no detail signal — confirm call skipped (spec 23 §4.2)",
+      });
+    }
+    if (shown.length > 0 && !plainSmallTalk) {
       const isDetail = await isDetailFollowUp(shopId, message, shown.map((p) => p.title));
       trace.countLlm("router");
       trace.step(
@@ -785,6 +848,22 @@ export async function* runPipeline(
         });
         return;
       }
+    }
+    // QA-A4 (tuning event 2026-09-14): an availability question that NAMES a
+    // catalogue product ("is the Mulberry Silk Pillowcase in stock?") is also
+    // about that product — answered from its row (which has the stock), never
+    // from RAG. Full-title match + availability words only; no LLM call.
+    const named = await namedProductsForAvailability(shopId, message);
+    trace.step("named_product", "Availability question about a named product?", named ? "hit" : "skip", {
+      rule: "availability words + a showable product's full title in the message",
+      products: named?.map((p) => p.title) ?? [],
+    });
+    if (named) {
+      yield* detailLane({
+        shopId, convoId: convo.id, config, message, shown: named,
+        personaPrompt, generationHistory, meterPromise, routed, track, trace,
+      });
+      return;
     }
   }
 
@@ -843,7 +922,7 @@ export async function* runPipeline(
   });
   yield* streamAndLog({
     shopId, convoId: convo.id, stream: chatStream.text, sourceLayer: "chat", intent: routed,
-    actions: chatStream.actions, meterPromise, track, trace,
+    actions: chatStream.actions, meterPromise, track, trace, persona: config.persona,
   });
 }
 
@@ -1003,6 +1082,7 @@ async function* detailLane(args: {
     meterPromise: args.meterPromise,
     track: args.track,
     trace: args.trace,
+    persona: args.config.persona,
   });
 }
 
@@ -1104,13 +1184,14 @@ async function* buyLane(args: {
     args.trace.step("no_candidates", "No product candidates, asking to clarify", "miss", {
       effect: "clarify reply; the question is logged to the unresolved queue",
     });
+    const clarifyText = canned("clarify", args.config.persona);
     await saveMessage(args.shopId, args.convoId, {
-      role: "out", author: "ai", content: CLARIFY_MESSAGE, sourceLayer: "clarify", intent: args.routed,
+      role: "out", author: "ai", content: clarifyText, sourceLayer: "clarify", intent: args.routed,
     });
     await args.track("turn_fell_back", { reason: "no_candidates" });
     await recordUnresolved(args.shopId, args.convoId, args.message, "fell_back", args.isTest);
     await args.meterPromise;
-    yield { type: "message", text: CLARIFY_MESSAGE };
+    yield { type: "message", text: clarifyText };
     const escalation = await maybeEscalateCannotAnswer(args.shopId, args.convoId, args.config);
     yield* escalation;
     yield {
@@ -1132,15 +1213,6 @@ async function* buyLane(args: {
   // is what lets the model tell a black bracelet from one that "pairs with
   // black outfits".
   const relevant = selectRelevant(candidates, 4);
-  // Price goes to the model PRE-FORMATTED in the shop's currency ("₹1,499",
-  // not 1499) — a bare number reads as dollars to the model, and an INR store's
-  // reply then quoted "$1499" next to cards the widget correctly rendered in ₹.
-  const allowList = candidates.slice(0, MODEL_CANDIDATES).map((c, i) => ({
-    id: i + 1,
-    title: c.title,
-    price: formatMoney(c.price, args.config.currency),
-    snippet: candidateSnippet(c),
-  }));
   const modelDecidesCards = !browse && !constrained;
   // When some product carries EVERY router keyword in its title/type/tags
   // ("Black Obsidian Bracelet" for "black bracelets"), the shopper asked for a
@@ -1177,6 +1249,23 @@ async function* buyLane(args: {
   // so the mechanical tier is shown instead.
   const lexicalAnchor = routerTerms.some((t) => candidates.some((c) => c.headTerms.includes(t)));
 
+  // What the MODEL sees (QA-A1, tuning event 2026-09-14). When the tier
+  // constraint applies, the model gets ONLY the tier. It used to see the whole
+  // list and code dropped out-of-tier picks afterwards — but the reply had
+  // already streamed ("…and Rose Quartz pairs beautifully with black"), naming a
+  // product with no card. Narrowing before generation means the text can only
+  // talk about what can be carded. Picks map back through this same array.
+  const modelPool = modelDecidesCards && constrainToTier ? relevant : candidates.slice(0, MODEL_CANDIDATES);
+  // Price goes to the model PRE-FORMATTED in the shop's currency ("₹1,499",
+  // not 1499) — a bare number reads as dollars to the model, and an INR store's
+  // reply then quoted "$1499" next to cards the widget correctly rendered in ₹.
+  const allowList = modelPool.map((c, i) => ({
+    id: i + 1,
+    title: c.title,
+    price: formatMoney(c.price, args.config.currency),
+    snippet: candidateSnippet(c),
+  }));
+
   args.trace.step("relevance_cut", "Fallback tier (used when the model gives no picks)", "info", {
     rule:
       candidates[0].coverage > 0
@@ -1195,6 +1284,19 @@ async function* buyLane(args: {
     products: allowList,
   });
 
+  // Discount facts reach the BUY lane too (hardening spec 23 §3.3): "any
+  // deals on bracelets?" routes buy, and PRODUCT_RECOMMEND rightly forbids
+  // inventing discounts — so without the real facts the model had to card the
+  // discounted bracelets while staying silent about the live code the question
+  // lane would have quoted. Same code-built block, same learn gate.
+  const buyDiscountBlock =
+    args.config.settings.learn.discounts && DISCOUNT_INTENT_RE.test(args.message)
+      ? await discountFacts(args.shopId).catch((error) => {
+          logError("discount_facts_error", error, { shopId: args.shopId });
+          return "";
+        })
+      : "";
+
   const picksStream = splitPicksStream(
     getLlmProvider().chatStream(
       [
@@ -1202,7 +1304,7 @@ async function* buyLane(args: {
         ...args.generationHistory,
         {
           role: "user",
-          content: `Candidate products: ${JSON.stringify(allowList)}\n\nShopper: ${args.message}`,
+          content: `Candidate products: ${JSON.stringify(allowList)}${buyDiscountBlock}\n\nShopper: ${args.message}`,
         },
       ],
       { shopId: args.shopId, purpose: "reply" },
@@ -1214,7 +1316,7 @@ async function* buyLane(args: {
 
   args.trace.step("generation", "Reply generation (LLM call 2 of 2)", "info", {
     prompt: "persona + PRODUCT_RECOMMEND",
-    grounding: `${allowList.length} candidate products (allow-list above); first line = PICKS`,
+    grounding: `${allowList.length} candidate products (allow-list above); first line = PICKS${buyDiscountBlock ? "; discount facts appended" : ""}`,
     historyTurns: args.generationHistory.length,
     temperature: 0.3,
     maxTokens: 110,
@@ -1234,7 +1336,7 @@ async function* buyLane(args: {
       let widened = 0;
       let toppedUp = 0;
       for (const id of picks.ids) {
-        const candidate = id >= 1 && id <= allowList.length ? candidates[id - 1] : undefined;
+        const candidate = id >= 1 && id <= allowList.length ? modelPool[id - 1] : undefined;
         if (!candidate || seen.has(candidate.id)) continue;
         if (constrainToTier && !tierIds.has(candidate.id)) {
           widened++;
@@ -1253,10 +1355,16 @@ async function* buyLane(args: {
       // second, unrelated bracelet added to make up the number is the padding
       // the precision work removed, and it would be a wrong answer rather than
       // a thin one.
-      if (chosen.length === 1) {
+      //
+      // QA-A2 (tuning event 2026-09-14): and only a product that satisfies
+      // EVERY router keyword, exactly like the pick. A vector-only tier (no
+      // keyword coverage) groups by embedding distance, so "something warm for
+      // my head" topped a Fleece Beanie up with Thermal Socks while the reply
+      // said "this pick". No equally-qualified product ⇒ one card.
+      if (chosen.length === 1 && routerTerms.length > 0) {
         for (const candidate of relevant) {
           if (chosen.length >= MIN_PICKS) break;
-          if (seen.has(candidate.id)) continue;
+          if (seen.has(candidate.id) || !fullMatch(candidate)) continue;
           seen.add(candidate.id);
           chosen.push(candidate);
           toppedUp++;
@@ -1328,7 +1436,11 @@ async function* buyLane(args: {
         parsed: picks,
         source: "rescued question: the model finds nothing that answers it — serving the fallback message",
       });
-      yield* serveRagFallback({ ...args, fallback: args.fallback ?? DEFAULT_FALLBACK, reason: "rescue_no_fit" });
+      yield* serveRagFallback({
+        ...args,
+        fallback: args.fallback ?? canned("fallback", args.config.persona),
+        reason: "rescue_no_fit",
+      });
       return;
     }
     text = resumeStream(first, iterator);
@@ -1341,10 +1453,11 @@ async function* buyLane(args: {
     sourceLayer: browse ? "buy_browse" : "buy",
     intent: args.routed,
     cards: resolveCards,
-    emptyReplyText: PICKS_ONLY_REPLY,
+    emptyReplyText: canned("picksOnly", args.config.persona),
     meterPromise: args.meterPromise,
     track: args.track,
     trace: args.trace,
+    persona: args.config.persona,
   });
 }
 
@@ -1547,8 +1660,13 @@ async function* questionLane(args: {
     return;
   }
 
+  // Only chunks that clear the meaning gate may ground the answer. Without
+  // this filter, a discount/collection co-fire smuggled ALL top-3 hits into
+  // "Answer using ONLY the store info below" even when every one of them
+  // scored under minMeaningScore (hardening spec 23 §2.1).
+  const groundedHits = hits.filter((h) => h.score >= minMeaningScore);
   const context =
-    hits.map((h) => `[${h.topic}] ${h.body}`).join("\n\n") + discountContext + collectionContext;
+    groundedHits.map((h) => `[${h.topic}] ${h.body}`).join("\n\n") + discountContext + collectionContext;
   // Support questions are exactly where the agent used to send shoppers to
   // storefront navigation it had imagined ("click the Track navigation"), so
   // this is the lane the action buttons matter most in.
@@ -1584,9 +1702,13 @@ async function* questionLane(args: {
     sourceLayer: "question",
     intent: args.routed,
     actions: stream.actions,
+    // An ACTION-only reply still needs a sentence; the merchant's fallback is
+    // the natural one for this lane (spec 23 §4.8).
+    emptyReplyText: args.fallback,
     meterPromise: args.meterPromise,
     track: args.track,
     trace: args.trace,
+    persona: args.config.persona,
   });
 }
 
@@ -1766,6 +1888,8 @@ async function* streamAndLog(args: {
   cards?: ProductCard[] | (() => Promise<ProductCard[]>);
   /** Shown when the model produced no visible text (e.g. only a PICKS line). */
   emptyReplyText?: string;
+  /** Persona language for the canned error fallback (spec 23 §3.9). */
+  persona?: PersonaLanguage | null;
   /** In-widget buttons the reply asked for, resolved AFTER the stream (the
    *  ACTION line is only complete once the stream has ended). */
   actions?: () => ChatAction[];
@@ -1783,12 +1907,15 @@ async function* streamAndLog(args: {
     logError("generation_error", error, { shopId: args.shopId });
     await args.track("llm_error", { layer: args.sourceLayer });
     if (!full) {
-      full = DEFAULT_FALLBACK;
+      full = canned("fallback", args.persona);
       yield { type: "message", text: full };
     }
   }
-  if (!full.trim() && args.emptyReplyText) {
-    full = args.emptyReplyText;
+  // Belt for EVERY action-splitting lane (spec 23 §4.8): a reply that was only
+  // a stripped ACTION:/PICKS: line used to become a silent empty turn in the
+  // chat/question lanes (only buy passed emptyReplyText).
+  if (!full.trim()) {
+    full = args.emptyReplyText ?? canned("fallback", args.persona);
     yield { type: "message", text: full };
   }
 
@@ -1881,8 +2008,10 @@ async function recordUnresolved(
       where: { shopId, status: "pending", question: { equals: normalized, mode: "insensitive" } },
     });
     if (existing) {
-      await db.unresolvedQuestion.update({
-        where: { id: existing.id },
+      // Shop-scoped updateMany, not a pk update — uniform with the rest of the
+      // codebase so the tenancy audit can verify mechanically (spec 23 §4.8).
+      await db.unresolvedQuestion.updateMany({
+        where: { id: existing.id, shopId },
         data: { count: { increment: 1 } },
       });
     } else {
@@ -1895,21 +2024,26 @@ async function recordUnresolved(
   }
 }
 
+// Blocked turns reply with the canned blocked-topic text, not the merchant's
+// fallback: the fallback is written for "I don't know" and its install default
+// asks for an email — on a blocked topic no form is shown, so that promise was
+// empty (QA-A6).
 async function finishBlocked(
   shopId: string,
   convoId: string,
-  fallback: string,
   layer: string,
   meterPromise: Promise<unknown>,
   track: TrackFn,
+  persona?: PersonaLanguage | null,
 ): Promise<PipelineFrame[]> {
+  const text = canned("blockedTopic", persona);
   await saveMessage(shopId, convoId, {
-    role: "out", author: "ai", content: fallback, sourceLayer: `banned_${layer}`,
+    role: "out", author: "ai", content: text, sourceLayer: `banned_${layer}`,
   });
   await track("turn_blocked", { layer });
   await meterPromise;
   return [
-    { type: "message", text: fallback },
+    { type: "message", text },
     { type: "done", outcome: "blocked", conversationId: convoId },
   ];
 }
@@ -1937,8 +2071,8 @@ async function ensureConversation(
         return { conversation: existing, previousLastMessageAt: existing.lastMessageAt };
       }
       const previousLastMessageAt = existing.lastMessageAt;
-      await db.conversation.update({
-        where: { id: existing.id },
+      await db.conversation.updateMany({
+        where: { id: existing.id, shopId },
         data: {
           lastMessageAt: new Date(),
           unread: true,
@@ -1957,8 +2091,8 @@ async function ensureConversation(
       return { conversation: bySession, previousLastMessageAt: bySession.lastMessageAt };
     }
     const previousLastMessageAt = bySession.lastMessageAt;
-    await db.conversation.update({
-      where: { id: bySession.id },
+    await db.conversation.updateMany({
+      where: { id: bySession.id, shopId },
       data: {
         lastMessageAt: new Date(),
         unread: true,
@@ -2217,15 +2351,6 @@ async function appendCrossSell(
   }
 }
 
-/**
- * What product search requires before a product may be shown (the SQL filter
- * in product-search.server.ts), for the paths that look products up BY ID
- * instead — curated cards, recommendation rules, cross-sell companions. Those
- * used to check stock alone, so a product the merchant switched off, or one
- * that is draft/archived or not on the Online Store, could still be carded —
- * the last two as a link that 404s.
- */
-const SHOWABLE_PRODUCT = { learnEnabled: true, status: "active", publishedOnline: true } as const;
 
 async function cardsForShopifyIds(
   shopId: string,

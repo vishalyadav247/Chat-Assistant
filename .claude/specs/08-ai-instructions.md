@@ -9,12 +9,14 @@ Admin views under `/app/ai-agent/instructions` (tabs: General Instructions / Pro
 
 ## Tab: General Instructions → `Persona` + `Guardrails`
 
+- **Store info** (first section, anchor `#store-info`, added 2026-09-14) textarea (max 1500 + counter) → `ShopSettings.storeInfo.about`. What the store sells, where it is, hours, contact. Reaches the AI as the hidden **`store_info` knowledge source** (one doc "About {store name}", rebuilt fail-soft on save, hidden from Custom knowledge) — so store questions ("where are you based?") are answered through RAG like FAQs; **no prompt text changed**. **Fill from Shopify** builds a draft from Admin GraphQL `shop { name description contactEmail currencyCode shipsToCountries primaryDomain { host } }` (validated 2026-07, no extra scope) and appends it to the field for review — nothing is saved until Save. `billingAddress` is deliberately not read (the account holder's billing address is not a public store location). Before this there was no store-info field: the seeded role only says "for this store" and the hidden `persona.scope` is an off-topic filter, not facts.
 - **Role** textarea (max 250 + counter) → persona.role.
 - **Communication style** presets Friendly/Professional/Empathetic/Custom + editable tone textarea → persona.communicationStyle + brandVoice.
 - **Behaviours** textarea (max 1000 + counter; seeded with ROLE/KNOWLEDGE/COMMUNICATION STYLE/GUIDELINES/AVOID template) → persona.behaviours.
 - **Default language** select (English/Hindi/Spanish/French/German) → persona.defaultLanguage.
 - **Auto-detect shopper's language** toggle → persona.autoDetectLanguage — available on every plan (`multi_language` gate removed 2026-09-03, user decision).
 - **Banned topics & phrases** textarea one-per-line → guardrails.bannedTopics (re-embed banned vectors on save, 03 layer c).
+- **Store scope** + **Off-topic message** (section "Store scope", added 2026-09-14, QA-A3) — two textareas (max 300 each) → `persona.scope` / `persona.offTopicMessage` (the columns existed with no UI). With a scope set, the router treats requests outside it — including creative / general-assistant tasks ("write me a poem") — as `off_topic` and replies with the off-topic message (canned default when blank; outcome `off_topic`, zero generation). With no scope, `off_topic` is ignored (2026-09-01 rule). Blocked topics reply with a fixed decline that never asks for an email (QA-A6).
 - **Fallback message** textarea, blank → built-in default; hint: "assistant captures the shopper's email as a lead after showing this" (fallback turns trigger email-capture prompt in widget → Contact lead).
 - Cancel/Save (contextual save bar).
 
