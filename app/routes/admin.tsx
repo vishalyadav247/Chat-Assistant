@@ -2,9 +2,9 @@ import type { HeadersFunction, LinksFunction, LoaderFunctionArgs } from "react-r
 import { Outlet } from "react-router";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { NavigateBridge, SurfaceProvider } from "../lib/ui/surface";
-// One stylesheet, and it is the console's own. Until 2026-09-03 this layout
+// One stylesheet, and it is the console's own. This layout once
 // also pulled the merchant web app's shell and auth sheets so the two surfaces
-// looked identical (user, 2026-08-20); the glass redesign replaced every class
+// looked identical; the glass redesign replaced every class
 // they provided, so loading them now would ship dead CSS to every page.
 import adminStylesHref from "../components/admin/admin.css?url";
 import { themeFromCookie } from "../components/admin/theme";

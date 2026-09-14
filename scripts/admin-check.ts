@@ -5,7 +5,7 @@
  * overrides save/clear. Leaves the DB exactly as it found it.
  */
 import db from "../app/db.server";
-import { GATED_FEATURES } from "../app/lib/billing/plan-shared";
+import { GATED_FEATURES, QUOTA_DIMENSIONS } from "../app/lib/billing/plan-shared";
 import {
   DEFAULT_PLANS,
   getQuota,
@@ -40,11 +40,11 @@ async function main() {
     // omitting it here would assert pre-knownFeatures semantics that no longer exist.
     await savePlanConfig({
       
-      plans: { basic: { quotas: { conversations: 123 }, features: ["exports"], knownFeatures: [...GATED_FEATURES] } },
+      plans: { basic: { quotas: { conversations: 123 }, features: ["inbox_cart_view"], knownFeatures: [...GATED_FEATURES] } },
     });
     assert(PLANS.basic.quotas.conversations === 123, "PLANS.basic quota overridden in place");
     assert(getQuota("basic", "conversations") === 123, "getQuota reads override under enforcement");
-    assert(hasFeature("basic", "exports") === true, "overridden feature list grants exports");
+    assert(hasFeature("basic", "inbox_cart_view") === true, "overridden feature list grants inbox_cart_view");
     assert(hasFeature("basic", "remove_branding") === false, "non-listed feature now gated");
     assert(
       PLANS.free.quotas.conversations === DEFAULT_PLANS.free.quotas.conversations,
@@ -63,21 +63,24 @@ async function main() {
       "reset restores the full default matrix",
     );
 
-    // 3b. Enforced mode reads the real matrix; open mode is unlimited + all-pass.
-    await savePlanConfig({ });
+    // 3b. The stored matrix is the one every gate reads.
+    // There used to be a second half here asserting an "open" enforcement mode
+    // (unlimited quotas, every feature granted). That global switch was removed
+    // — gating is now always on — and the refactor emptied its `savePlanConfig`
+    // argument without deleting the assertions, leaving two identical calls of
+    // which the second could only ever fail. Removed 2026-09-10.
+    await savePlanConfig({});
     assert(
       getQuota("basic", "conversations") === DEFAULT_PLANS.basic.quotas.conversations,
-      "enforced mode = real matrix quotas",
+      "the real matrix quotas are what getQuota returns",
     );
-    assert(hasFeature("free", "exports") === false, "enforced mode gates a Free shop");
-    await savePlanConfig({ });
-    assert(getQuota("basic", "conversations") === Number.MAX_SAFE_INTEGER, "open mode = unlimited quotas");
-    assert(hasFeature("free", "exports") === true, "open mode grants every feature");
+    assert(hasFeature("free", "remove_branding") === false, "a Free shop is gated");
     await resetPlanConfig();
 
     // 3c. The seams added 2026-08-21 must be present and enforced.
     assert(
-      getQuota("free", "active_campaigns") === 0 && getQuota("pro", "active_campaigns") === 10,
+      getQuota("free", "active_campaigns") === DEFAULT_PLANS.free.quotas.active_campaigns &&
+        getQuota("pro", "active_campaigns") === DEFAULT_PLANS.pro.quotas.active_campaigns,
       "active_campaigns quota enforced per tier",
     );
     assert(
@@ -85,20 +88,30 @@ async function main() {
       "analytics_range_days quota enforced per tier",
     );
     for (const [feature, freeHas, plusHas] of [
-      ["survey", false, true],
-      ["push_notifications", false, true],
-      ["exports", false, true],
+      ["push_notifications", true, true], // on Free since the 2026-09-11 re-baseline
+      ["remove_branding", false, true],
+      ["order_tracking", false, true],
     ] as const) {
       assert(
         hasFeature("free", feature) === freeHas && hasFeature("plus", feature) === plusHas,
         `gate ${feature} follows the matrix`,
       );
     }
-    assert(hasFeature("basic", "exports") === false, "exports is Plus-only");
-    assert(hasFeature("basic", "survey") === true, "survey is Basic+");
+    // "exports" + "file_upload" un-gated 2026-09-10 (user decision) — the
+    // identifiers must be gone so no operator edit can re-gate them.
     assert(
-      getQuota("free", "cross_sell_pairs") === 3 && getQuota("plus", "cross_sell_pairs") === 100,
-      "cross_sell_pairs quota enforced per tier (un-gated feature, tiered number — 2026-09-10)",
+      !(GATED_FEATURES as string[]).includes("exports") &&
+        !(GATED_FEATURES as string[]).includes("file_upload"),
+      "exports + file_upload are no longer gated features",
+    );
+    assert(hasFeature("basic", "inbox_cart_view") === false, "inbox_cart_view is Pro+");
+    assert(
+      !(GATED_FEATURES as string[]).includes("survey"),
+      "survey is on every plan — no longer a gated feature (2026-09-11)",
+    );
+    assert(
+      !(QUOTA_DIMENSIONS as string[]).includes("cross_sell_pairs"),
+      "cross_sell_pairs is no longer a quota — pairs have no limit (2026-09-11)",
     );
 
     // 4. AI overrides save + clear

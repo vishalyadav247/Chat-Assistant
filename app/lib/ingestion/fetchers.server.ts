@@ -1,7 +1,7 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
-// SSRF-guarded HTTP fetching + crawling for knowledge ingestion (spec 04).
+// SSRF-guarded HTTP fetching for knowledge ingestion (spec 04; single page since spec 22).
 // Every fetch (including every redirect hop) is validated against private /
 // reserved address space BEFORE the request is made. Note: this is a
 // resolve-then-fetch check — the standard guard the spec asks for — not a
@@ -11,8 +11,6 @@ export const CRAWL_USER_AGENT = "ChatConvertBot/1.0 (+https://chatconvert.app)";
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024; // 2MB cap, body truncated beyond it
 const FETCH_TIMEOUT_MS = 5000;
 const MAX_REDIRECTS = 3;
-/** Absolute safety ceiling on any crawl regardless of plan quota. */
-export const HARD_CRAWL_PAGE_CAP = 50;
 
 export class SafeFetchError extends Error {
   constructor(
@@ -304,81 +302,15 @@ export function htmlToText(html: string): HtmlText {
   return { title, text };
 }
 
-/** Same-origin page links from an HTML document (fragments stripped, deduped). */
-export function extractLinks(html: string, baseUrl: URL): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  const re = /<a\s[^>]*?href\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
-  const NON_PAGE = /\.(png|jpe?g|gif|webp|svg|ico|css|js|mjs|json|xml|pdf|zip|gz|tar|mp4|mp3|webm|woff2?|ttf|eot)$/i;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(html))) {
-    const href = (match[1] ?? match[2] ?? "").trim();
-    if (!href || href.startsWith("#") || /^(mailto|tel|javascript):/i.test(href)) continue;
-    let resolved: URL;
-    try {
-      resolved = new URL(href, baseUrl);
-    } catch {
-      continue;
-    }
-    if (resolved.protocol !== "http:" && resolved.protocol !== "https:") continue;
-    if (resolved.origin !== baseUrl.origin) continue;
-    if (NON_PAGE.test(resolved.pathname)) continue;
-    resolved.hash = "";
-    const key = resolved.toString();
-    if (key === baseUrl.toString() || seen.has(key)) continue;
-    seen.add(key);
-    out.push(key);
-  }
-  return out;
-}
-
-// ── robots.txt ──────────────────────────────────────────────────────────────
-
-/**
- * Disallow prefixes that apply to our UA. Groups naming "chatconvertbot" win
- * over the "*" wildcard group; simple prefix matching per spec.
- */
-export function parseRobots(robotsTxt: string, botToken = "chatconvertbot"): string[] {
-  interface Group {
-    agents: string[];
-    disallow: string[];
-  }
-  const groups: Group[] = [];
-  let current: Group | null = null;
-  let lastWasAgent = false;
-  for (const rawLine of robotsTxt.split(/\r?\n/)) {
-    const line = rawLine.split("#")[0].trim();
-    if (!line) continue;
-    const sep = line.indexOf(":");
-    if (sep < 0) continue;
-    const field = line.slice(0, sep).trim().toLowerCase();
-    const value = line.slice(sep + 1).trim();
-    if (field === "user-agent") {
-      if (!lastWasAgent || !current) {
-        current = { agents: [], disallow: [] };
-        groups.push(current);
-      }
-      current.agents.push(value.toLowerCase());
-      lastWasAgent = true;
-    } else {
-      lastWasAgent = false;
-      if (field === "disallow" && current && value) {
-        current.disallow.push(value);
-      }
-    }
-  }
-  const specific = groups.filter((g) => g.agents.some((a) => a !== "*" && botToken.includes(a)));
-  const applicable = specific.length > 0 ? specific : groups.filter((g) => g.agents.includes("*"));
-  return applicable.flatMap((g) => g.disallow);
-}
-
-export function isAllowedByRobots(pathname: string, disallowPrefixes: string[]): boolean {
-  return !disallowPrefixes.some((prefix) => pathname.startsWith(prefix));
-}
-
-// ── Crawl ───────────────────────────────────────────────────────────────────
-
-export type CrawlScope = "page" | "linked" | "sitemap";
+// ── Single-page fetch ───────────────────────────────────────────────────────
+//
+// Website URL sources read exactly the page the merchant typed (spec 22, user
+// decision). Link-following and sitemap crawling were removed with the linked
+// and whole-site scopes: store pages and blog articles now come from the Pages
+// and Blogs tabs, synced from the Admin API — none of a scraped page's header,
+// nav and footer text, drafts visible, and no sitemap gaps (Shopify's sitemap
+// has no policy type). robots.txt went with them: it was only ever consulted
+// for DISCOVERED pages, and the URL a merchant enters was always fetched.
 
 export interface CrawledPage {
   url: string;
@@ -387,129 +319,14 @@ export interface CrawledPage {
 }
 
 const CRAWLABLE_CONTENT = /^(text\/html|text\/plain|application\/xhtml)/i;
-const MAX_NESTED_SITEMAPS = 5;
 
-/**
- * Crawl per scope, capped at maxPages (never above HARD_CRAWL_PAGE_CAP).
- * robots.txt Disallow (for our UA) is honored on discovered pages; the URL the
- * merchant explicitly entered is always fetched. Unfetchable discovered pages
- * are skipped; zero fetchable pages → throws.
- */
-export async function crawl(
-  startUrl: string,
-  scope: CrawlScope,
-  maxPages: number,
-): Promise<CrawledPage[]> {
-  let start: URL;
-  try {
-    start = new URL(startUrl);
-  } catch {
-    throw new SafeFetchError(`invalid URL "${startUrl}"`);
+/** Fetch one page (SSRF-guarded) and strip it to text. Throws when unreadable. */
+export async function fetchPageText(rawUrl: string): Promise<CrawledPage> {
+  const result = await safeFetch(rawUrl);
+  if (result.contentType && !CRAWLABLE_CONTENT.test(result.contentType)) {
+    throw new SafeFetchError(`not a readable page (${result.contentType})`, result.url);
   }
-  const cap = Math.max(1, Math.min(maxPages, HARD_CRAWL_PAGE_CAP));
-  const disallow = await fetchRobots(start.origin);
-
-  const pages: CrawledPage[] = [];
-  const fetchPage = async (url: string): Promise<string | null> => {
-    const result = await safeFetch(url);
-    if (result.contentType && !CRAWLABLE_CONTENT.test(result.contentType)) return null;
-    const { title, text } = htmlToText(result.text);
-    if (!text) return null;
-    pages.push({ url: result.url, title: title || result.url, text });
-    return result.text;
-  };
-
-  if (scope === "page") {
-    await fetchPage(start.toString());
-  } else if (scope === "linked") {
-    const rawHtml = await fetchPage(start.toString());
-    const links = rawHtml ? extractLinks(rawHtml, start) : [];
-    for (const link of links) {
-      if (pages.length >= cap) break;
-      if (!isAllowedByRobots(new URL(link).pathname, disallow)) continue;
-      try {
-        await fetchPage(link);
-      } catch {
-        continue; // skip unfetchable linked pages
-      }
-    }
-  } else {
-    const locs = await collectSitemapUrls(start, cap);
-    for (const loc of locs) {
-      if (pages.length >= cap) break;
-      if (!isAllowedByRobots(new URL(loc).pathname, disallow)) continue;
-      try {
-        await fetchPage(loc);
-      } catch {
-        continue;
-      }
-    }
-  }
-
-  if (pages.length === 0) {
-    throw new SafeFetchError("crawl produced no readable pages", start.toString());
-  }
-  return pages;
-}
-
-async function fetchRobots(origin: string): Promise<string[]> {
-  try {
-    const robots = await safeFetch(`${origin}/robots.txt`);
-    return parseRobots(robots.text);
-  } catch {
-    return []; // absent/unreadable robots.txt → no restrictions
-  }
-}
-
-/** <loc> entries from /sitemap.xml (or the given .xml URL); follows one level of sitemap index. */
-async function collectSitemapUrls(start: URL, cap: number): Promise<string[]> {
-  const sitemapUrl = start.pathname.toLowerCase().endsWith(".xml")
-    ? start.toString()
-    : `${start.origin}/sitemap.xml`;
-  const root = await safeFetch(sitemapUrl);
-  let locs = extractLocs(root.text);
-
-  // Sitemap index: entries that are themselves .xml sitemaps — expand a few.
-  const nested = locs.filter((loc) => loc.toLowerCase().endsWith(".xml"));
-  if (nested.length > 0 && nested.length === locs.length) {
-    locs = [];
-    for (const sub of nested.slice(0, MAX_NESTED_SITEMAPS)) {
-      if (locs.length >= cap) break;
-      try {
-        const subMap = await safeFetch(sub);
-        locs.push(...extractLocs(subMap.text).filter((l) => !l.toLowerCase().endsWith(".xml")));
-      } catch {
-        continue;
-      }
-    }
-  }
-
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const loc of locs) {
-    let url: URL;
-    try {
-      url = new URL(loc);
-    } catch {
-      continue;
-    }
-    if (url.origin !== start.origin) continue; // stay on the merchant's site
-    const key = url.toString();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(key);
-    if (out.length >= cap) break;
-  }
-  return out;
-}
-
-function extractLocs(xml: string): string[] {
-  const out: string[] = [];
-  const re = /<loc>\s*([\s\S]*?)\s*<\/loc>/gi;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(xml))) {
-    const value = decodeEntities(match[1]).trim();
-    if (value) out.push(value);
-  }
-  return out;
+  const { title, text } = htmlToText(result.text);
+  if (!text) throw new SafeFetchError("page has no readable text", result.url);
+  return { url: result.url, title: title || result.url, text };
 }

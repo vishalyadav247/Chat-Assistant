@@ -17,6 +17,7 @@ import { NOT_TEST_EVENT } from "../lib/analytics/events.server";
 import { isPurchasable } from "../lib/search/product-search.server";
 import { StatGrid, StatTile } from "../components/ui/StatTile";
 import { PlanMeter } from "../components/ui/PlanGate";
+import { ConfirmDeleteModal } from "../components/ui/ConfirmDeleteModal";
 import { DataTable } from "../components/DataTable";
 import { ChipInput } from "../components/ChipInput";
 import type { BrowseItemMeta } from "../components/BrowseProductsModal";
@@ -193,7 +194,8 @@ export default function CuratedAnswersPage() {
   // Snapshot of the draft as it was opened — drives the contextual save bar.
   const [baseline, setBaseline] = useState<string>(() => JSON.stringify(emptyDraft()));
   const [browseOpen, setBrowseOpen] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  // Delete confirmation (shared ConfirmDeleteModal), from the list or the editor.
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; question: string } | null>(null);
   // Save errors live in state, not in fetcher.data: a derived banner survives
   // into the NEXT draft the merchant opens because fetcher.data sticks around
   // (QA D12f). Cleared whenever an editor is (re-)opened.
@@ -218,7 +220,7 @@ export default function CuratedAnswersPage() {
     };
     setDraft(next);
     setBaseline(JSON.stringify(next));
-    setConfirmDelete(false);
+    setDeleteTarget(null);
     setSaveError(null);
     setView("editor");
   };
@@ -235,7 +237,7 @@ export default function CuratedAnswersPage() {
     };
     setDraft(next);
     setBaseline(JSON.stringify(next));
-    setConfirmDelete(false);
+    setDeleteTarget(null);
     setSaveError(null);
     setView("editor");
   };
@@ -298,7 +300,8 @@ export default function CuratedAnswersPage() {
     }
     if (result.intent === "delete") {
       shopify.toast.show(result.ok ? "Curated answer deleted" : "Couldn't delete answer");
-      setView("list");
+      setDeleteTarget(null);
+      if (result.ok) setView("list");
     }
     if (result.intent === "revalidate" && result.ok) {
       shopify.toast.show(
@@ -456,10 +459,7 @@ export default function CuratedAnswersPage() {
                         variant="tertiary"
                         tone="critical"
                         disabled={saving}
-                        onClick={() => {
-                          openEdit(row);
-                          setConfirmDelete(true);
-                        }}
+                        onClick={() => setDeleteTarget({ id: row.id, question: row.question })}
                       >
                         Delete
                       </s-button>
@@ -616,27 +616,13 @@ export default function CuratedAnswersPage() {
                   </div>
                 </s-stack>
 
-                {confirmDelete && draft.id ? (
-                  <s-banner tone="critical" heading="Delete this curated answer?">
-                    <s-paragraph>This can&apos;t be undone.</s-paragraph>
-                    <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                      <s-button
-                        variant="primary"
-                        tone="critical"
-                        disabled={saving}
-                        loading={saving}
-                        onClick={() => remove(draft.id!)}
-                      >
-                        Delete
-                      </s-button>
-                      <s-button onClick={() => setConfirmDelete(false)}>Keep it</s-button>
-                    </div>
-                  </s-banner>
-                ) : null}
-
-                {draft.id && !confirmDelete ? (
+                {draft.id ? (
                   <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                    <s-button tone="critical" variant="tertiary" onClick={() => setConfirmDelete(true)}>
+                    <s-button
+                      tone="critical"
+                      variant="tertiary"
+                      onClick={() => setDeleteTarget({ id: draft.id!, question: draft.question })}
+                    >
                       Delete
                     </s-button>
                   </div>
@@ -661,6 +647,15 @@ export default function CuratedAnswersPage() {
           if (newMeta) setExtraMeta((prev) => ({ ...prev, ...newMeta }));
           setBrowseOpen(false);
         }}
+      />
+
+      <ConfirmDeleteModal
+        open={deleteTarget !== null}
+        title={`Delete “${deleteTarget?.question || "this curated answer"}”?`}
+        body="The AI stops giving this answer immediately. This can't be undone."
+        loading={saving}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => deleteTarget && remove(deleteTarget.id)}
       />
     </s-page>
   );

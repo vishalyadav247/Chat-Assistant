@@ -6,8 +6,8 @@ import { runtimeConfig } from "../admin/runtime-config.server";
 import { requireShopId } from "../tenancy.server";
 import { logWarn } from "../log.server";
 
-// Product metafields as AI training data (spec 07 → "Manage metafields",
-// 2026-08-19). Catalog sync stores the product + variant metafields on the
+// Product metafields as AI training data (spec 07 → "Manage metafields").
+// Catalog sync stores the product + variant metafields on the
 // product row (Product.metafields JSON); the merchant opts individual
 // metafields in from the modal. Only ENABLED metafields are rendered into
 // Product.metafieldText, which is (a) part of productEmbeddingText() → the
@@ -16,7 +16,7 @@ import { logWarn } from "../log.server";
 // definition therefore never needs Shopify — it re-renders from the stored
 // JSON and re-embeds only the products whose text changed.
 //
-// STRUCTURED metafields only (user decision 2026-08-19): the catalog is
+// STRUCTURED metafields only: the catalog is
 // Shopify's metafieldDefinitions(ownerType) for products + variants, and only
 // metafield values that belong to a definition are stored — app-private /
 // legacy "namespace.key" metafields without a definition (review widgets,
@@ -64,7 +64,7 @@ const TEXT_CAP = 8000;
  * Metafield types the AI can learn from (rendered to plain text). Most
  * reference types (product/file/page…) and JSON blobs carry no shopper-readable
  * meaning without extra resolution and stay "Not supported".
- * `metaobject_reference` (and its list form) IS supported since 2026-09-07:
+ * `metaobject_reference` (and its list form) IS supported:
  * sync resolves the referenced metaobjects' fields into text
  * (`resolveMetaobjectRefs`) and stores it on the entry (`StoredMetafield.resolved`)
  * — a Specifications or Ingredients metaobject becomes learnable text.
@@ -342,7 +342,7 @@ export function parseStoredMetafields(json: unknown): StoredMetafield[] {
     }));
 }
 
-// ── Metaobject reference resolution (2026-09-07) ────────────────────────────
+// ── Metaobject reference resolution ────────────────────────────
 // A metaobject_reference metafield's VALUE is just a gid; the shopper-readable
 // content (a Specifications or Ingredients metaobject's fields) lives one hop
 // away. Sync collects the distinct referenced ids for ENABLED reference

@@ -5,7 +5,7 @@ import { resolveShopId } from "../lib/tenancy.server";
 import { sanitizeHtml } from "../lib/sanitize.server";
 
 // GET /apps/ccwidget/faq-search?q=… — server-side FAQ search for the widget
-// FAQ screen (spec 05 delta closed 2026-08-10). Searches ALL published FAQs,
+// FAQ screen (spec 05). Searches ALL published FAQs,
 // not just the featured set the boot config carries. Shop identity comes ONLY
 // from the verified proxy signature; response shape matches
 // config.featuredFaqs so the renderer reuses one code path.

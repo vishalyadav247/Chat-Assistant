@@ -294,7 +294,7 @@ function dot(a: number[], b: number[]): number {
 /**
  * The leave-your-email form on its own, with none of the handover side effects.
  *
- * WHY (user, 2026-09-09): the fallback reply literally says "leave your email
+ * WHY: the fallback reply literally says "leave your email
  * and our team will get back to you" — and nothing appeared. The form existed,
  * but only after `cannotAnswer.threshold` CONSECUTIVE dead ends (3 by default),
  * so the first two shoppers to hit it were invited to do something the widget

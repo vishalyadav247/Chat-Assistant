@@ -77,7 +77,7 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 | B-01 | Matrix matches published pricing | Compare `DEFAULT_PLANS` to the App Store listing pricing | Every price, trial, overage, quota and feature matches exactly | H |
 | B-02 | Operator edits a quota | `/admin/plans` → change `curated_answers` for Pro → save | `getQuota("pro","curated_answers")` returns the new value immediately in-process, and within `REFRESH_TTL_MS` (30s) in any other process | H |
 | B-03 | Propagation is app-wide | After B-02, check **every** installed shop on that tier | All shops on that plan see the new value — plans are global, only `Shop.plan` is per-shop | H, T |
-| B-04 | Operator toggles a feature | Uncheck `exports` for Plus → save | `hasFeature("plus","exports")` false; the export action returns a plan-gate error | H, P |
+| B-04 | Operator toggles a feature | Uncheck `remove_branding` for Plus → save | `hasFeature("plus","remove_branding")` false; the gated surface honors it (`exports` was un-gated 2026-09-10 and no longer exists as a feature) | H, P |
 | B-05 | Enforcement switch | Flip `open` ⇄ `enforced` | `open`: every gate passes, every quota `UNLIMITED`. `enforced`: real matrix values | H |
 | B-06 | Reset to defaults | "Reset all plans" | Row deleted; `PLANS` deep-equals `DEFAULT_PLANS` | H |
 | B-07 | Corrupt override row | Write invalid JSON to `admin:plans`, then save one plan | **Known defect: `getStoredPlanConfig()` returns `{}` on parse failure, so the save drops every other plan's overrides** | A |
@@ -88,7 +88,7 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 | B-12 | Downgrade keeps over-quota data | Create 50 curated answers on Plus → downgrade to Free (quota 5) | All 50 rows survive; new creates blocked; banner explains. **No deletions** | B |
 | B-13 | Never-gated surfaces | On Free: inbox, human handover, GDPR flows, Test AI console | All fully functional — these must never be gated | P |
 | B-14 | Same LLM on every tier | Compare model used on free vs plus | Identical — plans differ on volume and tooling only | P |
-| B-15 | New seams enforce | `active_campaigns`, `analytics_range_days`, `survey`, `push_notifications`, `cross_sell_pairs` + `recommendation_rules` quotas | Each blocked at the right tier, server-side. Un-gated by user decision: `multi_language` (2026-09-03) and `custom_recommendations` (2026-09-10 — merged recommendation rules + cross-sell save on every plan; only the COUNTS are tiered: pairs 3/10/25/100, rules 5/10/25/50, refused past quota on new creates, editing at cap allowed) | B, P |
+| B-15 | New seams enforce | `active_campaigns`, `analytics_range_days`, `survey`, `push_notifications`, `cross_sell_pairs` + `recommendation_rules` quotas | Each blocked at the right tier, server-side. Un-gated by user decision: `multi_language` (2026-09-03), `custom_recommendations` (2026-09-10 — merged recommendation rules + cross-sell save on every plan; only the COUNTS are tiered: pairs 3/10/25/100, rules 5/10/25/50, refused past quota on new creates, editing at cap allowed) and `csv_import` (2026-09-10 — FAQ CSV import on every plan, bounded by the `faqs` quota) | B, P |
 | B-16 | Price change doesn't re-price existing subs | Change Pro price → check an existing Pro subscriber | Shopify keeps the agreed charge; only new subscriptions get the new price. UI copy must say so | B |
 
 ## C. Promo / coupon codes (spec 15)
@@ -140,10 +140,10 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 
 | ID | Case | Expected | Scenarios |
 |---|---|---|---|
-| E-01 | All five source types | URL crawl, manual Q&A, CSV, file, Shopify pages ingest and become retrievable | H |
+| E-01 | All source types | URL crawl, file, Shopify pages ingest and become retrievable; LEGACY manual/csv rows (creation retired 2026-09-10, FAQ consolidation) still ingest, list, and delete | H |
 | E-02 | Chunking | ~1500 chars with 150 overlap, deterministic | B |
 | E-03 | SSRF rejection | Internal IPs, localhost, non-http schemes, redirects to internal hosts all refused | A |
-| E-04 | Quotas | `manual_qas`, `policy_pages`, `crawl_pages`, `file_uploads` enforced per tier | B, P |
+| E-04 | Quotas | `faqs` (25/50/100/250 — replaced `manual_qas` 2026-09-10; blocks FAQ create + import rows at cap, never edits), `policy_pages`, `crawl_pages`, `file_uploads` enforced per tier; FAQ CSV import un-gated (csv_import retired) | B, P |
 | E-05 | Unsupported file type | Errors cleanly (PDF/DOCX parsing is deferred by design) | B |
 | E-06 | Delete cascade | Deleting a source removes its knowledge rows and makes content unretrievable | H |
 | E-07 | Re-sync / weekly recrawl | Idempotent; no duplicate chunks | B |
@@ -221,7 +221,7 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 | I-04 | Actions | send, resolve, reopen, star, read, block, delete, assign | H |
 | I-05 | Delete conversation | Removes messages **and** the unresolved-question row | B |
 | I-06 | Contact classification | Re-evaluated on events; lead ↔ anonymous transitions correct | B |
-| I-07 | Contact CSV export | Formula-injection safe (`=`,`+`,`-`,`@` prefixed); plan-gated | A, P |
+| I-07 | Contact CSV export | Formula-injection safe (`=`,`+`,`-`,`@` prefixed); every plan (exports un-gated 2026-09-10) | A, P |
 | I-08 | Duplicate email | Case-insensitive duplicate rejected | B |
 | I-09 | Cross-session contact hijack | `proxy.prechat` binds writes to the caller's own `sessionId` | A, T |
 
@@ -344,7 +344,7 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 | Q-04b | Metaobject-reference metafields (07, MR1–MR4 in `features.test.ts`) | Sync resolves enabled `metaobject_reference` / list refs to the metaobject's fields as text (batched `nodes(ids:)`, needs `read_metaobjects`); a reference entry renders ONLY resolved text (never the gid); deleted metaobjects and disabled definitions are skipped; toggle-apply resolves refs synced before enabling | B |
 | Q-05 | AI instructions (08) | Persona, guardrails, recommendation rules, handover config all persist and take effect | H |
 | Q-06 | Curated answers (09) | CRUD; quota; draft never served; published-without-embedding never matches; HTML stripped from talking points | H, B, P |
-| Q-07 | Analytics (14) | Series/donut/CSAT/funnel/top questions; test chats excluded; rollup idempotent; range gated by plan; exports gated | H, B, P |
+| Q-07 | Analytics (14) | Series/donut/CSAT/funnel/top questions; test chats excluded; rollup idempotent; range gated by plan; exports on every plan (gate removed 2026-09-10) | H, B, P |
 | Q-08 | Settings (16) | General, chatbox, privacy tabs; store info; auto-resolve; team; order tracking; retention | H |
 | Q-09 | Proactive campaigns (12) | Dashboard, templates, editor, metrics; revenue recomputed server-side (client beacon ignored); active-campaign quota | H, A, P |
 | Q-10 | Mobile responsive (20) | Every `/app` page usable at ~390px on both surfaces; desktop pixel-identical *(manual visual)* | S |
@@ -494,6 +494,7 @@ failure. The HTTP suites additionally require `npm run dev` to be running on `:3
 | `scripts/qa/detail-lane.test.ts` | Y | no |
 | `scripts/qa/quota-grants.test.ts` | Z | no |
 | `scripts/qa/preflight.ts` | — (environment health, run first) | no |
+| `scripts/qa/data-sources.test.ts` | AA — every data source reaches the answer; every switch removes it | only for the queued-rebuild check (the app's job worker) |
 
 Seeding: `scripts/qa/seed-curated.ts` (curated fixtures), `scripts/qa/perf-seed.ts` (synthetic
 volume — **remove it again afterwards**).
@@ -563,6 +564,30 @@ and throwaway shops — and exits non-zero if the environment cannot be believed
 `--fix` puts back everything that is safe to put back (it never deletes shops,
 which could race a live run). **Run it before a campaign and after any
 interrupted suite.**
+
+### Every suite MUST disconnect the app singleton (2026-09-10)
+
+A suite that runs the real pipeline touches TWO Prisma clients: its own
+`new PrismaClient()` and the `app/db.server` singleton the pipeline imports.
+Disconnecting only the first leaves the singleton’s pool holding the event loop
+open, so the process prints its results and then **hangs forever** — and with
+`npm run` in front of it the output is still sitting in a pipe buffer, so a
+run that PASSED is indistinguishable from one that is stuck. `eval-golden.ts`
+and `agent-quality.test.ts` both had this; two finished runs were found wedged,
+one for 80 minutes. Fixed in both:
+
+```ts
+.finally(async () => {
+  await prisma.$disconnect();
+  const appDb = (await import("../../app/db.server")).default;
+  await appDb.$disconnect().catch(() => undefined);
+});
+```
+
+Symptom to recognise: no output, near-zero CPU, and `pg_stat_activity` showing
+the suite’s connections `idle` on `ClientRead`. Postgres is not blocking — the
+client simply never closed. Redirect to a FILE rather than through `npm` when
+you need to watch a long run in progress.
 
 ---
 
@@ -648,7 +673,7 @@ shopping rather than an answer.
 
 42 checks, dev Postgres only — no dev server, no LLM key, no Shopify call.
 
-**One rule: a live grant RAISES that store.s cap.** Effective limit = plan
+**One rule: a live grant RAISES that store’s cap.** Effective limit = plan
 allowance + live grants; nothing is consumed one at a time. Withdrawing or
 expiring a grant drops the cap back, and nothing already created under the
 higher cap is deleted — only new work stops.
@@ -690,3 +715,83 @@ spend the last credit — the loser sees `count 0` and tries the next row.
 **Fails closed:** any error in the credits path returns "no credit spent" and
 the caller falls through to its normal quota handling. A broken credits table
 must never serve free conversations that nothing is tracking.
+
+---
+
+# Round 4 — does the agent learn from every source, and forget on command? (2026-09-11)
+
+## AA. Data-source learning (`scripts/qa/data-sources.test.ts`)
+
+features.test.ts proves each source is ingested and retrievable. This suite asks the agent
+and reads the answer. Every source carries one invented fact ("14 Larkspur Lane",
+"MOONRAKER47") no model could know, so presence and absence in a reply are unambiguous;
+knowledge sources are also checked at the retrieval layer (deterministic). A presence check
+gets one retry for wording variance; an absence check never retries.
+
+| Source | ON → answered | per-row / status OFF | master "Learn …" OFF | deleted |
+|---|---|---|---|---|
+| Product | card | learnEnabled off → no card, rules too | no card, rules too | — |
+| Collection | named | learnEnabled off | not named | — |
+| Discount | code quoted | learnEnabled off; expired | not quoted | — |
+| Store page | answered | learnEnabled off → not retrieved/answered | bridge emptied, not errored | — |
+| Blog article | answered | — | not answered | — |
+| FAQ | answered | draft → gone; republish → back | — | gone |
+| File (TXT) | answered | inactive → gone | — | gone, no orphan chunks |
+| Policy | answered (snapshot fallback with no Shopify session) | — | — | — |
+| Curated answer | served | draft → not served | Learn products OFF → text still served, no card | — |
+| Recommendation rule | fires | inactive → does not fire | Learn products OFF → no card | — |
+
+Instructions: the **Behaviours** box is followed in small talk and in a knowledge answer;
+a banned topic is refused; a configured store scope serves the merchant's own off-topic
+message and still answers an in-catalogue product. Queued rebuild: while a toggle's job
+is queued the whole bridge is invisible (measured, by design of `status = pending`), and the
+APP's worker drains it. Purge: the uninstall purge leaves no shop-scoped row, grants included.
+
+### Defects this round found (all fixed)
+
+1. **The persona prompt ignored the Behaviours box** — it read `guidelines`/`avoid`, which no
+   screen could edit (identical install defaults on every shop). Frozen-prompt change; golden 20/20.
+2. **A store question routed to small talk got an invented answer** ("visits are not available
+   to the public" against a page saying Saturdays 10–2). ROUTER now counts questions about the
+   store itself as `question`; CHAT_REPLY states no store facts. New golden case.
+3. **Rules, curated cards and cross-sell ignored the learn switches** and could card draft /
+   archived / unpublished products (a 404 link). One `SHOWABLE_PRODUCT` filter for every
+   by-id lookup; rules skip when Learn products is off; curated keeps its text. Campaigns now
+   require `publishedOnline` too.
+4. **Bonus grants survived the uninstall purge** — added to `cleanupShop` and the redact audit.
+
+### Tests must never become job workers
+
+`enqueue()` starts the app's queue, and `start()` registers EVERY handler — so a test that
+enqueues turns its own process into a worker on the shared queue. It may then drain the job
+itself (proving nothing about the app's worker), and because an open pg-boss client keeps the
+event loop alive it never exits: three data-sources runs stayed alive as workers for up to an
+hour, able to pick up real shops' jobs. A suite that needs to enqueue installs a send-only
+client first and stops it in `finally`:
+
+```ts
+const { PgBoss } = await import("pg-boss");
+sender = new PgBoss({ connectionString: process.env.DATABASE_URL!, supervise: false, schedule: false });
+await sender.start();
+global.pgBossGlobal = { boss: sender, started: Promise.resolve() };
+// … finally: await sender.stop({ graceful: false }); global.pgBossGlobal = undefined;
+```
+
+### Background jobs do not hot-reload in dev
+
+Page requests pick up edits live; the job worker registered at boot keeps the code it booted
+with (`knowledge-jobs.server.ts` imports its handler statically). Seen 2026-09-11: a Privacy
+policy connected after an edit failed with `unknown source type "policy"` because the worker
+predated the new type. **After changing anything a job runs — ingestion, sync, bridge rebuild —
+restart the dev server before testing it through the UI.**
+
+### A crash mid-suite can erase operator data
+
+Suites that pin shared state (features, plan-gates, overage, admin-check pin `admin:plans`) restore it
+in a `finally` — which never runs if the process dies. On Windows the Prisma query engine is a
+separate process, and under memory pressure it can die mid-run (`ECONNREFUSED 127.0.0.1:<port>` /
+`P1017`). On 2026-09-11 that happened inside features.test.ts: the operator's plan matrix was left
+as `{}`, and the next suite faithfully "restored" the `{}` it found. It was recovered byte-for-byte
+from the table's un-vacuumed previous row version (`pageinspect`, superuser on the dev container).
+**Run suites one at a time, with memory to spare; after any crashed run, read preflight's plan
+matrix section before trusting the environment.**

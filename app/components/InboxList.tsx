@@ -93,6 +93,12 @@ export function InboxList({
                 <span className="cin-tags">
                   <span className="cin-tag chan">Online store</span>
                   {row.handover ? <span className="cin-tag hand">Handover</span> : null}
+                  {/* Human-support mode: mode=human WITHOUT the
+                      handover flag = the shop runs chat as a human channel
+                      (AI agent not activated). Handover keeps its own tag. */}
+                  {row.mode === "human" && !row.handover ? (
+                    <span className="cin-tag human">Human</span>
+                  ) : null}
                   {row.mode === "ai" && row.status === "open" ? (
                     <span className="cin-tag proc">AI</span>
                   ) : null}

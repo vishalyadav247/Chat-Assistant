@@ -1,6 +1,6 @@
 import { unauthenticated } from "../shopify.server";
 
-// File uploads via Shopify Files API staged uploads (decision 2026-08-06:
+// File uploads via Shopify Files API staged uploads (deliberately
 // no app CDN). Used for widget logo/launcher icon (06), FAQ category icons (07),
 // store logo (16). Accepts image buffers ≤2MB, returns the hosted CDN url.
 

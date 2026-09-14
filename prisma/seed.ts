@@ -55,8 +55,6 @@ async function main() {
       communicationStyle: String(persona.communicationStyle ?? "friendly").toLowerCase(),
       brandVoice: String(persona.brandVoice ?? ""),
       behaviours: String(persona.behaviours ?? ""),
-      guidelines: (persona.guidelines as string[]) ?? [],
-      avoid: (persona.avoid as string[]) ?? [],
       scope: String(persona.scope ?? ""),
       offTopicMessage: String(persona.offTopicMessage ?? ""),
       defaultLanguage: String(persona.defaultLanguage ?? "en"),

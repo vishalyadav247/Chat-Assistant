@@ -5,10 +5,10 @@ import { useNavDrawer } from "../web/use-nav-drawer";
 import { AdminSegmented, Icon, type IconName, type ThemePref } from "./AdminUi";
 import { THEME_COOKIE, isThemePref } from "./theme";
 
-// Chrome for the authed /admin pages (spec 19, redesigned 2026-09-03).
+// Chrome for the authed /admin pages (spec 19).
 //
 // This used to reuse the merchant web app's shell verbatim (`ccws-*` in
-// web-shell.css) under a 2026-08-20 "the console must not look like a third
+// web-shell.css) under a "the console must not look like a third
 // product" rule. The user has since asked for a distinct, glass, mobile-first
 // console — which cannot happen while a merchant surface shares the file — so
 // the chrome now has its OWN classes (`cca-*` in admin.css) and web-shell.css
@@ -40,7 +40,7 @@ function initials(value: string): string {
 
 export function AdminShell(props: { adminEmail: string; children: ReactNode }) {
   const location = useLocation();
-  // Sign-out asks first (user, 2026-08-20) — the form submits only on confirm.
+  // Sign-out asks first — the form submits only on confirm.
   const [confirmSignOut, setConfirmSignOut] = useState(false);
   const signOutForm = useRef<HTMLFormElement>(null);
   const { open: drawerOpen, setOpen: setDrawerOpen, navRef, railRef, menuBtnRef } = useNavDrawer();

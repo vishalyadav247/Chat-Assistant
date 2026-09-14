@@ -7,7 +7,7 @@ import { requireShopId } from "../tenancy.server";
 import { DETAIL_CONFIRM_SYSTEM, detailConfirmUser } from "./prompts";
 
 /**
- * Product-detail follow-ups (spec 03 delta, 2026-09-07).
+ * Product-detail follow-ups (spec 03).
  *
  * WHY (production behaviour report): the shopper is shown three bracelets,
  * asks "what is this one made of?", and gets a fresh recommendation — three

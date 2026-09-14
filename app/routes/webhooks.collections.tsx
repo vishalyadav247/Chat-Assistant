@@ -1,45 +1,20 @@
 import type { ActionFunctionArgs } from "react-router";
-import db from "../db.server";
-import { JOBS } from "../lib/jobs/handlers.server";
-import { enqueue } from "../lib/jobs/queue.server";
 import { authenticate } from "../shopify.server";
+import { enqueue } from "../lib/jobs/queue.server";
+import { JOBS } from "../lib/jobs/handlers.server";
 
-// Collections change rarely and the payload is tiny — direct upsert is still
-// fast enough for the 5s rule; embedding work (none for collections) stays out.
+// Enqueue-only (5s rule), the same as products: the row upsert, membership
+// refresh and delete all run in jobs. Jobs are idempotent.
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { topic, shop, payload } = await authenticate.webhook(request);
-  // Non-creating lookup (QA D11): unknown shops get no rows from a webhook.
-  const shopRow = await db.shop.findUnique({ where: { domain: shop }, select: { id: true } });
-  if (!shopRow) return new Response();
-  const shopId = shopRow.id;
-  const p = payload as { admin_graphql_api_id?: string; id?: number; title?: string; body_html?: string };
-  const shopifyCollectionId = p.admin_graphql_api_id ?? `gid://shopify/Collection/${p.id}`;
 
   switch (topic) {
     case "COLLECTIONS_CREATE":
     case "COLLECTIONS_UPDATE":
-      await db.collection.upsert({
-        where: { shopId_shopifyCollectionId: { shopId, shopifyCollectionId } },
-        update: {
-          title: p.title ?? "",
-          description: (p.body_html ?? "").replace(/<[^>]*>/g, " ").trim(),
-        },
-        create: {
-          shopId,
-          shopifyCollectionId,
-          title: p.title ?? "",
-          description: (p.body_html ?? "").replace(/<[^>]*>/g, " ").trim(),
-        },
-      });
-      // Products may have moved in or out. The payload doesn't say which, and
-      // enumerating them takes far longer than the 5s webhook budget — enqueue.
-      await enqueue(JOBS.collectionMembership, { shopDomain: shop, collectionId: shopifyCollectionId });
+      await enqueue(JOBS.collectionUpsert, { shopDomain: shop, payload });
       break;
     case "COLLECTIONS_DELETE":
-      await db.collection.deleteMany({ where: { shopId, shopifyCollectionId } });
-      // Membership dies with the collection — otherwise a collection-targeted
-      // recommendation keeps resolving through a collection Shopify deleted.
-      await db.collectionProduct.deleteMany({ where: { shopId, collectionId: shopifyCollectionId } });
+      await enqueue(JOBS.collectionDelete, { shopDomain: shop, payload });
       break;
     default:
       console.log(`Unhandled collections webhook topic: ${topic}`);

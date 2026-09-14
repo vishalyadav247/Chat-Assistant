@@ -23,17 +23,20 @@ Out: knowledge ingestion (04), the Training-data admin UI itself (07).
 2. Job pages Admin GraphQL (`products` query, 250/page, via `unauthenticated.admin(shop)` offline token): id, title, descriptionHtml→text, productType, vendor, tags, status, featuredImage, handle, priceRangeV2 min, totalInventory, variants (id, price, inventory, options).
 3. Normalize → upsert on `(shopId, shopifyProductId)`.
 4. Embed `title + ". " + description` in batches (≤100 texts/request) → raw `UPDATE products SET embedding = $1::vector`.
-5. Respect plan cap (200/500/1000/5000 by tier — spec 15): sync stops at cap, records `cappedAt`; admin shows "X of Y learned" + upgrade nudge.
+5. Respect plan cap (200/500/1000/5000 by tier — spec 15): sync stops at cap (derived from the plan quota + bonus, nothing stored); admin shows "X of Y learned" + upgrade nudge.
 6. Update SyncState; emit `analytics_event(type: catalog_synced)`.
 
 ### Webhook incremental
 - `products/create|update` → enqueue `product-upsert` (payload included): normalize → upsert → re-embed **only if title/description changed** (compare hash) → update stock/price always.
 - `products/delete` → delete row (embedding goes with it); remove from curated `productIds`? No — curated keeps ids, stock revalidation (09) flags them.
 - `collections/create|update|delete` → upsert/delete `Collection` (title, description, productCount, ruleSet→conditions summary).
-- Discounts (Pro+): `discounts/create|update|delete` webhook subscription registered **only when plan ≥ Pro and merchant enables real-time sync**; Free/Basic use manual "Sync now" button. Discount rows stored in `metadata`-style table or `DataSource type=discount` — v1: a `Discount` model (shopId, shopifyId, title, summary, status, startsAt, endsAt).
+- Discounts: `discounts/create|update|delete` webhooks apply on **every plan** (2026-09-11, user decision — they were Pro+ behind a merchant "Real-time sync" switch, and on other plans the webhook arrived and was discarded). "Sync now" pulls all on demand. Discount rows stored in `metadata`-style table or `DataSource type=discount` — v1: a `Discount` model (shopId, shopifyId, title, summary, status, startsAt, endsAt).
 
-### Scheduled reconcile
-- Daily pg-boss cron job per shop (design: "Auto sync: Daily"): re-page catalog, fix drift from missed webhooks; cheap no-op when hashes match.
+### Scheduled sync (revised 2026-09-11, user decision)
+- **Weekly** (`reconcile-all`, Mondays 03:17 UTC), every installed shop, every plan, no merchant toggle — and only for what no webhook reports: **collections** (smart-collection membership follows product tags; no webhook reports a product moving in or out), **pages** and **blogs** (spec 22; Shopify has no webhook topics for either).
+- **Products and discounts are not scheduled** — their webhooks apply each change as it happens. Accepted trade-off: a webhook lost to an outage longer than Shopify's retry window (8 retries over 4 hours) is not healed automatically; the tab's Sync button does it.
+- Replaces the old daily full re-sync, which was plan-gated (`catalog_auto_sync`, Pro+) behind a per-type merchant toggle and re-read every product of every Pro/Plus shop each night.
+- Every tab shows how its data stays current, the last-synced time and a manual Sync button — no Auto sync / Real-time switches.
 
 ## Business rules
 
@@ -45,7 +48,7 @@ Out: knowledge ingestion (04), the Training-data admin UI itself (07).
 
 ## Plan gating
 
-| Plan | Products synced | Discount real-time sync |
+| Plan | Products synced | Discount sync (webhooks on every plan since 2026-09-11) |
 |---|---|---|
 | Free | 200 | manual only |
 | Basic | 500 | manual only |

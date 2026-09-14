@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { InboxDetail } from "./InboxShared";
 import { PlanBadge } from "./ui/PlanGate";
@@ -122,10 +121,6 @@ export function InboxDetails({
   onBlock: () => void;
   onDelete: () => void;
 }) {
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const activeId = active?.id ?? null;
-  useEffect(() => setConfirmDelete(false), [activeId]);
-
   if (!active) {
     return (
       <div className="cin-col cin-details">
@@ -291,19 +286,9 @@ export function InboxDetails({
         <button type="button" className="cin-fb" onClick={onBlock} disabled={active.blocked}>
           {active.blocked ? "Blocked" : "Block"}
         </button>
-        <button
-          type="button"
-          className="cin-fb del"
-          onClick={() => {
-            if (!confirmDelete) {
-              setConfirmDelete(true);
-              return;
-            }
-            setConfirmDelete(false);
-            onDelete();
-          }}
-        >
-          {confirmDelete ? "Confirm?" : "Delete"}
+        {/* The route confirms in the shared ConfirmDeleteModal. */}
+        <button type="button" className="cin-fb del" onClick={onDelete}>
+          Delete
         </button>
       </div>
     </div>

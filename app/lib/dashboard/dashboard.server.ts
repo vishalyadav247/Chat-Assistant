@@ -267,7 +267,7 @@ export async function setupChecklist(
     },
     {
       id: "embed",
-      // Reworked 2026-09-09 (user): the step used to read "Embed app to your
+      // The step used to read "Embed app to your
       // theme" and send the merchant to Settings — a second admin page that
       // only offers the same theme-editor link. It also said nothing about the
       // current state, so a merchant who had already switched it on saw an

@@ -40,13 +40,13 @@ model Session {
 // ── Tenant root ─────────────────────────────────────────────────────────────
 
 model Shop {
-  id            String    @id @default(cuid())
-  domain        String    @unique // my-store.myshopify.com
-  name          String?
-  currency      String?
-  timezone      String?
-  plan          String    @default("free") // free | basic | pro | plus
-  planStatus    String    @default("none") // none | trial | active | cancelled
+  id              String    @id @default(cuid())
+  domain          String    @unique // my-store.myshopify.com
+  name            String?
+  currency        String?
+  timezone        String?
+  plan            String    @default("free") // free | basic | pro | plus
+  planStatus      String    @default("none") // none | trial | active | cancelled
   subscriptionId  String? // gid of the active AppSubscription
   billingInterval String? // monthly | yearly
   trialEndsAt     DateTime? // end of the CURRENT subscription's trial (Shopify's value)
@@ -59,14 +59,14 @@ model Shop {
   trialStartedAt  DateTime?
   trialDeadlineAt DateTime?
   usageLineItemId String? // AppSubscriptionLineItem gid for usage records
-  aiEnabled     Boolean   @default(true)
-  installedAt   DateTime  @default(now())
+  aiEnabled       Boolean   @default(true)
+  installedAt     DateTime  @default(now())
   // Last time the storefront widget asked for its config. The theme app embed
   // is the ONLY thing that makes that request, so a recent stamp is positive
   // proof the embed is live — without the read_themes scope, which this app
   // deliberately does not request (see lib/embed-status.server.ts).
-  widgetSeenAt  DateTime?
-  uninstalledAt DateTime?
+  widgetSeenAt    DateTime?
+  uninstalledAt   DateTime?
 
   @@map("shops")
 }
@@ -205,17 +205,64 @@ model Discount {
   @@map("discounts")
 }
 
+/// Online Store pages mirrored from the Admin API (spec 22). Prose, so the
+/// agent reads them through the knowledge bridge (DataSource type
+/// "store_pages"), not product search. No webhooks exist for pages — freshness
+/// comes from the Sync button and the daily reconcile.
+model StorePage {
+  id               String    @id @default(cuid())
+  shopId           String
+  shopifyPageId    String // Page GID
+  title            String
+  handle           String    @default("")
+  bodyText         String    @default("") // HTML stripped at sync
+  isPublished      Boolean   @default(true)
+  shopifyUpdatedAt DateTime?
+  // Default = isPublished at FIRST sync (a draft is listed but off, so the
+  // agent never quotes unreleased content). Later syncs never touch it.
+  learnEnabled     Boolean   @default(true)
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([shopId, shopifyPageId])
+  @@index([shopId])
+  @@map("store_pages")
+}
+
+/// Blog articles mirrored from the Admin API (spec 22) — same contract as
+/// StorePage; the bridge DataSource type is "blog_articles".
+model BlogArticle {
+  id               String    @id @default(cuid())
+  shopId           String
+  shopifyArticleId String // Article GID
+  blogTitle        String    @default("")
+  title            String
+  handle           String    @default("")
+  bodyText         String    @default("")
+  summary          String    @default("")
+  tags             String[]  @default([])
+  author           String    @default("")
+  isPublished      Boolean   @default(true)
+  shopifyUpdatedAt DateTime?
+  learnEnabled     Boolean   @default(true)
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([shopId, shopifyArticleId])
+  @@index([shopId])
+  @@map("blog_articles")
+}
+
 model SyncState {
-  id             String    @id @default(cuid())
-  shopId         String    @unique
-  productSyncAt  DateTime?
+  id               String    @id @default(cuid())
+  shopId           String    @unique
+  productSyncAt    DateTime?
   collectionSyncAt DateTime?
-  discountSyncAt DateTime?
-  metafieldSyncAt DateTime? // metafield definitions catalog (spec 07 Manage metafields)
-  productCount   Int       @default(0)
-  status         String    @default("idle") // idle | running | error
-  errorMessage   String?
-  cappedAt       Int?
+  discountSyncAt   DateTime?
+  metafieldSyncAt  DateTime? // metafield definitions catalog (spec 07 Manage metafields)
+  pageSyncAt       DateTime? // spec 22 Pages tab
+  articleSyncAt    DateTime? // spec 22 Blogs tab
+  productCount     Int       @default(0)
+  status           String    @default("idle") // idle | running | error
+  errorMessage     String?
 
   @@map("sync_states")
 }
@@ -223,18 +270,17 @@ model SyncState {
 // ── Knowledge / RAG (spec 04) ───────────────────────────────────────────────
 
 model DataSource {
-  id           String    @id @default(cuid())
-  shopId       String
-  type         String // url | manual | csv | file | pages | faq
-  name         String
-  url          String?
-  crawlScope   String? // page | linked | sitemap
-  reCrawlWeekly Boolean  @default(false)
-  status       String    @default("pending") // pending | active | inactive | error | suggested
-  chunkCount   Int       @default(0)
-  lastSyncedAt DateTime?
-  metadata     Json?
-  createdAt    DateTime  @default(now())
+  id            String    @id @default(cuid())
+  shopId        String
+  type          String // url | manual | csv | file | pages | faq | store_pages | blog_articles
+  name          String
+  url           String?
+  reCrawlWeekly Boolean   @default(false)
+  status        String    @default("pending") // pending | active | inactive | error | suggested
+  chunkCount    Int       @default(0)
+  lastSyncedAt  DateTime?
+  metadata      Json?
+  createdAt     DateTime  @default(now())
 
   @@index([shopId, type])
   @@map("data_sources")
@@ -271,14 +317,17 @@ model FaqCategory {
 }
 
 model Faq {
-  id         String  @id @default(cuid())
+  id         String   @id @default(cuid())
   shopId     String
   categoryId String?
   question   String
-  answerHtml String  @default("")
-  status     String  @default("draft") // published | draft
-  featured   Boolean @default(false)
-  position   Int     @default(0)
+  answerHtml String   @default("")
+  status     String   @default("draft") // published | draft
+  featured   Boolean  @default(false)
+  position   Int      @default(0)
+  // DB-stamped on insert (2026-09-10, user decision — merchants never enter a
+  // publish time). Rows older than the migration carry the migration time.
+  createdAt  DateTime @default(now())
 
   @@index([shopId, status])
   @@map("faqs")
@@ -363,8 +412,6 @@ model Persona {
   communicationStyle String   @default("friendly")
   brandVoice         String   @default("")
   behaviours         String   @default("")
-  guidelines         String[] @default([])
-  avoid              String[] @default([])
   scope              String   @default("")
   offTopicMessage    String   @default("")
   defaultLanguage    String   @default("en")
@@ -416,28 +463,28 @@ model ShopSettings {
 // ── Conversations (specs 03/10) ─────────────────────────────────────────────
 
 model Conversation {
-  id            String    @id @default(cuid())
-  shopId        String
-  sessionId     String
-  contactId     String?
-  mode          String    @default("ai") // ai | human
-  status        String    @default("open") // open | resolved
-  outcome       String?
-  starred       Boolean   @default(false)
-  blocked       Boolean   @default(false)
-  unread        Boolean   @default(true)
-  handover      Boolean   @default(false)
-  assigneeId    String?
-  channel       String    @default("store")
-  isTest        Boolean   @default(false)
-  summary       String? // rolling history summary cache
-  summaryMessageCount Int @default(0) // messages covered when summary was last refreshed
-  meteredAt     DateTime? // last usage-meter tick (session metering, spec 15)
-  rating        Int?
-  pageContext   Json?
-  startedAt     DateTime  @default(now())
-  endedAt       DateTime?
-  lastMessageAt DateTime  @default(now())
+  id                  String    @id @default(cuid())
+  shopId              String
+  sessionId           String
+  contactId           String?
+  mode                String    @default("ai") // ai | human
+  status              String    @default("open") // open | resolved
+  outcome             String?
+  starred             Boolean   @default(false)
+  blocked             Boolean   @default(false)
+  unread              Boolean   @default(true)
+  handover            Boolean   @default(false)
+  assigneeId          String?
+  channel             String    @default("store")
+  isTest              Boolean   @default(false)
+  summary             String? // rolling history summary cache
+  summaryMessageCount Int       @default(0) // messages covered when summary was last refreshed
+  meteredAt           DateTime? // last usage-meter tick (session metering, spec 15)
+  rating              Int?
+  pageContext         Json?
+  startedAt           DateTime  @default(now())
+  endedAt             DateTime?
+  lastMessageAt       DateTime  @default(now())
 
   @@index([shopId, status, lastMessageAt])
   @@index([shopId, sessionId])
@@ -573,8 +620,8 @@ model PlanUsage {
 /// capacity, so consuming them after billing had started would charge a
 /// merchant for the conversations the grant was meant to cover.
 model QuotaGrant {
-  id     String @id @default(cuid())
-  shopId String
+  id        String    @id @default(cuid())
+  shopId    String
   /// Which quota this tops up: "conversations", "products_synced", …
   /// (QuotaDimension in plan-shared.ts).
   ///
@@ -582,22 +629,22 @@ model QuotaGrant {
   /// METER, so a grant is consumed one at a time and runs out. Every other
   /// dimension is a CEILING ("at most N products synced"), so a grant simply
   /// raises the cap for as long as it is live and never depletes.
-  dimension String @default("conversations")
+  dimension String    @default("conversations")
   /// Amount granted. Immutable — `remaining` is what moves.
-  amount Int
+  amount    Int
   /// How much of this grant is still in force. For a METER it is decremented as
   /// conversations are served past the plan quota. For a CEILING it stays at
   /// `amount` until the grant is withdrawn or expires.
   remaining Int
   /// Operator-facing note: why this was granted. Shown in the admin list.
-  reason    String   @default("")
+  reason    String    @default("")
   /// Who granted it (AdminUser email/label at grant time, not a live FK — the
   /// record must survive the operator being removed).
-  grantedBy String   @default("")
+  grantedBy String    @default("")
   /// Null = never expires. Past ⇒ ignored by every read, without deleting the
   /// row, so the history stays auditable.
   expiresAt DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   @@index([shopId, dimension, expiresAt])
   @@map("quota_grants")
@@ -630,7 +677,6 @@ model DataRequest {
   shopId        String
   customerEmail String
   status        String    @default("pending") // pending | ready | completed
-  exportPath    String?
   requestedAt   DateTime  @default(now())
   dueAt         DateTime
   completedAt   DateTime?
@@ -702,16 +748,14 @@ model TeamSession {
 }
 
 model PushSubscription {
-  id         String    @id @default(cuid())
-  shopId     String
-  memberId   String
-  endpoint   String    @unique
-  p256dh     String
-  auth       String
-  userAgent  String?
-  createdAt  DateTime  @default(now())
-  lastUsedAt DateTime?
-  failedAt   DateTime?
+  id        String   @id @default(cuid())
+  shopId    String
+  memberId  String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  userAgent String?
+  createdAt DateTime @default(now())
 
   @@index([shopId, memberId])
   @@map("push_subscriptions")
@@ -733,28 +777,28 @@ model AppSecret {
 // data migration for zero user-visible gain.
 
 model AdminUser {
-  id           String            @id @default(cuid())
-  email        String            @unique
+  id           String         @id @default(cuid())
+  email        String         @unique
   name         String
   passwordHash String
-  failedLogins Int               @default(0) // per-account lockout (parity with TeamMember)
+  failedLogins Int            @default(0) // per-account lockout (parity with TeamMember)
   lockedUntil  DateTime?
-  createdAt    DateTime          @default(now())
-  updatedAt    DateTime          @updatedAt
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
   sessions     AdminSession[]
 
   @@map("platform_admins")
 }
 
 model AdminSession {
-  id         String        @id @default(cuid())
-  tokenHash  String        @unique // sha256 of the raw cookie token
+  id         String    @id @default(cuid())
+  tokenHash  String    @unique // sha256 of the raw cookie token
   adminId    String
-  admin      AdminUser     @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  admin      AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
   expiresAt  DateTime
-  lastSeenAt DateTime      @default(now())
+  lastSeenAt DateTime  @default(now())
   userAgent  String?
-  createdAt  DateTime      @default(now())
+  createdAt  DateTime  @default(now())
 
   @@index([adminId])
   @@index([expiresAt])

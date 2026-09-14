@@ -131,19 +131,26 @@ async function main(): Promise<void> {
     );
 
     // ── B-15 active_campaigns quota ───────────────────────────────────────
-    await setPlan("basic"); // quota 2
+    await setPlan("basic"); // quota read live — 3 since the 2026-09-11 re-baseline
+    const basicCampaigns = plans.getQuota("basic", "active_campaigns");
     const campaignPayload = (name: string, status: "active" | "inactive") => ({
       name,
       templateType: "welcome",
       status,
       settings: {},
     });
-    const c1 = await saveCampaign(shopId, "basic", campaignPayload("probe 1", "active"));
-    const c2 = await saveCampaign(shopId, "basic", campaignPayload("probe 2", "active"));
-    ok("two active campaigns allowed on Basic", c1.ok === true && c2.ok === true);
-    const c3 = await saveCampaign(shopId, "basic", campaignPayload("probe 3", "active"));
+    const withinQuota = [];
+    for (let i = 1; i <= basicCampaigns; i++) {
+      withinQuota.push(await saveCampaign(shopId, "basic", campaignPayload(`probe ${i}`, "active")));
+    }
+    const c1 = withinQuota[0];
     ok(
-      "third ACTIVE campaign refused on Basic",
+      `${basicCampaigns} active campaigns allowed on Basic`,
+      withinQuota.length === basicCampaigns && withinQuota.every((r) => r.ok === true),
+    );
+    const c3 = await saveCampaign(shopId, "basic", campaignPayload("probe over quota", "active"));
+    ok(
+      "the next ACTIVE campaign past the quota is refused on Basic",
       c3.ok === false && c3.code === "plan_gate",
       c3.ok === false ? c3.error : "unexpectedly succeeded",
     );
@@ -171,8 +178,7 @@ async function main(): Promise<void> {
     ok("Plus has unlimited active campaigns", cUnlimited.ok === true);
 
     // ── B-15: recommendation rules + cross-sell are UN-GATED (2026-09-10) ──
-    // The merged rule saves on every plan; what varies is the
-    // cross_sell_pairs QUOTA (free = 3 on the default matrix).
+    // The merged rule saves on every plan; cross-sell pairs have no limit.
     await setPlan("free");
     let freeRecOk = false;
     try {
@@ -239,10 +245,16 @@ async function main(): Promise<void> {
       !(plans.GATED_FEATURES as string[]).includes("custom_recommendations"),
     );
 
-    const freePairQuota = plans.getQuota("free", "cross_sell_pairs");
-    ok("cross_sell_pairs quota on Free is 3", freePairQuota === 3, String(freePairQuota));
+    // Cross-sell pairs have NO limit since 2026-09-11 (user decision): a pair
+    // costs nothing per chat turn and is already bounded by one pair per
+    // product. Asserted on Free, where the old limit of 3 used to refuse.
+    ok(
+      "cross_sell_pairs is no longer a quota dimension",
+      !(plans.QUOTA_DIMENSIONS as string[]).includes("cross_sell_pairs"),
+    );
+    const PAIRS_PAST_OLD_LIMIT = 6; // the old Free limit was 3
     let pairsCreated = 0;
-    for (let i = 1; i <= freePairQuota; i++) {
+    for (let i = 1; i <= PAIRS_PAST_OLD_LIMIT; i++) {
       try {
         await saveCrossSellPair(shopId, {
           productId: `gid://shopify/Product/${i}`,
@@ -253,32 +265,22 @@ async function main(): Promise<void> {
         break;
       }
     }
-    ok("cross-sell pairs save on Free up to the quota", pairsCreated === freePairQuota, String(pairsCreated));
-    // The quota refusal is a merchant-facing Error ("Your plan allows N…"),
-    // not a "plan_gate:"-prefixed gate error — assert it directly rather than
-    // through refused(), which only recognises the gate shape.
-    let fourthRefused = false;
+    ok(
+      "a Free store saves cross-sell pairs past the old limit of 3",
+      pairsCreated === PAIRS_PAST_OLD_LIMIT,
+      String(pairsCreated),
+    );
+    let editOk = false;
     try {
-      await saveCrossSellPair(shopId, {
-        productId: `gid://shopify/Product/${freePairQuota + 1}`,
-        companionIds: ["gid://shopify/Product/99"],
-      });
-    } catch (error) {
-      fourthRefused = /plan allows/i.test((error as Error).message ?? "");
-    }
-    ok("one pair past the quota is refused", fourthRefused);
-    let editAtCapOk = false;
-    try {
-      // Editing an EXISTING pair at the cap must never be blocked.
       await saveCrossSellPair(shopId, {
         productId: "gid://shopify/Product/1",
         companionIds: ["gid://shopify/Product/98"],
       });
-      editAtCapOk = true;
+      editOk = true;
     } catch {
-      editAtCapOk = false;
+      editOk = false;
     }
-    ok("editing an existing pair at the cap still saves", editAtCapOk);
+    ok("editing an existing pair still saves", editOk);
 
     // Auto-detect language is UN-GATED (2026-09-03): every plan may turn it on.
     const general = {
@@ -307,9 +309,54 @@ async function main(): Promise<void> {
 
     // ── B-13 never-gated surfaces stay open on Free ───────────────────────
     await setPlan("free");
-    for (const feature of ["survey", "push_notifications", "exports"] as const) {
+    // push_notifications is on Free since the 2026-09-11 re-baseline.
+    for (const feature of ["remove_branding", "order_tracking"] as const) {
       ok(`free is gated out of ${feature}`, plans.hasFeature("free", feature) === false);
     }
+    // order_tracking is applied in shop-config, so the widget config AND the
+    // pipeline's track_order action both see the effective value. The stored
+    // switch stays on — an upgrade restores it untouched.
+    {
+      const { getShopConfig, invalidateShopConfig } = await import(
+        "../../app/lib/config/shop-config.server"
+      );
+      const { availableActions } = await import("../../app/lib/pipeline/actions.server");
+      await db.widgetSettings.upsert({
+        where: { shopId },
+        create: { shopId, settings: { orderTracking: true } },
+        update: { settings: { orderTracking: true } },
+      });
+      invalidateShopConfig(shopId);
+      const freeCfg = await getShopConfig(shopId);
+      ok(
+        "Free: stored orderTracking on → effective off, no track_order action",
+        freeCfg.widget.orderTracking === false &&
+          !availableActions(freeCfg.widget).some((a) => a.key === "track_order"),
+      );
+      await setPlan("basic");
+      invalidateShopConfig(shopId);
+      const basicCfg = await getShopConfig(shopId);
+      ok(
+        "Basic: order tracking effective again after the upgrade",
+        basicCfg.widget.orderTracking === true &&
+          availableActions(basicCfg.widget).some((a) => a.key === "track_order"),
+      );
+      await db.widgetSettings.delete({ where: { shopId } });
+      invalidateShopConfig(shopId);
+      await setPlan("free");
+    }
+    // "exports" and "file_upload" were un-gated 2026-09-10 (user decision):
+    // exports have no cap at all; file uploads are capped only by the
+    // file_uploads QUOTA (5 on every plan).
+    ok(
+      "exports + file_upload are no longer gated features",
+      !(plans.GATED_FEATURES as string[]).includes("exports") &&
+        !(plans.GATED_FEATURES as string[]).includes("file_upload"),
+    );
+    ok(
+      "file_uploads quota is nonzero on every plan",
+      (["free", "basic", "pro", "plus"] as const).every((p) => plans.getQuota(p, "file_uploads") > 0),
+    );
     // Spec 15 never-gate list: inbox, human handover, GDPR flows and the Test
     // AI console must have NO gate identifier at all, so no operator edit at
     // /admin/plans can ever switch them off for a tier.
@@ -355,7 +402,7 @@ async function main(): Promise<void> {
     ok("…so the curated quota still bites", openCreate.ok === false);
     // FEATURES are not grantable — a grant tops up a NUMBER, never unlocks a
     // gated capability. Upgrading is the only way to get those.
-    ok("…but features stay gated by plan", plans.hasFeature("free", "exports") === false);
+    ok("…but features stay gated by plan", plans.hasFeature("free", "remove_branding") === false);
     for (const g of await grantsMod.listGrants(shopId)) await grantsMod.revokeGrant(shopId, g.id);
   } finally {
     // Remove the fixture shop and restore the operator's stored plan config.

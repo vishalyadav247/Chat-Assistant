@@ -388,7 +388,7 @@ export function ContactDetailPanel(props: {
             <PanelSkeleton />
           ) : (
             <s-stack gap="base">
-              {/* Name + type only (no avatar — merchant request 2026-08-17). */}
+              {/* Name + type only (no avatar). */}
               <div
                 style={{
                   display: "flex",

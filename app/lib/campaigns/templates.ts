@@ -90,14 +90,9 @@ const settings = (
   };
 };
 
-/** Message-tab sets. Product Quiz is Pro+ everywhere it appears. */
-const FULL_KINDS: CampaignMessageData["kind"][] = [
-  "text",
-  "product_recommendation",
-  "discount",
-  "product_quiz",
-];
-const NO_QUIZ_KINDS: CampaignMessageData["kind"][] = ["text", "product_recommendation", "discount"];
+/** What the Message tab offers. Product Quiz was offered here but has no
+  * runtime, so saving one always failed — withdrawn until it exists. */
+const MESSAGE_KINDS: CampaignMessageData["kind"][] = ["text", "product_recommendation", "discount"];
 
 export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
   {
@@ -115,7 +110,7 @@ export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
     scopeMode: "fixed",
     timingMode: "dwell_or_scroll",
     showCartValue: false,
-    messageKinds: FULL_KINDS,
+    messageKinds: MESSAGE_KINDS,
     showContentMode: true,
     defaults: settings("Welcome visitor", {
       trigger: { pageScope: "home", sendAfter: "time", delaySeconds: 5 },
@@ -169,7 +164,7 @@ export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
     scopeMode: "product",
     timingMode: "dwell_or_scroll",
     showCartValue: false,
-    messageKinds: FULL_KINDS,
+    messageKinds: MESSAGE_KINDS,
     showContentMode: false,
     defaults: settings("Product Recommendation", {
       trigger: { pageScope: "all_product_pages", sendAfter: "time", delaySeconds: 8 },
@@ -230,7 +225,7 @@ export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
     scopeMode: "fixed",
     timingMode: "dwell_or_scroll",
     showCartValue: true,
-    messageKinds: NO_QUIZ_KINDS,
+    messageKinds: MESSAGE_KINDS,
     showContentMode: false,
     defaults: settings("View Cart", {
       trigger: { pageScope: "cart", sendAfter: "time", delaySeconds: 5, cartMinItems: 1 },
@@ -285,7 +280,7 @@ export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
     scopeMode: "collection",
     timingMode: "dwell_or_scroll",
     showCartValue: false,
-    messageKinds: NO_QUIZ_KINDS,
+    messageKinds: MESSAGE_KINDS,
     showContentMode: false,
     defaults: settings("Collection Boost", {
       trigger: { pageScope: "all_collection_pages", sendAfter: "time", delaySeconds: 6 },
@@ -313,7 +308,7 @@ export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
     scopeMode: "fixed",
     timingMode: "dwell_or_scroll",
     showCartValue: true,
-    messageKinds: NO_QUIZ_KINDS,
+    messageKinds: MESSAGE_KINDS,
     showContentMode: false,
     defaults: settings("Remove items from cart", {
       trigger: { pageScope: "all_pages", sendAfter: "time", delaySeconds: 3, cartMinValue: 0 },
@@ -341,7 +336,7 @@ export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
     scopeMode: "fixed",
     timingMode: "dwell_or_scroll",
     showCartValue: false,
-    messageKinds: FULL_KINDS,
+    messageKinds: MESSAGE_KINDS,
     showContentMode: true,
     defaults: settings("Search page", {
       trigger: { pageScope: "search", sendAfter: "time", delaySeconds: 5 },
@@ -400,7 +395,8 @@ export const MESSAGE_KIND_LABELS: Record<CampaignMessageData["kind"], string> = 
   floater: "Smart Product Page",
 };
 
-/** Product Quiz is Pro+ regardless of the template it appears on. */
+/** Premium message kinds. Only Product Quiz, which no template offers any more
+ *  (it has no widget renderer) — kept so a legacy stored value stays gated. */
 export function isPremiumMessageKind(kind: CampaignMessageData["kind"]): boolean {
   return kind === "product_quiz";
 }

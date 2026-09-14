@@ -6,23 +6,27 @@ import { DataTable } from "./DataTable";
 import { ManageMetafieldsModal } from "./ManageMetafieldsModal";
 import { BrowseModalShell, BrowseThumb } from "./BrowseProductsModal";
 import {
-  AutoSyncControl,
+  FilterSelect,
+  SyncStatus,
   LearnCard,
   StatusBadge,
-  SubTabs,
+  useMasterLearnDraft,
   useSyncWatcher,
   useTrainingFetcher,
 } from "./TrainingShared";
+import { SaveBar } from "./SaveBar";
 import { PlanBanner, PlanMeter } from "./ui/PlanGate";
 import { BRAND } from "./ui/tokens";
 
 // Products tab (spec 07, design #viewTraining → Products): learn card with
 // master switch, manage card (Manage metafields modal + Sync), sub-tabs
-// All/Active/Inactive + Learning on/off (2026-08-17), table with per-row learn
+// All/Active/Inactive + Learning on/off, table with per-row learn
 // toggle + read-only view modal (row click opens it too; lists synced
-// metafields, flagging the ones the AI learns from — 2026-08-19).
+// metafields, flagging the ones the AI learns from).
 
-type SubTab = "all" | "active" | "inactive" | "learning_on" | "learning_off";
+// FAQ-style filter dropdowns (user, 2026-09-11 — replaced the SubTabs pills).
+type StatusFilter = "" | "active" | "inactive";
+type LearnFilter = "" | "on" | "off";
 
 export function TrainingProductsTab(props: {
   rows: ProductRow[];
@@ -34,13 +38,7 @@ export function TrainingProductsTab(props: {
   /** Master "Learn products" permission (ShopSettings.learn.products) —
    *  independent of per-row learnEnabled, which applies only when this is on. */
   masterEnabled: boolean;
-  /** Plan feature `catalog_auto_sync` (Pro+) — toggle is locked when false. */
-  autoSyncAvailable: boolean;
-  /** Tier that unlocks auto sync, or null when this plan has it. */
-  autoSyncPlan: string | null;
-  /** ShopSettings.catalogAutoSync.products — daily full re-sync (webhooks unaffected). */
-  autoSyncEnabled: boolean;
-  /** Manage metafields modal rows + plan cap (spec 07, 2026-08-19). */
+  /** Manage metafields modal rows + plan cap (spec 07). */
   metafields: MetafieldDefinitionRow[];
   metafieldQuota: number;
   metafieldSyncAt: string | null;
@@ -57,7 +55,8 @@ export function TrainingProductsTab(props: {
   const isMobile = useIsMobile();
   const { submit, pendingIntent } = useTrainingFetcher();
   const syncWatch = useSyncWatcher(props.lastSyncedAt, "Products synced");
-  const [subTab, setSubTab] = useState<SubTab>("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("");
+  const [learnFilter, setLearnFilter] = useState<LearnFilter>("");
   const [detail, setDetail] = useState<ProductDetail | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [metafieldsOpen, setMetafieldsOpen] = useState(false);
@@ -67,20 +66,16 @@ export function TrainingProductsTab(props: {
     }
   });
 
-  const rows = useMemo(() => {
-    switch (subTab) {
-      case "active":
-        return props.rows.filter((row) => row.status === "active");
-      case "inactive":
-        return props.rows.filter((row) => row.status !== "active");
-      case "learning_on":
-        return props.rows.filter((row) => row.learnEnabled);
-      case "learning_off":
-        return props.rows.filter((row) => !row.learnEnabled);
-      default:
-        return props.rows;
-    }
-  }, [props.rows, subTab]);
+  const rows = useMemo(
+    () =>
+      props.rows.filter(
+        (row) =>
+          (!statusFilter ||
+            (statusFilter === "active" ? row.status === "active" : row.status !== "active")) &&
+          (!learnFilter || row.learnEnabled === (learnFilter === "on")),
+      ),
+    [props.rows, statusFilter, learnFilter],
+  );
 
   const openDetail = (row: ProductRow) => {
     setDetail(null);
@@ -93,56 +88,35 @@ export function TrainingProductsTab(props: {
 
   const enabledMetafields = props.metafields.filter((m) => m.enabled).length;
 
+  // Master switch = major setting → Save/Discard bar; row toggles stay instant.
+  const master = useMasterLearnDraft(props.masterEnabled, (enabled) =>
+    submit("learn-master", { type: "products", enabled: enabled ? "true" : "false" }),
+  );
+
   return (
     <s-stack gap="base">
+      <SaveBar
+        dirty={master.dirty}
+        saving={pendingIntent === "learn-master"}
+        onSave={master.onSave}
+        onDiscard={master.onDiscard}
+      />
       <LearnCard
         title="Products"
         chip={`${props.masterEnabled ? props.learned : 0} of ${props.total} products learned`}
         description="Help customers discover products, get details about features and pricing, and find what they're looking for."
-        switchChecked={props.masterEnabled}
+        switchChecked={master.draft}
         switchLabel="Learn products"
-        onSwitch={(checked) =>
-          submit("learn-master", { type: "products", enabled: checked ? "true" : "false" })
-        }
+        onSwitch={master.setDraft}
       />
 
-      <s-section heading="Manage data">
+      <s-section heading="Manage products">
         <s-stack gap="base">
-          {props.syncedBonus > 0 ? (
-            <s-banner tone="success">
-              Includes <b>{props.syncedBonus.toLocaleString("en-US")}</b> bonus product
-              {props.syncedBonus === 1 ? "" : "s"} on top of your plan, added by the ChatConvert
-              team. Your limit returns to the plan amount if they are withdrawn.
-            </s-banner>
-          ) : null}
-          <PlanMeter
-            used={props.syncedUsed}
-            quota={props.syncedQuota}
-            label="products synced"
-            nextPlan={props.syncedNextPlan}
-          />
-          {props.syncedUsed >= props.syncedQuota ? (
-            <PlanBanner
-              plan={props.syncedNextPlan}
-              tone="warning"
-              heading="Your catalogue has reached this plan's sync limit"
-            >
-              Products beyond the limit aren&apos;t synced, so the AI can&apos;t recommend
-              them.
-            </PlanBanner>
-          ) : null}
           <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="start">
-            <AutoSyncControl
+            <SyncStatus
               type="products"
-              available={props.autoSyncAvailable}
-              availablePlan={props.autoSyncPlan}
-              enabled={props.autoSyncEnabled}
-              busy={pendingIntent === "catalog-autosync"}
               lastSyncedAt={props.lastSyncedAt}
               running={props.syncStatus === "running" || syncWatch.syncing}
-              onChange={(enabled) =>
-                submit("catalog-autosync", { type: "products", enabled: enabled ? "true" : "false" })
-              }
             />
             <s-stack direction="inline" gap="small-200" alignItems="center">
               {/* Surfaced OUTSIDE the modal too: the cap used to be visible
@@ -166,8 +140,33 @@ export function TrainingProductsTab(props: {
             </s-stack>
           </s-grid>
 
+          {props.syncedBonus > 0 ? (
+            <s-banner tone="success">
+              Includes <b>{props.syncedBonus.toLocaleString("en-US")}</b> bonus product
+              {props.syncedBonus === 1 ? "" : "s"} on top of your plan, added by the ChatConvert
+              team. Your limit returns to the plan amount if they are withdrawn.
+            </s-banner>
+          ) : null}
+          <PlanMeter
+            used={props.syncedUsed}
+            quota={props.syncedQuota}
+            label="products synced"
+            nextPlan={props.syncedNextPlan}
+          />
+          {props.syncedUsed >= props.syncedQuota ? (
+            <PlanBanner
+              plan={props.syncedNextPlan}
+              tone="warning"
+              heading="Your catalogue has reached this plan's sync limit"
+            >
+              Products beyond the limit aren&apos;t synced, so the AI can&apos;t recommend
+              them.
+            </PlanBanner>
+          ) : null}
+
           <DataTable
             rows={rows}
+            searchAlwaysOpen
             searchPlaceholder="Search products by title or tag"
             searchFn={(row, q) =>
               row.title.toLowerCase().includes(q) ||
@@ -177,17 +176,26 @@ export function TrainingProductsTab(props: {
             perPage={10}
             onRowClick={openDetail}
             toolbar={
-              <SubTabs
-                tabs={[
-                  { id: "all", label: "All" },
-                  { id: "active", label: "Active" },
-                  { id: "inactive", label: "Inactive" },
-                  { id: "learning_on", label: "Learning on" },
-                  { id: "learning_off", label: "Learning off" },
-                ]}
-                active={subTab}
-                onChange={setSubTab}
-              />
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <FilterSelect
+                  label="Status"
+                  value={statusFilter}
+                  options={[
+                    { value: "active", label: "Active" },
+                    { value: "inactive", label: "Inactive" },
+                  ]}
+                  onChange={(v) => setStatusFilter(v as StatusFilter)}
+                />
+                <FilterSelect
+                  label="Learning"
+                  value={learnFilter}
+                  options={[
+                    { value: "on", label: "Learning on" },
+                    { value: "off", label: "Learning off" },
+                  ]}
+                  onChange={(v) => setLearnFilter(v as LearnFilter)}
+                />
+              </div>
             }
             bulkActions={(ids, clear) => (
               <>
@@ -260,19 +268,8 @@ export function TrainingProductsTab(props: {
                   />
                 ),
               },
-              {
-                key: "actions",
-                title: "Actions",
-                align: "end",
-                render: (row) => (
-                  <s-button
-                    variant="tertiary"
-                    icon="view"
-                    accessibilityLabel={`View ${row.title}`}
-                    onClick={() => openDetail(row)}
-                  />
-                ),
-              },
+              // No view/eye action column (user, 2026-09-11): clicking the
+              // row already opens the view modal.
             ]}
           />
         </s-stack>

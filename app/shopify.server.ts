@@ -44,13 +44,13 @@ export const unauthenticated = shopify.unauthenticated;
 // Shop-domain login — powers the "Log in with your store" card on the public
 // landing page (`app/routes/_index`).
 //
-// This was removed on 2026-08-21 citing "App Store review requirement 2.3.1 —
+// This was once removed citing "App Store review requirement 2.3.1 —
 // no manual .myshopify.com entry". That citation was never verifiable: the QA
 // note recording it already flagged that a shopify.dev search could not find
-// the rule, and a second search on 2026-09-07 found nothing either. What does
+// the rule, and a second search found nothing either. What does
 // exist is Shopify's own app template, which ships this exact form and
 // documents `shopify.login` as the supported way to build it. Restored on the
-// user's call — see the PROGRESS.md decisions entry for 2026-09-07.
+// user's call (see the PROGRESS.md decisions log).
 export const login = shopify.login;
 export const registerWebhooks = shopify.registerWebhooks;
 export const sessionStorage = shopify.sessionStorage;

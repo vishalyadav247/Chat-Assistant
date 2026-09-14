@@ -42,7 +42,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const maxTokens = maxTokensRaw === "" ? null : Math.floor(Number(maxTokensRaw));
 
   // Hard gate on the "Custom…" free-text id BEFORE anything is persisted — a
-  // bad id here breaks chat for every tenant within 30s (QA 2026-08-21).
+  // bad id here breaks chat for every tenant within 30s.
   const idError = chatModelError(chatModel);
   if (idError) return { ok: false as const, error: idError, warning: null };
 

@@ -16,8 +16,8 @@ import styles from "./styles.module.css";
 //   1. the shop-domain login card → login() → Shopify's managed install screen;
 //   2. the App Store listing link, once a handle is configured.
 //
-// The login card was removed on 2026-08-21 citing "App Store review req 2.3.1",
-// and restored on 2026-09-07: that citation was never verifiable (see the note
+// The login card was once removed citing "App Store review req 2.3.1", and
+// restored: that citation was never verifiable (see the note
 // in shopify.server.ts) and Shopify's own app template ships this exact form.
 //
 // Shopify still bounces merchants through this route with ?shop=… on their way

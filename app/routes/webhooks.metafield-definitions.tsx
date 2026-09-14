@@ -4,7 +4,7 @@ import { enqueue } from "../lib/jobs/queue.server";
 import { JOBS } from "../lib/jobs/handlers.server";
 
 // metafield_definitions/create|update|delete (spec 07 Manage metafields,
-// 2026-08-19; needs the read_content scope). Enqueue-only (5s rule): the job
+// needs the read_content scope). Enqueue-only (5s rule): the job
 // re-mirrors the whole definitions catalog from the Admin API, so the payload
 // is not needed and redeliveries are harmless.
 export const action = async ({ request }: ActionFunctionArgs) => {

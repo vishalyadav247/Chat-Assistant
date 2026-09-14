@@ -3,6 +3,7 @@ import { z } from "zod";
 import { authenticate } from "../shopify.server";
 import { resolveShopId } from "../lib/tenancy.server";
 import { loadShopSettings } from "../lib/settings/save.server";
+import { getShopConfig } from "../lib/config/shop-config.server";
 import { get17TrackShipment, type ShipmentInfo } from "../lib/tracking/seventeen-track.server";
 import { logError } from "../lib/log.server";
 
@@ -150,6 +151,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   const shopId = await resolveShopId(session.shop);
+  // Server-side gate: the widget hides tracking when it is off or the plan lacks
+  // order_tracking, but this endpoint is public — refuse it here too. The shop
+  // config's widget.orderTracking is already the effective (switch AND plan) value.
+  if (!(await getShopConfig(shopId)).widget.orderTracking) {
+    return Response.json({ ok: false, error: "unavailable" }, { status: 403, ...noStore });
+  }
   const settings = await loadShopSettings(shopId);
   const tracking = settings.orderTracking;
   const integrated = tracking.mode === "integration" && Boolean(tracking.apiKey);

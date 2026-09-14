@@ -3,12 +3,12 @@
 // the /admin dashboard. Overrides live in app_secrets["admin:plans"] and
 // are merged into the exported PLANS object IN PLACE, so the 20+ sync consumers
 // (incl. direct PLANS[...] reads) pick them up with zero signature changes.
-// GATES ARE ALWAYS LIVE (2026-09-08). The "open / enforced" operator switch was
+// GATES ARE ALWAYS LIVE. The "open / enforced" operator switch was
 // removed: it existed only while the tiers were being decided, and it was global
 // — left on it served every merchant the top tier for free, silently. The tiers
 // are final, so every quota and feature gate below is applied, always. To give
 // ONE store more, grant it bonus quota (quota-grants.server.ts), which raises
-// that store.s cap without touching anyone else.
+// that store’s cap without touching anyone else.
 
 import { z } from "zod";
 import db from "../../db.server";
@@ -39,10 +39,13 @@ export {
   type QuotaDimension,
 };
 
-// FINAL tiers (reconciled 2026-08-21). THIS FILE IS THE SOURCE OF TRUTH for pricing.
+// FINAL tiers. THIS FILE IS THE SOURCE OF TRUTH for pricing.
 // There is deliberately no companion spreadsheet: two copies drifted once (D-16 —
 // manual_qas, policy_pages, crawl_pages, team_seats all wrong). A change here must be
 // mirrored in the App Store listing pricing, and nowhere else.
+//
+// 2026-09-11: re-baselined to the matrix the operator set in /admin/plans (user:
+// "current is the default state"). /admin/plans can still override any of it.
 export const DEFAULT_PLANS: Record<PlanId, PlanDefinition> = {
   free: {
     id: "free",
@@ -53,19 +56,19 @@ export const DEFAULT_PLANS: Record<PlanId, PlanDefinition> = {
     quotas: {
       conversations: 75,
       products_synced: 200,
+      pages_synced: 10,
+      articles_synced: 10,
       curated_answers: 5,
-      manual_qas: 10,
-      policy_pages: 5,
-      crawl_pages: 1,
-      file_uploads: 0,
-      metafields_enabled: 3,
+      faqs: 10,
+      crawl_pages: 5,
+      file_uploads: 2,
+      metafields_enabled: 5,
       team_seats: 1,
-      active_campaigns: 0,
+      active_campaigns: 1,
       analytics_range_days: 7,
-      cross_sell_pairs: 3,
       recommendation_rules: 5,
     },
-    features: [],
+    features: ["push_notifications"],
     hidden: false,
   },
   basic: {
@@ -77,19 +80,19 @@ export const DEFAULT_PLANS: Record<PlanId, PlanDefinition> = {
     quotas: {
       conversations: 200,
       products_synced: 500,
-      curated_answers: 20,
-      manual_qas: 25,
-      policy_pages: 10,
-      crawl_pages: 10,
-      file_uploads: 0,
-      metafields_enabled: 10,
-      team_seats: 2,
-      active_campaigns: 2,
-      analytics_range_days: 30,
-      cross_sell_pairs: 10,
+      pages_synced: 25,
+      articles_synced: 50,
+      curated_answers: 15,
+      faqs: 50,
+      crawl_pages: 15,
+      file_uploads: 5,
+      metafields_enabled: 15,
+      team_seats: 5,
+      active_campaigns: 3,
+      analytics_range_days: 90,
       recommendation_rules: 10,
     },
-    features: ["remove_branding", "unanswered_analytics", "survey", "push_notifications"],
+    features: ["remove_branding", "unanswered_analytics", "push_notifications", "order_tracking"],
     hidden: false,
   },
   pro: {
@@ -101,27 +104,25 @@ export const DEFAULT_PLANS: Record<PlanId, PlanDefinition> = {
     quotas: {
       conversations: 500,
       products_synced: 1000,
-      curated_answers: 50,
-      manual_qas: 50,
-      policy_pages: 15,
+      pages_synced: 50,
+      articles_synced: 150,
+      curated_answers: 25,
+      faqs: 150,
       crawl_pages: 15,
-      file_uploads: 0,
-      metafields_enabled: 25,
+      file_uploads: 5,
+      metafields_enabled: 15,
       team_seats: 5,
       active_campaigns: 10,
       analytics_range_days: 90,
-      cross_sell_pairs: 25,
       recommendation_rules: 25,
     },
     features: [
       "remove_branding",
       "unanswered_analytics",
-      "survey",
       "push_notifications",
-      "discount_realtime_sync",
-      "catalog_auto_sync",
       "premium_campaign_templates",
       "inbox_cart_view",
+      "order_tracking",
     ],
     hidden: false,
   },
@@ -134,30 +135,25 @@ export const DEFAULT_PLANS: Record<PlanId, PlanDefinition> = {
     quotas: {
       conversations: 1000,
       products_synced: 5000,
-      curated_answers: 100,
-      manual_qas: 100,
-      policy_pages: 20,
-      crawl_pages: 20,
-      file_uploads: 5,
-      metafields_enabled: 100,
+      pages_synced: 100,
+      articles_synced: 250,
+      curated_answers: 50,
+      faqs: 250,
+      crawl_pages: 50,
+      file_uploads: 25,
+      metafields_enabled: 50,
       team_seats: 10,
       active_campaigns: UNLIMITED_QUOTA,
       analytics_range_days: 365,
-      cross_sell_pairs: 100,
       recommendation_rules: 50,
     },
     features: [
       "remove_branding",
       "unanswered_analytics",
-      "survey",
       "push_notifications",
-      "discount_realtime_sync",
-      "catalog_auto_sync",
       "premium_campaign_templates",
       "inbox_cart_view",
-      "exports",
-      "csv_import",
-      "file_upload",
+      "order_tracking",
     ],
     hidden: false,
   },
@@ -175,7 +171,7 @@ const planPatchSchema = z.object({
   priceMonthly: z.number().min(0).optional(),
   trialDays: z.number().int().min(0).max(90).optional(),
   // Editable, but PAID TIERS ONLY — applyConfig() drops it for `free`. A $0.50
-  // rate was once set on Free (2026-09-03), a plan that can never be billed
+  // rate was once set on Free, a plan that can never be billed
   // because charging needs a Shopify usage line and Free has no subscription;
   // the card then advertised a charge the app would never make. null = this
   // plan hard-caps at the quota instead of billing.
@@ -216,6 +212,35 @@ export const planConfigSchema = z.object({
 });
 
 export type PlanConfig = z.infer<typeof planConfigSchema>;
+
+// Tolerant on READ (loadPlanConfig / getStoredPlanConfig): a stored override
+// may still name a quota dimension that has since been retired (e.g.
+// manual_qas → faqs). Rejecting it would invalidate the WHOLE
+// stored config and silently drop every other override — the same trap
+// documented for feature names above — so unknown quota keys are stripped
+// here instead. The strict refine stays on the SAVE path (savePlanConfig →
+// planConfigSchema), where an unknown dimension is an operator error.
+const storedPlanPatchSchema = planPatchSchema.extend({
+  quotas: z
+    .record(z.string(), z.number().int().min(0))
+    .transform((q) =>
+      Object.fromEntries(
+        Object.entries(q).filter(([k]) => (QUOTA_DIMENSIONS as string[]).includes(k)),
+      ),
+    )
+    .optional(),
+});
+
+export const storedPlanConfigSchema = z.object({
+  plans: z
+    .object({
+      free: storedPlanPatchSchema.optional(),
+      basic: storedPlanPatchSchema.optional(),
+      pro: storedPlanPatchSchema.optional(),
+      plus: storedPlanPatchSchema.optional(),
+    })
+    .optional(),
+});
 
 let lastLoadedAt = 0;
 let loading: Promise<void> | null = null;
@@ -262,7 +287,7 @@ export async function loadPlanConfig(): Promise<void> {
     if (!row) {
       applyConfig({});
     } else {
-      const parsed = planConfigSchema.safeParse(JSON.parse(row.value));
+      const parsed = storedPlanConfigSchema.safeParse(JSON.parse(row.value));
       if (parsed.success) applyConfig(parsed.data);
       else logError("admin_plan_config_invalid", parsed.error.issues[0]);
     }
@@ -289,7 +314,7 @@ function planDef(plan: string): PlanDefinition {
   return PLANS[(plan as PlanId) in PLANS ? (plan as PlanId) : "free"];
 }
 
-/** Feature gate. Always the shop.s own plan — features are never grantable:
+/** Feature gate. Always the shop’s own plan — features are never grantable:
  *  a bonus grant tops up a NUMBER, it does not unlock a capability. */
 export function hasFeature(plan: string, feature: GatedFeature): boolean {
   maybeRefresh();

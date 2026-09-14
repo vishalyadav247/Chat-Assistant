@@ -21,8 +21,8 @@ import { INK, RADIUS, SPACE } from "./ui/tokens";
 // declared per template in lib/campaigns/templates.ts.
 
 /** Message-type tab strip. Gated tabs render disabled with the upgrade chip,
- *  exactly like the design's "Product Quiz — Pro +" (the tier now comes from
- *  the live matrix, so it stays true if the operator moves the feature). */
+ *  (the tier comes from the live matrix, so it stays true if the operator
+ *  moves the feature). */
 function KindTabs(props: {
   kinds: CampaignMessageData["kind"][];
   active: CampaignMessageData["kind"];

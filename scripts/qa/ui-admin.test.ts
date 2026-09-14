@@ -669,7 +669,7 @@ async function plansSection({ db, COOKIE, snapshot }: any): Promise<void> {
     const freeLive = (await loaderData("/admin/plans", "admin.plans", COOKIE)).plans.free;
     const patched = payloadFor(freeLive, {
       quotas: { ...Object.fromEntries(QUOTA_DIMENSIONS.map((d: string) => [d, freeLive.quotas[d]])), curated_answers: 77 },
-      features: ["exports"],
+      features: ["remove_branding"],
       priceMonthly: 1.5,
       trialDays: 3,
       overagePerConversation: 0.25,
@@ -679,36 +679,36 @@ async function plansSection({ db, COOKIE, snapshot }: any): Promise<void> {
 
     const d = await loaderData("/admin/plans", "admin.plans", COOKIE);
     ok("fresh GET: quota edit is live", d.plans.free.quotas.curated_answers === 77, String(d.plans.free.quotas.curated_answers));
-    ok("fresh GET: feature toggle is live", d.plans.free.features.includes("exports"), JSON.stringify(d.plans.free.features));
+    ok("fresh GET: feature toggle is live", d.plans.free.features.includes("remove_branding"), JSON.stringify(d.plans.free.features));
     ok("fresh GET: price + trial + overage edits are live", d.plans.free.priceMonthly === 1.5 && d.plans.free.trialDays === 3 && d.plans.free.overagePerConversation === 0.25, JSON.stringify([d.plans.free.priceMonthly, d.plans.free.trialDays, d.plans.free.overagePerConversation]));
 
     const html = await get("/admin/plans", COOKIE);
     ok("server-rendered form field shows the new quota", html.body.includes('label="Curated answers" min="0" value="77"'));
 
     const storedNow = JSON.parse((await readRow())!);
-    ok("persisted in app_secrets['admin:plans']", storedNow.plans.free.quotas.curated_answers === 77 && storedNow.plans.free.features.includes("exports"));
+    ok("persisted in app_secrets['admin:plans']", storedNow.plans.free.quotas.curated_answers === 77 && storedNow.plans.free.features.includes("remove_branding"));
     ok("save stamps knownFeatures", Array.isArray(storedNow.plans.free.knownFeatures) && storedNow.plans.free.knownFeatures.length === GATED_FEATURES.length);
     ok("editing one plan preserves the OTHER plans' overrides", original === null || !JSON.parse(original).plans?.plus || storedNow.plans.plus !== undefined, JSON.stringify(Object.keys(storedNow.plans)));
 
     await loadPlanConfig();
     ok("getQuota() reflects the edit for a real shop", getQuota("free", "curated_answers") === 77, String(getQuota("free", "curated_answers")));
-    ok("hasFeature() reflects the toggle for a real shop", hasFeature("free", "exports") === true);
+    ok("hasFeature() reflects the toggle for a real shop", hasFeature("free", "remove_branding") === true);
     ok("untouched dimensions keep their values", getQuota("free", "conversations") === DEFAULT_PLANS.free.quotas.conversations, String(getQuota("free", "conversations")));
   }
 
   // 4c. knownFeatures: a feature the operator never saw must NOT be gated off.
   {
     const basicLive = (await loaderData("/admin/plans", "admin.plans", COOKIE)).plans.basic;
-    const withoutSurvey = GATED_FEATURES.filter((f: string) => f !== "survey");
-    await savePlan("basic", payloadFor(basicLive, { features: [], knownFeatures: withoutSurvey }));
+    const withoutUnanswered = GATED_FEATURES.filter((f: string) => f !== "unanswered_analytics");
+    await savePlan("basic", payloadFor(basicLive, { features: [], knownFeatures: withoutUnanswered }));
     await loadPlanConfig();
     ok("knownFeatures: a feature the operator DID see and unchecked stays off", hasFeature("basic", "push_notifications") === false);
-    ok("knownFeatures: a feature added AFTER the save falls back to the plan default (not silently gated off)", hasFeature("basic", "survey") === DEFAULT_PLANS.basic.features.includes("survey"), `survey=${hasFeature("basic", "survey")}`);
+    ok("knownFeatures: a feature added AFTER the save falls back to the plan default (not silently gated off)", hasFeature("basic", "unanswered_analytics") === DEFAULT_PLANS.basic.features.includes("unanswered_analytics"), `unanswered_analytics=${hasFeature("basic", "unanswered_analytics")}`);
 
     // A legacy row with no knownFeatures at all behaves the same way.
     await savePlan("basic", payloadFor(basicLive, { features: ["remove_branding"], knownFeatures: undefined }));
     await loadPlanConfig();
-    ok("legacy override (no knownFeatures) keeps default features that it omits", hasFeature("basic", "survey") === DEFAULT_PLANS.basic.features.includes("survey") && hasFeature("basic", "remove_branding") === true);
+    ok("legacy override (no knownFeatures) keeps default features that it omits", hasFeature("basic", "unanswered_analytics") === DEFAULT_PLANS.basic.features.includes("unanswered_analytics") && hasFeature("basic", "remove_branding") === true);
 
     // Unknown feature names in a stored override are tolerated, not fatal.
     await savePlan("basic", payloadFor(basicLive, { features: [...basicLive.features, "since_removed_feature"], knownFeatures: [...GATED_FEATURES, "since_removed_feature"] }));

@@ -127,6 +127,38 @@ async function main(): Promise<void> {
     );
   }
 
+  // ── 5. Live plan matrix vs the shipped defaults (report only) ─────────────
+  // NOT a dirty state: an operator is entitled to grant a tier extra features
+  // or change a quota at /admin/plans, and those edits are the product working.
+  // But every plan-gate assertion means something different once they exist —
+  // storefront.test.ts asserted a flat 403 for `survey` on Free and failed for
+  // a whole run because Free had legitimately been granted it. So it is printed
+  // rather than fixed: read it before believing any gate result.
+  const { DEFAULT_PLANS, PLANS, loadPlanConfig } = await import("../../app/lib/billing/plans.server");
+  await loadPlanConfig();
+  const divergences: string[] = [];
+  for (const id of Object.keys(DEFAULT_PLANS) as (keyof typeof DEFAULT_PLANS)[]) {
+    const live = PLANS[id];
+    const base = DEFAULT_PLANS[id];
+    const added = live.features.filter((f) => !base.features.includes(f));
+    const removed = base.features.filter((f) => !live.features.includes(f));
+    if (added.length > 0) divergences.push(`${id}: +${added.join(", +")}`);
+    if (removed.length > 0) divergences.push(`${id}: -${removed.join(", -")}`);
+    for (const dim of Object.keys(base.quotas) as (keyof typeof base.quotas)[]) {
+      if (live.quotas[dim] !== base.quotas[dim]) {
+        divergences.push(`${id}.${dim}: ${base.quotas[dim]} → ${live.quotas[dim]}`);
+      }
+    }
+  }
+  if (divergences.length === 0) {
+    console.log("  OK    live plan matrix matches the shipped defaults");
+  } else {
+    console.log(`  NOTE  live plan matrix differs from the defaults in ${divergences.length} place(s):`);
+    for (const d of divergences) console.log(`          ${d}`);
+    console.log("        Deliberate operator edits are fine — but a plan-gate result");
+    console.log("        only means what it says once you have read this list.");
+  }
+
   console.log(
     dirty === 0
       ? "\nPREFLIGHT CLEAN — suite results can be believed"

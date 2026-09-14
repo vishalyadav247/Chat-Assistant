@@ -216,7 +216,7 @@ export function InstructionsGeneralTab(props: { initial: GeneralData }) {
               </s-option>
             ))}
           </s-select>
-          {/* Available on every plan (un-gated 2026-09-03). */}
+          {/* Available on every plan. */}
           <s-switch
             label="Auto-detect shopper's language"
             details="When enabled, the assistant answers in the language of the shopper's latest message and switches with them mid-chat. When off, it always answers in the default language above."

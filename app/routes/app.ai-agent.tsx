@@ -19,12 +19,27 @@ import { APP_NAME } from "./app";
 // is also the layout for /app/ai-agent/training and /app/ai-agent/review — it
 // renders the child outlet when one matches.
 //
-// Deactivate stops AI replies at the pipeline gate: app/lib/pipeline/
-// index.server.ts checks `config.aiEnabled` and short-circuits to the fallback
-// path; the widget's aiAvailable flag (app/lib/widget/config.server.ts) flips
-// the storefront into contact/leave-message mode.
+// Deactivate switches chat into HUMAN-SUPPORT MODE (implicit, no
+// separate setting): app/lib/pipeline/index.server.ts
+// checks `config.aiEnabled` and flips each conversation to mode="human" on
+// its first turn — the team answers from the Inbox ("Human" tag), the shopper
+// gets a waiting message, and FAQs/order tracking/contact options keep
+// working. Test AI keeps the plain switched-off notice.
 
 const BANNER_KEY = "chatconvert-ai-agent-banner-dismissed";
+
+/** Blue underlined link rendered INLINE in banner prose (looks like a link,
+ *  not a button). A <button> so navigation stays client-side via navigate()
+ *  (embedded iframe rule: never a raw <a> for internal routes). */
+const inlineLinkStyle: React.CSSProperties = {
+  background: "none",
+  border: "none",
+  padding: 0,
+  font: "inherit",
+  cursor: "pointer",
+  color: "var(--s-color-text-link, #005bd3)",
+  textDecoration: "underline",
+};
 
 interface HomeData {
   aiEnabled: boolean;
@@ -89,9 +104,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const enabled = String(formData.get("enabled")) === "true";
     await db.shop.update({ where: { id: shopId }, data: { aiEnabled: enabled } });
     invalidateShopConfig(shopId);
-    return { ok: true as const, enabled };
+    return { intent, ok: true as const, enabled };
   }
-  return { ok: false as const, enabled: false };
+  return { intent, ok: false as const, enabled: false };
 };
 
 export default function AiAgentPage() {
@@ -112,11 +127,11 @@ export default function AiAgentPage() {
 
   useEffect(() => {
     if (fetcher.state !== "idle" || !fetcher.data) return;
-    if (fetcher.data.ok) {
+    if (fetcher.data.ok && fetcher.data.intent === "toggle-ai") {
       shopify.toast.show(
         fetcher.data.enabled
           ? "AI agent activated"
-          : "AI agent deactivated — the widget falls back to contact options",
+          : "AI agent deactivated — chat now runs in human support mode",
       );
     }
   }, [fetcher.state, fetcher.data, shopify]);
@@ -142,7 +157,7 @@ export default function AiAgentPage() {
     <s-page heading={APP_NAME}>
       <s-stack gap="base">
         <s-heading>AI Agent</s-heading>
-        {/* Status + page actions stay INSIDE the page (user decision 2026-08-17). */}
+        {/* Status + page actions stay INSIDE the page. */}
         <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="center">
           <s-stack direction="inline" gap="small-200" alignItems="center">
             <s-badge tone={home.aiEnabled ? "success" : "neutral"} icon={home.aiEnabled ? "check-circle" : "circle-dashed"}>
@@ -179,9 +194,17 @@ export default function AiAgentPage() {
           </DismissibleBanner>
         ) : null}
         {!home.aiEnabled ? (
-          <s-banner tone="warning" heading="Your AI agent is off">
-            The chat widget falls back to contact and leave-a-message options until you activate
-            the AI agent again.
+          // The waiting-message EDITOR lives in Settings → Chatbox; this banner
+          // explains the mode and carries
+          // an INLINE underlined link there (no button; navigate(), not
+          // <a href>, per the embedded-app iframe rule).
+          <s-banner tone="info" heading="Your AI agent is off — chat runs in human support mode">
+            Shopper messages go to your Inbox for your team to answer; FAQs, order tracking and
+            contact options keep working. You can{" "}
+            <button type="button" style={inlineLinkStyle} onClick={() => navigate("/app/settings?tab=chatbox")}>
+              edit the waiting message
+            </button>{" "}
+            shoppers see while they wait.
           </s-banner>
         ) : null}
 
@@ -283,8 +306,8 @@ export default function AiAgentPage() {
   );
 }
 
-// Setup card: plain white bordered card, tone icon chip, hover lift (user
-// decision 2026-08-17 — no strips/tints).
+// Setup card: plain white bordered card, tone icon chip, hover lift (no
+// strips/tints).
 const SETUP_CARD_CSS = `
 .cc-scard { transition: transform .18s ease, box-shadow .18s ease; }
 .cc-scard:hover { transform: translateY(-4px); box-shadow: 0 14px 30px rgba(20,20,25,.12); }

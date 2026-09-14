@@ -639,8 +639,10 @@ async function main(): Promise<void> {
 
       const exported = await postForm("/app/analytics", { intent: "export-analytics", range: "30d" }, hostCookie);
       ok("analytics export-analytics (valid, read-only) → 200", exported.status === 200, String(exported.status));
-      const exportedConv = await postForm("/app/analytics", { intent: "export-conversations" }, hostCookie);
-      ok("analytics export-conversations (valid, read-only) → 200", exportedConv.status === 200, String(exportedConv.status));
+      // Moved to the Inbox page 2026-09-10 — it exports conversations, so it
+      // lives next to them rather than with the analytics charts.
+      const exportedConv = await postForm("/app/inbox", { intent: "export-conversations" }, hostCookie);
+      ok("inbox export-conversations (valid, read-only) → 200", exportedConv.status === 200, String(exportedConv.status));
 
       const badSettings = await postForm("/app/settings", { intent: "save-settings", payload: "not json" }, hostCookie);
       ok("settings save with an unparseable payload is refused, not a 500", badSettings.status === 200, String(badSettings.status));

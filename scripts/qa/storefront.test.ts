@@ -540,6 +540,10 @@ async function main(): Promise<void> {
     const paidCfg = await get("/proxy/widget-config", brandPaid.domain);
     ok("remove_branding NOT granted on Free → showBranding stays true", freeCfg.json?.showBranding === true, `showBranding=${freeCfg.json?.showBranding}, hasFeature=${hasFeature("free", "remove_branding")}`);
     ok("remove_branding granted on Plus → showBranding false", paidCfg.json?.showBranding === false, `showBranding=${paidCfg.json?.showBranding}`);
+    // Order tracking plan gate (2026-09-11): both shops store orderTracking on
+    // (the default); only the plan decides what the storefront gets.
+    ok("order_tracking NOT granted on Free → widget.orderTracking false", freeCfg.json?.widget?.orderTracking === false, `orderTracking=${freeCfg.json?.widget?.orderTracking}, hasFeature=${hasFeature("free", "order_tracking")}`);
+    ok("order_tracking granted on Plus → widget.orderTracking true", paidCfg.json?.widget?.orderTracking === true, `orderTracking=${paidCfg.json?.widget?.orderTracking}`);
 
     // Widget switched off → nothing but {active:false}.
     const offShop = await makeShop("widget-off", {
@@ -980,6 +984,19 @@ async function main(): Promise<void> {
     }
     ok("order-track brute force is throttled (8/min per shop+IP)", throttled > 0, `${throttled}/12 requests refused, last status ${lastTrackStatus}`);
 
+    // Plan gate: the endpoint is public, so hiding the widget screen is not enough.
+    const trackFree = await makeShop("track-free", { plan: "free" });
+    const lockedTrack = await post("/proxy/order-track", trackFree.domain, {
+      orderNumber: "1001",
+      method: "email",
+      contact: `${TAG}-locked@example.com`,
+    });
+    ok(
+      "order-track is refused on a plan without order_tracking",
+      lockedTrack.status === 403 && lockedTrack.json?.error === "unavailable",
+      `status ${lockedTrack.status} ${lockedTrack.body.slice(0, 80)}`,
+    );
+
     // ── 10. survey ──────────────────────────────────────────────────────────
     section("10. survey");
     const surveyConvo = await db.conversation.create({ data: { shopId: shopAId, sessionId: sessA } });
@@ -1000,8 +1017,15 @@ async function main(): Promise<void> {
     const surveyFreeShop = await makeShop("survey-free", { plan: "free" });
     const freeConvo = await db.conversation.create({ data: { shopId: surveyFreeShop.shopId, sessionId: sessA } });
     const surveyGated = await post("/proxy/survey", surveyFreeShop.domain, { conversationId: freeConvo.id, sessionId: sessA, rating: 5 });
-    // Gates are always live since 2026-09-08 — no enforcement mode to skip for.
-    ok("survey is plan-gated server-side on Free", surveyGated.status === 403, `status `);
+    // The survey is on EVERY plan since 2026-09-11 (user decision). Gated, a
+    // Free store showed the survey but this endpoint refused the rating, so the
+    // shopper was thanked and the answer thrown away. A Free rating now lands.
+    const freeRated = await db.conversation.findUnique({ where: { id: freeConvo.id }, select: { rating: true } });
+    ok(
+      "a Free store's survey rating is accepted and saved (no plan gate)",
+      surveyGated.status === 200 && freeRated?.rating === 5,
+      `status ${surveyGated.status} rating=${freeRated?.rating}`,
+    );
 
     // ── 11. handover-form ───────────────────────────────────────────────────
     section("11. handover-form");

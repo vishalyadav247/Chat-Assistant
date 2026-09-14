@@ -224,11 +224,15 @@ export default function DashboardPage() {
     <StripBanner
       tone="warning"
       icon="alert-triangle"
-      title="Your AI assistant is turned off"
-      action={{ label: "Turn it on", onClick: () => navigate("/app/ai-agent") }}
+      title="AI agent is off — chats are in human mode"
+      action={{ label: "Turn on AI agent", onClick: () => navigate("/app/ai-agent") }}
     >
-      Shoppers can still leave messages, but the assistant isn&apos;t answering questions or
-      recommending products. Turn it back on from the AI Agent page.
+      {/* Describes human-support mode as the pipeline runs it (index.server.ts:
+          AI off ⇒ the shopper gets the waiting message, the conversation goes to
+          the Inbox and the team is notified). The old copy said shoppers could
+          only "leave messages", which stopped being true with human mode. */}
+      Shoppers get your waiting message and their chats go to the Inbox for your team to
+      answer. Turn the AI agent on to answer questions and recommend products automatically.
     </StripBanner>
   ) : nearQuota ? (
     <StripBanner

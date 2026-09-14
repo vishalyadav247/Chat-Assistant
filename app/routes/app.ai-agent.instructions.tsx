@@ -3,7 +3,7 @@ import { useLoaderData, useNavigate, useRouteError, useSearchParams } from "reac
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { z } from "zod";
 import db from "../db.server";
-import { getQuota } from "../lib/billing/plans.server";
+import { getQuota, nextPlanNameForQuota } from "../lib/billing/plans.server";
 import {
   handoverConfigSchema,
   shopSettingsSchema,
@@ -30,7 +30,7 @@ import { APP_NAME } from "./app";
 
 // Instructions (spec 08, design ai-agent.html #viewInstructions): three tabs
 // via ?tab= — General Instructions / Product recommendations / Human handover.
-// One merged "App recommendations" section since 2026-09-10 (Option B): the
+// One merged "App recommendations" section: the
 // former Custom recommendations section folded in — a rule holds products AND
 // collections, and its trigger phrases fire semantically (instant answer) or
 // as contained keywords (buy-lane pool). Detail view (#viewRec) renders
@@ -63,6 +63,7 @@ export interface CrossSellPairRowData {
   id: string;
   productId: string;
   companionIds: string[];
+  updatedAt: string;
 }
 
 export interface ProductMeta {
@@ -103,7 +104,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       db.crossSellPair.findMany({
         where: { shopId },
         orderBy: { updatedAt: "desc" },
-        select: { id: true, productId: true, companionIds: true },
+        select: { id: true, productId: true, companionIds: true, updatedAt: true },
       }),
     ]);
 
@@ -155,15 +156,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return {
     general,
     recommendations: recommendations.map((r) => ({ ...r, updatedAt: r.updatedAt.toISOString() })),
-    pairs,
+    pairs: pairs.map((p) => ({ ...p, updatedAt: p.updatedAt.toISOString() })),
     productMeta,
     collectionMeta,
     handover: handoverConfigSchema.parse(handoverRow?.config ?? {}) as HandoverConfigData,
     rules: shopSettingsSchema.parse(settingsRow?.settings ?? {}).recommendationRules,
-    // Both features are on every plan; the tier decides the COUNTS
-    // (cross_sell_pairs / recommendation_rules quotas, editable at /admin/plans).
-    crossSellQuota: getQuota(plan, "cross_sell_pairs"),
+    // Both features are on every plan. Recommendation rules are still counted
+    // per tier (recommendation_rules); cross-sell pairs have no limit since
+    // 2026-09-11.
     recommendationQuota: getQuota(plan, "recommendation_rules"),
+    // Upgrade hints for the PlanMeter rows (same pattern as the FAQ tab).
+    recommendationNextPlan: nextPlanNameForQuota(plan, "recommendation_rules"),
   };
 };
 
@@ -315,8 +318,8 @@ export default function InstructionsPage() {
             pairs={data.pairs}
             productMeta={data.productMeta}
             rules={data.rules}
-            crossSellQuota={data.crossSellQuota}
             recommendationQuota={data.recommendationQuota}
+            recommendationNextPlan={data.recommendationNextPlan}
             onOpenRec={(id) =>
               setSearchParams((prev) => {
                 const params = new URLSearchParams(prev);

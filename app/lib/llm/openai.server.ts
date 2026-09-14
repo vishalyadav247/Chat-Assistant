@@ -12,7 +12,7 @@ import { logError, logWarn } from "../log.server";
 // The chat MODEL can be overridden globally from the /admin dashboard
 // (spec 19): per-call `options.model` → dashboard override → env CHAT_MODEL.
 //
-// temperature/maxTokens resolve differently, on purpose (QA fix 2026-08-21):
+// temperature/maxTokens resolve differently, on purpose:
 // the dashboard override applies only to calls whose params are NOT pinned.
 // See `resolveSampling` — an operator must not be able to de-tune strict-JSON
 // routing for every tenant from a text box.
@@ -210,9 +210,8 @@ function normalize(vector: number[]): number[] {
 
 /**
  * Retry 429s and 5xx with exponential backoff. Applied to EVERY OpenAI call
- * that the shopper waits on — chat, chat streaming and embeddings (QA fix
- * 2026-08-21: chat was previously unprotected, so a single rate-limit blip
- * surfaced in the widget as a failed reply).
+ * that the shopper waits on — chat, chat streaming and embeddings — so a
+ * single rate-limit blip never surfaces in the widget as a failed reply.
  */
 async function withBackoff<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
   let delay = 1000;

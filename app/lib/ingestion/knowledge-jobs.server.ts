@@ -33,7 +33,7 @@ export async function registerKnowledgeJobs(boss: PgBoss): Promise<void> {
   // source of every installed shop (each ingest itself runs shop-scoped).
   await boss.work(KNOWLEDGE_RECRAWL_JOB, async () => {
     const sources = await db.dataSource.findMany({
-      where: { reCrawlWeekly: true, status: "active", type: { in: ["url", "pages"] } },
+      where: { reCrawlWeekly: true, status: "active", type: { in: ["url", "pages", "policy"] } },
       select: { id: true, shopId: true },
     });
     if (sources.length === 0) return;

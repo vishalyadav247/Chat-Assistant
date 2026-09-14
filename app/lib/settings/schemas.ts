@@ -115,7 +115,7 @@ export const widgetSettingsSchema = z.object({
             .or(z.literal(""))
             .catch(""),
           /** The merchant's last custom pick, remembered while "Use brand color"
-           *  is on so re-disabling the toggle restores it (2026-08-17). */
+           *  is on so re-disabling the toggle restores it. */
           customBgColor: z
             .string()
             .regex(/^#[0-9a-fA-F]{6}$/)
@@ -185,15 +185,15 @@ export const shopSettingsSchema = z.object({
     .object({
       name: z.string().max(100).catch(""),
       logoUrl: z.string().max(500).nullable().catch(null),
-      /** Global date/time display format (Settings → General; spec 16
-       *  delta 2026-08-19). Every admin/web date goes through
+      /** Global date/time display format (Settings → General; spec 16).
+       *  Every admin/web date goes through
        *  app/lib/format/datetime.ts with these + Shop.timezone. */
       dateFormat: z.enum(DATE_FORMATS).catch(DEFAULT_DATE_FORMAT),
       timeFormat: z.enum(TIME_FORMATS).catch(DEFAULT_TIME_FORMAT),
     })
     .catch({ name: "", logoUrl: null, dateFormat: DEFAULT_DATE_FORMAT, timeFormat: DEFAULT_TIME_FORMAT }),
   // Trimmed to the two theme FAMILIES the cart integration actually has code
-  // paths for, plus auto (2026-09-09). "refresh"/"craft"/"custom" only ever
+  // paths for, plus auto. "refresh"/"craft"/"custom" only ever
   // selected the same Dawn-shaped path as "dawn" while implying the app knew
   // something specific about them. A stored legacy value degrades to "auto"
   // through the .catch, which probes and is right for those themes anyway.
@@ -214,18 +214,21 @@ export const shopSettingsSchema = z.object({
     })
     .catch({ mode: "default", customUrl: "", provider: "17track", apiKey: "" }),
   cartDrawer: z.boolean().catch(true),
+  /** Human-support mode waiting message (Settings
+   *  → Chatbox tab is its home): the first reply a shopper sees when the AI
+   *  agent is DEACTIVATED and chat runs as a human channel. "" → the
+   *  pipeline's default ("our team is helping other customers right now —
+   *  we'll connect you with an agent shortly"). */
+  humanModeMessage: z.string().max(300).catch(""),
   retentionDays: z.union([z.literal(0), z.literal(7), z.literal(30), z.literal(60), z.literal(90)]).catch(0), // 0 = forever
-  /** Real-time discount webhook sync (spec 02, Pro+ plan gate applies on top). */
-  discountRealtime: z.boolean().catch(true),
-  /** Catalog auto sync (Products / Collections tabs, 2026-08-17): the DAILY
-   *  full re-sync only — Shopify webhooks always apply immediately and manual
-   *  "Sync now" always works. Plan-gated (`catalog_auto_sync`, Pro+) on top. */
-  catalogAutoSync: z
-    .object({ products: z.boolean().catch(true), collections: z.boolean().catch(true) })
-    .catch({ products: true, collections: true }),
+  // There is no `discountRealtime` or `catalogAutoSync` setting:
+  // discount webhooks apply on every plan, and the only scheduled
+  // sync is a weekly one for what no webhook reports (collections membership,
+  // pages, blogs) — nothing left for a merchant to switch. z.object strips the
+  // keys from older stored settings on the next parse/save.
   /** AI recommendation rules (spec 08 Rules card). excludeOutOfStock OFF lets
    *  unavailable products appear in recommendation cards. crossSellEnabled OFF
-   *  stops companion products being appended to buy-lane cards (2026-09-10 —
+   *  stops companion products being appended to buy-lane cards (a
    *  merchant toggle, available on every plan). */
   recommendationRules: z
     .object({
@@ -233,8 +236,8 @@ export const shopSettingsSchema = z.object({
       crossSellEnabled: z.boolean().catch(true),
     })
     .catch({ excludeOutOfStock: true, crossSellEnabled: true }),
-  /** Master training permissions (spec 07 Learn cards, user decision
-   *  2026-08-12): independent of per-row learnEnabled. Master OFF ⇒ the AI
+  /** Master training permissions (spec 07 Learn cards), independent of
+   *  per-row learnEnabled. Master OFF ⇒ the AI
    *  must not use that data type at all; per-row flags apply only when the
    *  master is ON. */
   learn: z
@@ -242,8 +245,11 @@ export const shopSettingsSchema = z.object({
       products: z.boolean().catch(true),
       collections: z.boolean().catch(true),
       discounts: z.boolean().catch(true),
+      // Spec 22. Missing on settings saved before 2026-09-11 → .catch(true).
+      pages: z.boolean().catch(true),
+      blogs: z.boolean().catch(true),
     })
-    .catch({ products: true, collections: true, discounts: true }),
+    .catch({ products: true, collections: true, discounts: true, pages: true, blogs: true }),
   // Team roster moved to the TeamMember table (spec 18) — any leftover
   // `team` key in stored JSON is stripped on the next save.
 });
@@ -309,6 +315,10 @@ export const handoverConfigSchema = z.object({
   contactMethods: z
     .object({ message: z.string().max(300).catch("Sorry we couldn't resolve this in chat — reach us directly:") })
     .catch({ message: "Sorry we couldn't resolve this in chat — reach us directly:" }),
+  // (The human-support waiting message briefly lived here as `humanMode` —
+  // moved to widgetSettingsSchema.humanModeMessage the same day, user
+  // decision: it's chat copy, so Settings → Chatbox owns it. z.object strips
+  // the unknown key from any config stored in between.)
 });
 
 export type HandoverConfigData = z.infer<typeof handoverConfigSchema>;

@@ -16,7 +16,8 @@
 - **Recommendation funnel**: Recommendations shown (100%) → Added to cart (%) → Purchased (%) — events recommended / atc / purchase-attributed.
 - **Response performance**: Avg first response (s, ▼ faster is good), Avg resolution time, Answered on first try (% conversations with no fallback before first resolution), Handed to human (count, ▲ styled negative).
 - **Top questions**: top 5 question clusters (embedding-clustered or normalized text v1) + "N asks" + relative bars.
-- **Export CSV** (Plus gate): conversations export + analytics export as async job → download. (Design gap: no button drawn on page — add one in header, gated.)
+- **Export CSV**: the analytics export for the selected range, rendered opposite the "Analytics" section heading (not in the page header's `primary-action` slot). Synchronous — the CSV rides back in the action payload and is turned into a Blob download client-side, because inside the embedded iframe only App-Bridge-authenticated fetches carry the session token. The Plus gate was removed 2026-09-10 (user decision); every plan exports.
+  - **Conversations export lives on the Inbox page** (moved 2026-09-10, user decision), to the right of "Open in web" — it exports conversations, so it sits with them. Same Blob-download pattern, `intent: "export-conversations"` on `/app/inbox`, `inbox` permission.
 
 ## Aggregation
 
@@ -53,6 +54,6 @@ Custom date ranges, cohorting, per-campaign drilldowns (12 shows its own), true 
 - **Rollup freshness**: nightly pg-boss cron `analytics-rollup` (`37 2 * * *`, re-rolls yesterday + today per shop); reads lazily backfill missing days in-window and always recompute today live. Counters JSON additionally stores `firstResponseCount`/`resolutionCount` so multi-day averages merge weighted.
 - **Answered on first try**: v1 = conversation has zero fallback turns (not "before first resolution").
 - **Funnel "Purchased"**: renders "—" (attribution deferred, spec gap already noted). **Top questions**: normalized-text grouping over the 500 most recent shopper messages (cheapest correct v1; embedding clustering later).
-- **Exports**: synchronous action → client-side Blob download (contacts pattern), not an async job — row cap 5000 conversations. Gate `requirePlan(plan, "exports")` server-side inside the export functions (open enforcement passes today); unanswered mini-card gates on `unanswered_analytics`.
+- **Exports**: synchronous action → client-side Blob download (contacts pattern), not an async job — row cap 5000 conversations. **On every plan — the `exports` gate was removed 2026-09-10 (user decision: no gate, no setting for data export/import)**; unanswered mini-card still gates on `unanswered_analytics`.
 - **CSAT**: computed from `Conversation.rating` (all-time, isTest excluded), not from `survey_submitted` events.
 - Verified by `scripts/test-analytics.ts` (deterministic 3-day fixture, run green 2026-08-06).

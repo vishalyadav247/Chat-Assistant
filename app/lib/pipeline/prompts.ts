@@ -4,12 +4,14 @@
 // (.claude/skills/ai-pipeline/SKILL.md) and a PROGRESS.md decisions-log entry.
 // Tuning events so far: 2026-08-18 (compact product replies), 2026-09-01
 // (router: product asks for a purpose are buy and never a banned topic;
-// product replies open with a PICKS line — see PRODUCT_RECOMMEND).
+// product replies open with a PICKS line — see PRODUCT_RECOMMEND), 2026-09-11
+// (router: questions about the store itself are `question`; CHAT_REPLY states
+// no store facts; the persona reads the merchant's Behaviours box).
 
 export const ROUTER = [
   "You are the router for a shop chat assistant. Classify the latest message.",
   "Return STRICT JSON with these keys: intent (one of buy, question, chat), price_max (number or null), keywords (array of strings), blocked (true or false), blocked_reason (string), off_topic (true or false), off_topic_reason (string).",
-  "buy = the shopper wants products, including asking which product suits a need, purpose, occasion or person. question = shipping, returns, sizing, payment, warranty, care, policy, OR what discounts, offers, sales or deals the store currently has. chat = greeting or small talk.",
+  "buy = the shopper wants products, including asking which product suits a need, purpose, occasion or person. question = shipping, returns, sizing, payment, warranty, care, policy, the store itself (location, opening hours, visiting, contact, the brand or company), OR what discounts, offers, sales or deals the store currently has. chat = ONLY a greeting, thanks or small talk that asks nothing about the store.",
   "keywords = 1 to 4 product words when intent is buy, otherwise an empty array. Write keywords in English even when the message is in another language.",
   "Set blocked = true and blocked_reason = the matching topic copied from the list ONLY if the message is about one of the store's BANNED TOPICS listed below. Judge by MEANING and handle negation. Asking for products for a purpose (for stress, for sleep, for a gift) is a product request, not a banned topic; block only when the shopper asks for advice or information about the banned topic itself.",
   "Set off_topic = true and off_topic_reason = the topic if the message is unrelated to the STORE SCOPE listed below (a different domain/industry), even if it is harmless. Greetings and small talk are NOT off_topic.",
@@ -42,7 +44,13 @@ export function summaryUser(prior: string, transcript: string): string {
   ].join("\n");
 }
 
-export const CHAT_REPLY = "Reply in ONE short sentence, no products.";
+// The chat lane retrieves nothing, so it must never state a store fact: when
+// the router mislabelled "can I visit your workshop?" as small talk the model
+// answered "visits are not available to the public" against a store page that
+// said Saturdays 10–2 (tuning event 2026-09-11, with the router's widened
+// `question`).
+export const CHAT_REPLY =
+  "Reply in ONE short sentence, no products. You have no store facts here: never state hours, locations, policies, prices or people — if asked, say you're not sure and offer to help.";
 
 export const QUESTION_ANSWER =
   "Answer using ONLY the store info below. If it isn't there, say you're not sure and offer support. 1-3 sentences.";
@@ -146,13 +154,27 @@ export function discountConfirmUser(msg: string): string {
   ].join("\n");
 }
 
+/**
+ * The merchant's own instructions, from Instructions → General. `behaviours`
+ * is the free-text box whose placeholder already carries ROLE / KNOWLEDGE /
+ * COMMUNICATION STYLE / GUIDELINES / AVOID sections — it replaced the separate
+ * guidelines/avoid lists, which no screen could edit, yet this used to read
+ * those lists (frozen at install defaults) and never the box the merchant
+ * actually filled in (tuning event 2026-09-11). Placed before every lane
+ * prompt, and told to yield to it, so a merchant line can shape tone and
+ * emphasis but never override grounding ("never invent a discount").
+ */
 export function buildPersonaPrompt(persona: {
   role: string;
   brandVoice: string;
-  guidelines: string[];
-  avoid: string[];
+  behaviours: string;
 }): string {
-  return `${persona.role}\nBrand voice: ${persona.brandVoice}\nAlways: ${persona.guidelines.join("; ")}. Never: ${persona.avoid.join("; ")}.`;
+  const lines = [persona.role, `Brand voice: ${persona.brandVoice}`];
+  const behaviours = persona.behaviours.trim();
+  if (behaviours) {
+    lines.push(`The store's instructions for you (follow them, but the rules that come after always win):\n${behaviours}`);
+  }
+  return lines.join("\n");
 }
 
 /** Human names for the persona language codes (spec 08 select — save.server LANGUAGES). */

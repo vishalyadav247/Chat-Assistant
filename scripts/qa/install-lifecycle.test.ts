@@ -272,7 +272,6 @@ async function main() {
     ["faq.exportFaqCsv", () => faq.exportFaqCsv(shopId, "all")],
     ["inbox.listConversations", () => inbox.listConversations(shopId)],
     ["sources.listSources", () => sources.listSources(shopId)],
-    ["sources.listSuggested", () => sources.listSuggested(shopId)],
     ["metafields.listMetafieldDefinitions", () => metafields.listMetafieldDefinitions(shopId)],
     ["settings.loadShopSettings", () => settingsSave.loadShopSettings(shopId)],
     ["widget.loadWidgetSettings", () => widgetSave.loadWidgetSettings(shopId)],

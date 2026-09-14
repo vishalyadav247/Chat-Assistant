@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 // The admin console's own component vocabulary (spec 19, redesigned
-// 2026-09-03: "make it robust and authentic, glassmorphism, mobile first").
+// for a "robust and authentic, glassmorphism, mobile first" brief).
 //
 // Deliberately NOT Polaris: `<s-page>` / `<s-section>` render into shadow DOM,
 // so the frosted surfaces, gradient rims and dark theme below cannot reach

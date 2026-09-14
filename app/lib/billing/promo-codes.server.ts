@@ -102,7 +102,7 @@ function toSummary(row: PromoRow): PromoSummary {
 }
 
 /** Recurring price Shopify will be asked to charge. Monthly is the only
- *  interval since annual was withdrawn (2026-09-07). */
+ *  interval since annual was withdrawn. */
 export function intervalPrice(plan: PaidPlanId): number {
   return PLANS[plan].priceMonthly;
 }

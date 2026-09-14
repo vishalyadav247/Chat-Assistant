@@ -39,7 +39,7 @@ async function triggerVectors(shopId: string): Promise<CachedRec[] | null> {
     where: { shopId, status: "active" },
     select: { id: true, title: true, triggerQuestions: true, productIds: true, collectionIds: true },
   });
-  // Collection-only rules are as valid as product rules (merged model 2026-09-10).
+  // Collection-only rules are as valid as product rules.
   const candidates = rows.filter(
     (r) => (r.productIds.length > 0 || r.collectionIds.length > 0) && r.triggerQuestions.length > 0,
   );
@@ -74,7 +74,7 @@ async function triggerVectors(shopId: string): Promise<CachedRec[] | null> {
 }
 
 /** Fill the trigger-vector cache off the hot path (widget boot). Never throws.
- *  Lazily, this cost the first shopper of every process ~600 ms (2026-09-04). */
+ *  Lazily, this cost the first shopper of every process ~600 ms. */
 export async function primeRecommendationVectors(shopId: string): Promise<void> {
   try {
     await triggerVectors(requireShopId(shopId));

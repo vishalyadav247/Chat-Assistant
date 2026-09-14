@@ -2,18 +2,21 @@ import { useMemo, useState } from "react";
 import type { CollectionRow } from "../routes/app.ai-agent.training";
 import { DataTable } from "./DataTable";
 import {
-  AutoSyncControl,
+  FilterSelect,
+  SyncStatus,
   LearnCard,
-  SubTabs,
+  useMasterLearnDraft,
   useSyncWatcher,
   useTrainingFetcher,
 } from "./TrainingShared";
+import { SaveBar } from "./SaveBar";
 
 // Collections tab (spec 07, design #viewTraining → Collections): learn card
 // with master switch (Collection.learnEnabled defaults to false per design),
 // Sync collections button, table with per-row learn toggle.
 
-type SubTab = "all" | "active" | "inactive";
+// FAQ-style filter dropdown (user, 2026-09-11 — replaced the SubTabs pills).
+type LearnFilter = "" | "on" | "off";
 
 export function TrainingCollectionsTab(props: {
   rows: CollectionRow[];
@@ -21,52 +24,43 @@ export function TrainingCollectionsTab(props: {
   /** Master "Learn collections" permission (ShopSettings.learn.collections) —
    *  independent of per-row learnEnabled, which applies only when this is on. */
   masterEnabled: boolean;
-  /** Plan feature `catalog_auto_sync` (Pro+) — toggle is locked when false. */
-  autoSyncAvailable: boolean;
-  /** Tier that unlocks auto sync, or null when this plan has it. */
-  autoSyncPlan: string | null;
-  /** ShopSettings.catalogAutoSync.collections — daily full re-sync (webhooks unaffected). */
-  autoSyncEnabled: boolean;
 }) {
   const { submit, pendingIntent } = useTrainingFetcher();
   const syncWatch = useSyncWatcher(props.lastSyncedAt, "Collections synced");
-  const [subTab, setSubTab] = useState<SubTab>("all");
+  const [learnFilter, setLearnFilter] = useState<LearnFilter>("");
+  // Master switch = major setting → Save/Discard bar; row toggles stay instant.
+  const master = useMasterLearnDraft(props.masterEnabled, (enabled) =>
+    submit("learn-master", { type: "collections", enabled: enabled ? "true" : "false" }),
+  );
 
   const learned = props.rows.filter((row) => row.learnEnabled).length;
 
   const rows = useMemo(() => {
-    if (subTab === "all") return props.rows;
-    return props.rows.filter((row) => (subTab === "active" ? row.learnEnabled : !row.learnEnabled));
-  }, [props.rows, subTab]);
+    if (!learnFilter) return props.rows;
+    return props.rows.filter((row) => row.learnEnabled === (learnFilter === "on"));
+  }, [props.rows, learnFilter]);
 
   return (
     <s-stack gap="base">
+      <SaveBar
+        dirty={master.dirty}
+        saving={pendingIntent === "learn-master"}
+        onSave={master.onSave}
+        onDiscard={master.onDiscard}
+      />
       <LearnCard
         title="Collections"
         chip={`${props.masterEnabled ? learned : 0} of ${props.rows.length} collections learned`}
         description="Help customers discover collections, understand product groupings and curated selections in your store."
-        switchChecked={props.masterEnabled}
+        switchChecked={master.draft}
         switchLabel="Learn collections"
-        onSwitch={(checked) =>
-          submit("learn-master", { type: "collections", enabled: checked ? "true" : "false" })
-        }
+        onSwitch={master.setDraft}
       />
 
-      <s-section heading="Manage data">
+      <s-section heading="Manage collections">
         <s-stack gap="base">
           <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="start">
-            <AutoSyncControl
-              type="collections"
-              available={props.autoSyncAvailable}
-              availablePlan={props.autoSyncPlan}
-              enabled={props.autoSyncEnabled}
-              busy={pendingIntent === "catalog-autosync"}
-              lastSyncedAt={props.lastSyncedAt}
-              running={syncWatch.syncing}
-              onChange={(enabled) =>
-                submit("catalog-autosync", { type: "collections", enabled: enabled ? "true" : "false" })
-              }
-            />
+            <SyncStatus type="collections" lastSyncedAt={props.lastSyncedAt} running={syncWatch.syncing} />
             <s-button
               variant="primary"
               icon="refresh"
@@ -82,20 +76,21 @@ export function TrainingCollectionsTab(props: {
 
           <DataTable
             rows={rows}
+            searchAlwaysOpen
             searchPlaceholder="Search collections"
             searchFn={(row, q) => row.title.toLowerCase().includes(q)}
             emptyMessage="No collections found. Run a sync to import them."
             perPage={10}
             hoverable
             toolbar={
-              <SubTabs
-                tabs={[
-                  { id: "all", label: "All" },
-                  { id: "active", label: "Learning on" },
-                  { id: "inactive", label: "Learning off" },
+              <FilterSelect
+                label="Learning"
+                value={learnFilter}
+                options={[
+                  { value: "on", label: "Learning on" },
+                  { value: "off", label: "Learning off" },
                 ]}
-                active={subTab}
-                onChange={setSubTab}
+                onChange={(v) => setLearnFilter(v as LearnFilter)}
               />
             }
             bulkActions={(ids, clear) => (
@@ -129,6 +124,7 @@ export function TrainingCollectionsTab(props: {
               {
                 key: "description",
                 title: "Description",
+                width: 260, // cap (user, 2026-09-11) — long prose wraps inside
                 render: (row) => (
                   <s-text tone="neutral">
                     {row.description

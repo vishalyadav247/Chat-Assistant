@@ -270,7 +270,10 @@ async function main() {
   check("export excludes shop B data (tenancy)", !serialized.includes(B_SECRET));
   const afterBuild = await db.dataRequest.findUnique({ where: { id: requestY.id } });
   check("request pending → ready after build", afterBuild?.status === "ready");
-  check("no stored artifact (exportPath null)", afterBuild?.exportPath === null);
+  const pathColumns = await db.$queryRaw<{ n: bigint }[]>`
+    SELECT count(*)::bigint AS n FROM information_schema.columns
+    WHERE table_name = 'data_requests' AND column_name ILIKE '%path%'`;
+  check("no stored artifact (data_requests has no file-path column)", Number(pathColumns[0].n) === 0);
   const pending = await pendingDataRequests(a);
   check(
     "pendingDataRequests flags the overdue request",

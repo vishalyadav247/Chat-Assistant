@@ -6,7 +6,7 @@ import { requireShopId } from "../tenancy.server";
 
 // Warm the per-shop caches a chat turn would otherwise fill itself.
 //
-// WHY (measured against production 2026-09-04): the first reply in a
+// WHY: the first reply in a
 // conversation ran a median 5.8 s against 4.1 s for later ones, and the chat
 // lane — the one that does the LEAST work — had the worst p90 at 20.7 s. The
 // gap was not the model. It was four caches filled lazily INSIDE the shopper's

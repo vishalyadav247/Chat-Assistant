@@ -115,6 +115,7 @@ async function main(): Promise<void> {
     await inbox({ db, A, B, setPlan });
     await contacts({ db, A, B });
     await discounts({ db, A, B, setPlan });
+    await pagesBlogs({ db, A, B });
     await orderTracking();
     await notifications({ db, A, B });
     await backgroundJobs({ db, A, B });
@@ -156,6 +157,7 @@ async function knowledgeIngestion(ctx: {
     QuotaError,
     parseCsvContent,
     UnsupportedFileError,
+    mergeRefreshedPages,
   } = await import("../../app/lib/ingestion/sources.server");
   const { ingestSource, chunkText, syncFaqKnowledge } = await import(
     "../../app/lib/ingestion/knowledge-ingest.server"
@@ -170,21 +172,24 @@ async function knowledgeIngestion(ctx: {
 
   await setPlan(A, "plus"); // headroom for the happy paths; quotas tested on free below
 
-  // K1 — manual Q&A: create → ingest → retrievable
-  const manual = await createSource(
-    A,
-    {
+  // K1 — LEGACY manual Q&A row (creation retired 2026-09-10, FAQ consolidation;
+  // row seeded directly via db to prove old rows still ingest → retrievable)
+  const manual = await db.dataSource.create({
+    data: {
+      shopId: A,
       type: "manual",
-      question: `${TAG} how do I re-calibrate the flux capacitor`,
-      synonyms: ["flux recalibration"],
-      answer:
-        "Hold the amber dial for nine seconds until the ring turns violet, then release. " +
-        "Never re-calibrate while the unit is charging.",
-      status: "active",
-    } as any,
-    { enqueueIngest: false },
-  );
-  ok("K1 manual source created (status pending)", manual.type === "manual" && manual.status === "pending", manual.status);
+      name: `${TAG} how do I re-calibrate the flux capacitor`,
+      status: "pending",
+      metadata: {
+        question: `${TAG} how do I re-calibrate the flux capacitor`,
+        synonyms: ["flux recalibration"],
+        answer:
+          "Hold the amber dial for nine seconds until the ring turns violet, then release. " +
+          "Never re-calibrate while the unit is charging.",
+      },
+    },
+  });
+  ok("K1 legacy manual row created (status pending)", manual.type === "manual" && manual.status === "pending", manual.status);
 
   const manualIngest = await ingestSource(A, manual.id);
   const manualRow = await db.dataSource.findUnique({ where: { id: manual.id } });
@@ -234,21 +239,190 @@ async function knowledgeIngestion(ctx: {
     pageChunk?.body.slice(0, 50),
   );
 
-  // K6 — CSV import
-  const csv = await createSource(
+  // K5b — Re-sync of a Connect source RE-FETCHES from Shopify (2026-09-11).
+  // It used to re-embed the snapshot saved at connect time, so an edited
+  // refund policy stayed stale forever. These assert the REAL merge rules.
+  const REFUND = "REFUND_POLICY";
+  const SHIP = "SHIPPING_POLICY";
+  const PAGE = "gid://shopify/Page/111";
+  const cand = (type: string, body: string, kind: "policy" | "page" = "policy") => ({
+    type, title: type, url: `https://x/${type}`, body, kind,
+  });
+  const stale = [
+    { type: REFUND, title: "Refund policy", url: "u1", body: "30 days (OLD)" },
+    { type: SHIP, title: "Shipping policy", url: "u2", body: "ships in 5 days (OLD)" },
+  ];
+  const merged = mergeRefreshedPages([REFUND, SHIP], [cand(SHIP, "ships in 2 days"), cand(REFUND, "14 days")], stale);
+  ok(
+    "K5b re-sync takes each selected item's CURRENT body, in the merchant's order",
+    merged.length === 2 &&
+      merged[0].type === REFUND && merged[0].body === "14 days" &&
+      merged[1].type === SHIP && merged[1].body === "ships in 2 days",
+    merged.map((p) => `${p.type}:${p.body}`).join(" | "),
+  );
+  const afterDelete = mergeRefreshedPages([REFUND, SHIP], [cand(SHIP, "ships in 2 days")], stale);
+  ok(
+    "K5b-ii a policy deleted (or emptied) in Shopify is dropped, not quoted from the old snapshot",
+    afterDelete.length === 1 && afterDelete[0].type === SHIP,
+    afterDelete.map((p) => p.type).join(","),
+  );
+  // Past PAGE_CANDIDATE_CAP (200) a missing page may just be beyond the cap, so
+  // absence proves nothing — keep what the merchant connected.
+  const capped = Array.from({ length: 200 }, (_, i) => cand(`gid://shopify/Page/9${i}`, "b", "page"));
+  const keptPage = { type: PAGE, title: "About", url: "u3", body: "about us" };
+  ok(
+    "K5b-iii a page missing from a CAPPED listing keeps its snapshot; from a full listing it is dropped",
+    mergeRefreshedPages([PAGE], capped, [keptPage]).length === 1 &&
+      mergeRefreshedPages([PAGE], [cand(REFUND, "x")], [keptPage]).length === 0,
+  );
+
+  // K5c — FAIL-SOFT, exercised for real: the fixture shop has no Shopify
+  // session, so the strict re-fetch throws exactly as a missing scope or an
+  // outage would. The stored snapshot must survive and still be embedded — a
+  // Shopify hiccup must never wipe knowledge the merchant connected.
+  const connected = await createSource(
     A,
     {
-      type: "csv",
-      name: `${TAG} faq import`,
-      rows: [
-        { question: `${TAG} do you offer gift cards`, answer: "Yes, in $25 / $50 / $100." },
-        { question: `${TAG} can I change my order`, answer: "Within one hour of placing it." },
-      ],
+      type: "pages",
+      name: `${TAG} connected policies`,
+      pages: [{ type: REFUND, title: `${TAG} Refund policy`, url: "", body: "Refunds within 45 days of delivery." }],
+      policyTypes: [REFUND],
     } as any,
     { enqueueIngest: false },
   );
+  // K5d — the race fix: policyTypes is in the row from the very first write.
+  const firstWrite = (await db.dataSource.findUnique({ where: { id: connected.id } }))?.metadata as any;
+  ok(
+    "K5d policyTypes and page ids are stored in the SAME write as the pages",
+    Array.isArray(firstWrite?.policyTypes) && firstWrite.policyTypes[0] === REFUND && firstWrite.pages?.[0]?.type === REFUND,
+    JSON.stringify(firstWrite?.policyTypes),
+  );
+  let softError: string | null = null;
+  try {
+    await ingestSource(A, connected.id);
+  } catch (error) {
+    softError = error instanceof Error ? error.message : String(error);
+  }
+  const softChunk = await db.knowledge.findFirst({ where: { shopId: A, dataSourceId: connected.id } });
+  const softRow = await db.dataSource.findUnique({ where: { id: connected.id } });
+  ok(
+    "K5c Shopify unreachable on re-sync → snapshot kept and embedded, source stays active",
+    softError === null && softRow?.status === "active" && Boolean(softChunk?.body.includes("45 days")),
+    softError ?? `status=${softRow?.status}`,
+  );
+  await deleteSource(A, connected.id);
+
+  // K5e — ONE source per connected policy (2026-09-11), so each lists and
+  // deletes separately. Created with the weekly re-crawl on (policies have no
+  // webhook) and its body snapshotted for fail-soft ingest.
+  const refundPolicy = await createSource(
+    A,
+    {
+      type: "policy",
+      policyType: "REFUND_POLICY",
+      title: `${TAG} Refund policy`,
+      url: "https://example.com/policies/refund-policy",
+      body: "Refunds within 30 days of delivery.",
+    } as any,
+    { enqueueIngest: false },
+  );
+  let duplicatePolicy: unknown = null;
+  try {
+    await createSource(
+      A,
+      { type: "policy", policyType: "REFUND_POLICY", title: "Refund policy", body: "x" } as any,
+      { enqueueIngest: false },
+    );
+  } catch (error) {
+    duplicatePolicy = error;
+  }
+  ok(
+    "K5e a policy is its own source (weekly re-crawl on), and connecting it twice is refused",
+    refundPolicy.type === "policy" && refundPolicy.reCrawlWeekly === true &&
+      refundPolicy.name === `${TAG} Refund policy` && duplicatePolicy instanceof Error,
+    `type=${refundPolicy.type} weekly=${refundPolicy.reCrawlWeekly}`,
+  );
+  // K5f — FAIL-SOFT for real: no Shopify session for the fixture shop, so the
+  // live re-read throws exactly as an outage would; the snapshot is embedded.
+  await ingestSource(A, refundPolicy.id);
+  const policyChunk = await db.knowledge.findFirst({ where: { shopId: A, dataSourceId: refundPolicy.id } });
+  const policyRow = await db.dataSource.findUnique({ where: { id: refundPolicy.id } });
+  ok(
+    "K5f Shopify unreachable → the policy snapshot is still learned and the source is active",
+    policyRow?.status === "active" && Boolean(policyChunk?.body.includes("30 days")),
+    `status=${policyRow?.status}`,
+  );
+  // K5g — NO policy limit (2026-09-11, user decision): Shopify has at most 8
+  // policy types (ShopPolicyType), so every plan connects them all. Asserted on
+  // Free, where the old limit of 5 actually bit.
+  await setPlan(A, "free");
+  const ALL_POLICY_TYPES = [
+    "CONTACT_INFORMATION", "LEGAL_NOTICE", "PRIVACY_POLICY", "SHIPPING_POLICY",
+    "SUBSCRIPTION_POLICY", "TERMS_OF_SALE", "TERMS_OF_SERVICE",
+  ]; // + REFUND_POLICY already connected above = all 8
+  const extraPolicies: string[] = [];
+  let policyRefused: unknown = null;
+  try {
+    for (const policyType of ALL_POLICY_TYPES) {
+      const src = await createSource(
+        A,
+        { type: "policy", policyType, title: policyType, body: "b" } as any,
+        { enqueueIngest: false },
+      );
+      extraPolicies.push(src.id);
+    }
+  } catch (error) {
+    policyRefused = error;
+  }
+  ok(
+    "K5g a Free store can connect all 8 Shopify policy types (no policy limit)",
+    policyRefused === null && extraPolicies.length === 7,
+    policyRefused instanceof Error ? policyRefused.message : `connected=${extraPolicies.length + 1}`,
+  );
+  for (const id of [...extraPolicies, refundPolicy.id]) await deleteSource(A, id);
+  await setPlan(A, "plus");
+
+  // K5h — a file's merchant-written title is its name; the filename is kept
+  // (its extension decides parsing) and the title is the chunk topic.
+  const titled = await createSource(
+    A,
+    {
+      type: "file",
+      name: "doc_final_v3.txt",
+      title: `${TAG} Ring size guide`,
+      mime: "text/plain",
+      bytes: Buffer.from("Measure the inside diameter of a ring that fits."),
+    } as any,
+    { enqueueIngest: false },
+  );
+  await ingestSource(A, titled.id);
+  const titledChunk = await db.knowledge.findFirst({ where: { shopId: A, dataSourceId: titled.id } });
+  ok(
+    "K5h a file shows under its title, keeps its filename, and the title is the chunk topic",
+    titled.name === `${TAG} Ring size guide` &&
+      (titled.metadata as any)?.filename === "doc_final_v3.txt" &&
+      titledChunk?.topic === `${TAG} Ring size guide`,
+    `name=${titled.name} topic=${titledChunk?.topic}`,
+  );
+  await deleteSource(A, titled.id);
+
+  // K6 — LEGACY knowledge-CSV row (creation retired 2026-09-10) still ingests
+  const csv = await db.dataSource.create({
+    data: {
+      shopId: A,
+      type: "csv",
+      name: `${TAG} faq import`,
+      status: "pending",
+      metadata: {
+        rows: [
+          { question: `${TAG} do you offer gift cards`, answer: "Yes, in $25 / $50 / $100." },
+          { question: `${TAG} can I change my order`, answer: "Within one hour of placing it." },
+        ],
+      },
+    },
+  });
   const csvResult = await ingestSource(A, csv.id);
-  ok("K6 CSV import → one chunk per row", csvResult.chunkCount === 2, `chunks=${csvResult.chunkCount}`);
+  ok("K6 legacy CSV row → one chunk per row", csvResult.chunkCount === 2, `chunks=${csvResult.chunkCount}`);
 
   // K7 — CSV parser tolerates quoted commas / CRLF
   const parsed = parseCsvContent('question,answer\r\n"a, b","c ""d"""\r\n');
@@ -297,8 +471,15 @@ async function knowledgeIngestion(ctx: {
       enqueueIngest: false,
     }),
   );
-  const emptyManual = await threw(() =>
-    createSource(A, { type: "manual", question: "  ", answer: "", status: "active" } as any, {
+  // Retired types (manual/csv, 2026-09-10) must be refused like any unknown
+  // type — createSource's union no longer contains them.
+  const retiredManual = await threw(() =>
+    createSource(A, { type: "manual", question: "q", answer: "a", status: "active" } as any, {
+      enqueueIngest: false,
+    }),
+  );
+  const retiredCsv = await threw(() =>
+    createSource(A, { type: "csv", name: "x", rows: [{ question: "q", answer: "a" }] } as any, {
       enqueueIngest: false,
     }),
   );
@@ -306,9 +487,9 @@ async function knowledgeIngestion(ctx: {
     createSource(A, { type: "telepathy", name: "x" } as any, { enqueueIngest: false }),
   );
   ok(
-    "K10 malformed input rejected (bad scheme / empty manual / unknown type)",
-    Boolean(badUrl && emptyManual && badType),
-    `${badUrl ? "url✓" : "url✗"} ${emptyManual ? "manual✓" : "manual✗"} ${badType ? "type✓" : "type✗"}`,
+    "K10 malformed input rejected (bad scheme / retired manual + csv / unknown type)",
+    Boolean(badUrl && retiredManual && retiredCsv && badType),
+    `${badUrl ? "url✓" : "url✗"} ${retiredManual ? "manual✓" : "manual✗"} ${retiredCsv ? "csv✓" : "csv✗"} ${badType ? "type✓" : "type✗"}`,
   );
 
   // K11 — SSRF guard
@@ -418,78 +599,104 @@ async function knowledgeIngestion(ctx: {
   );
 
   // K21..K24 — quota enforcement at the plan limit (free tier)
+  // manual_qas retired 2026-09-10 — the Q&A cap is now the faqs quota,
+  // enforced on CREATE in saveFaq (edits never blocked) and per-row in
+  // importFaqCsv.
   await setPlan(A, "free");
-  const manualLimit = getQuota("free", "manual_qas");
-  const manualUsed = await db.dataSource.count({
-    where: { shopId: A, type: "manual", status: { not: "suggested" } },
-  });
-  for (let i = manualUsed; i < manualLimit; i++) {
+  const { saveFaq, importFaqCsv } = await import("../../app/lib/faq/faq.server");
+  const faqLimit = getQuota("free", "faqs");
+  const faqUsed = await db.faq.count({ where: { shopId: A } });
+  if (faqUsed < faqLimit) {
+    await db.faq.createMany({
+      data: Array.from({ length: faqLimit - faqUsed }, (_, i) => ({
+        shopId: A,
+        categoryId: cat.id,
+        question: `${TAG} faq filler ${i}`,
+        answerHtml: "<p>filler</p>",
+        status: "draft",
+      })),
+    });
+  }
+  const faqOver = await threw(() =>
+    saveFaq(A, {
+      question: `${TAG} one too many`,
+      answerHtml: "<p>x</p>",
+      status: "draft",
+      categoryId: cat.id,
+      featured: false,
+    }),
+  );
+  ok(
+    `K21 faqs quota bites at ${faqLimit} on create`,
+    faqOver !== null && /plan allows/i.test(faqOver.message),
+    faqOver?.message,
+  );
+  // Editing an existing FAQ at the cap must still work (downgrade-safe).
+  const editable = await db.faq.findFirst({ where: { shopId: A }, select: { id: true } });
+  const editAtCap = await threw(() =>
+    saveFaq(A, {
+      id: editable!.id,
+      question: `${TAG} edited at cap`,
+      answerHtml: "<p>edited</p>",
+      status: "draft",
+      categoryId: cat.id,
+      featured: false,
+    }),
+  );
+  ok("K21b editing an existing FAQ at the cap is never blocked", editAtCap === null, editAtCap?.message);
+  // CSV import at the cap: rows are reported per-row, not silently dropped.
+  const importAtCap = await importFaqCsv(A, `"${TAG} import at cap","answer"`);
+  ok(
+    "K21c importFaqCsv at the cap reports the plan limit per row",
+    importAtCap.imported === 0 && importAtCap.badRows.some((r) => /plan FAQ limit/i.test(r.reason)),
+    importAtCap.badRows[0]?.reason,
+  );
+  await db.faq.deleteMany({ where: { shopId: A, question: { startsWith: `${TAG} faq filler` } } });
+
+  // K22 (policy_pages quota) retired 2026-09-11 with the dimension itself —
+  // see K5g: every plan connects all of a store's policies.
+
+  // FAQ CSV import is on EVERY plan now (user decision 2026-09-10) — the old
+  // csv_import feature gate is retired; the faqs quota above is the only cap.
+  const freeImport = await importFaqCsv(A, `"${TAG} free-plan import","works on free"`);
+  ok(
+    "K23 FAQ CSV import works on Free (csv_import gate retired)",
+    freeImport.imported === 1,
+    `imported=${freeImport.imported} bad=${freeImport.badRows[0]?.reason ?? "none"}`,
+  );
+  await db.faq.deleteMany({ where: { shopId: A, question: `${TAG} free-plan import` } });
+
+  // File uploads on EVERY plan (feature gate removed 2026-09-10, user
+  // decision) — the file_uploads QUOTA (5) is the only cap.
+  const fileOnFree = await createSource(
+    A,
+    { type: "file", name: `${TAG}-free.txt`, mime: "text/plain", bytes: Buffer.from("free plan file") } as any,
+    { enqueueIngest: false },
+  );
+  ok("K24 file upload works on Free (file_upload gate retired)", fileOnFree.status === "pending", fileOnFree.status);
+  const fileLimit = getQuota("free", "file_uploads");
+  const filesUsed = await db.dataSource.count({ where: { shopId: A, type: "file" } });
+  for (let i = filesUsed; i < fileLimit; i++) {
     await createSource(
       A,
-      { type: "manual", question: `${TAG} filler ${i}`, answer: `filler answer ${i}`, status: "active" } as any,
+      { type: "file", name: `${TAG}-filler-${i}.txt`, mime: "text/plain", bytes: Buffer.from(`filler ${i}`) } as any,
       { enqueueIngest: false },
     );
   }
-  const manualOver = await threw(() =>
+  const fileOver = await threw(() =>
     createSource(
       A,
-      { type: "manual", question: `${TAG} one too many`, answer: "nope", status: "active" } as any,
+      { type: "file", name: `${TAG}-over.txt`, mime: "text/plain", bytes: Buffer.from("nope") } as any,
       { enqueueIngest: false },
     ),
   );
   ok(
-    `K21 manual_qas quota bites at ${manualLimit}`,
-    manualOver instanceof QuotaError && (manualOver as any).dimension === "manual_qas",
-    manualOver?.message,
+    `K24b file_uploads quota bites at ${fileLimit}`,
+    fileOver instanceof QuotaError && (fileOver as any).dimension === "file_uploads",
+    fileOver?.message,
   );
-
-  const policyLimit = getQuota("free", "policy_pages");
-  const policyOver = await threw(() =>
-    createSource(
-      A,
-      {
-        type: "pages",
-        name: `${TAG} too many pages`,
-        pages: Array.from({ length: policyLimit + 1 }, (_, i) => ({
-          title: `${TAG} p${i}`,
-          url: "",
-          body: `body ${i}`,
-        })),
-      } as any,
-      { enqueueIngest: false },
-    ),
-  );
-  ok(
-    `K22 policy_pages quota counts PAGES not sources (limit ${policyLimit})`,
-    policyOver instanceof QuotaError && (policyOver as any).dimension === "policy_pages",
-    policyOver?.message,
-  );
-
-  const csvGate = await threw(() =>
-    createSource(
-      A,
-      { type: "csv", name: `${TAG} gated`, rows: [{ question: "q", answer: "a" }] } as any,
-      { enqueueIngest: false },
-    ),
-  );
-  ok(
-    "K23 csv_import feature gate refuses on Free",
-    csvGate !== null && /plan_gate/.test(csvGate!.message),
-    csvGate?.message,
-  );
-
-  const fileGate = await threw(() =>
-    createSource(
-      A,
-      { type: "file", name: `${TAG}-x.txt`, mime: "text/plain", bytes: Buffer.from("hi") } as any,
-      { enqueueIngest: false },
-    ),
-  );
-  ok(
-    "K24 file_upload feature gate refuses on Free",
-    fileGate !== null && /plan_gate/.test(fileGate!.message),
-    fileGate?.message,
-  );
+  await db.dataSource.deleteMany({ where: { shopId: A, type: "file", name: { startsWith: `${TAG}-filler-` } } });
+  await db.dataSource.deleteMany({ where: { shopId: A, type: "file", name: `${TAG}-free.txt` } });
 
   // K25 — crawl page cap follows the plan quota
   await setPlan(A, "plus");
@@ -499,6 +706,89 @@ async function knowledgeIngestion(ctx: {
     sources.length > 0 && sources.every((s: any) => s.shopId === A && s.status !== "suggested"),
     `n=${sources.length}`,
   );
+
+  // K25b — Website URL is SINGLE PAGE only (spec 22), so there is no scope
+  // field at all. An old client still sending one must not 400 the save.
+  const { urlSourceSchema } = await import("../../app/lib/ingestion/sources.server");
+  const coerced = urlSourceSchema.parse({ type: "url", url: "https://x.com/p", crawlScope: "sitemap" });
+  ok("K25b a legacy client still sending crawlScope is accepted and the key ignored", coerced.url === "https://x.com/p" && !("crawlScope" in coerced), JSON.stringify(coerced));
+  // K25c — crawl_pages now counts URL SOURCES (each is one page) and is
+  // enforced at creation — it was a per-crawl cap, meaningless at one page.
+  await setPlan(A, "free");
+  const urlLimit = getQuota("free", "crawl_pages");
+  const existingUrls = await db.dataSource.count({ where: { shopId: A, type: "url" } });
+  const urlFixtures: string[] = [];
+  for (let i = existingUrls; i < urlLimit; i++) {
+    const src = await createSource(A, { type: "url", url: `https://example.com/k25c-${i}` } as any, { enqueueIngest: false });
+    urlFixtures.push(src.id);
+  }
+  let urlRefused: unknown = null;
+  try {
+    await createSource(A, { type: "url", url: "https://example.com/k25c-over" } as any, { enqueueIngest: false });
+  } catch (error) {
+    urlRefused = error;
+  }
+  ok(
+    "K25c adding a URL past crawl_pages is refused with a QuotaError",
+    urlRefused instanceof QuotaError && (urlRefused as InstanceType<typeof QuotaError>).dimension === "crawl_pages",
+    `limit=${urlLimit} existing=${existingUrls}`,
+  );
+  for (const id of urlFixtures) await deleteSource(A, id);
+  await setPlan(A, "plus");
+  // K5i — LEGACY combined "policies & pages" rows convert to one row per policy
+  // automatically (the user saw the old row in Manage sources). Store pages in
+  // it are dropped — they come from the Pages tab now.
+  const { convertLegacyPagesSources } = await import("../../app/lib/ingestion/sources.server");
+  await db.dataSource.create({
+    data: {
+      shopId: A,
+      type: "pages",
+      name: "Store policies & pages",
+      status: "active",
+      metadata: {
+        policyTypes: ["REFUND_POLICY", "gid://shopify/Page/77"],
+        pages: [
+          { type: "REFUND_POLICY", title: "Refund policy", url: "https://x/policies/refund-policy", body: "30-day refunds." },
+          { type: "gid://shopify/Page/77", title: "About us", url: "https://x/pages/about", body: "We make bracelets." },
+        ],
+      },
+    },
+  });
+  // A pre-2026-09-11 row: no policyTypes, no per-page type — the policy is
+  // recovered from its /policies/ URL (shipping-policy → SHIPPING_POLICY).
+  await db.dataSource.create({
+    data: {
+      shopId: A,
+      type: "pages",
+      name: "Store policies & pages",
+      status: "active",
+      metadata: {
+        pages: [
+          { title: "Shipping policy", url: "https://x/policies/shipping-policy", body: "Ships in 2 days." },
+          { title: "shipping policy", url: "https://x/pages/shipping-policy", body: "A page, not a policy." },
+        ],
+      },
+    },
+  });
+  const legacyBefore = await db.dataSource.count({ where: { shopId: A, type: "pages" } });
+  const converted = await convertLegacyPagesSources(A, { enqueueIngest: false });
+  const policyRows = await db.dataSource.findMany({ where: { shopId: A, type: "policy" } });
+  const legacyLeft = await db.dataSource.count({ where: { shopId: A, type: "pages" } });
+  const byType = new Map<string, any>(policyRows.map((r: any) => [r.metadata.policyType, r]));
+  ok(
+    "K5i legacy rows become one row per POLICY (pages dropped), incl. a policy recovered from its URL",
+    converted.removed === legacyBefore && legacyLeft === 0 &&
+      byType.get("REFUND_POLICY")?.name === "Refund policy" &&
+      byType.get("REFUND_POLICY")?.metadata.body === "30-day refunds." &&
+      byType.get("SHIPPING_POLICY")?.metadata.body === "Ships in 2 days.",
+    `created=${converted.created} removed=${converted.removed} types=${[...byType.keys()].join(",")}`,
+  );
+  // A /policies/<slug> that is not a real ShopPolicyType must not invent one
+  // (an older fixture here points at /policies/returns).
+  ok("K5i-iii only real ShopPolicyType values are recovered from URLs", !byType.has("RETURNS"), [...byType.keys()].join(","));
+  const again = await convertLegacyPagesSources(A, { enqueueIngest: false });
+  ok("K5i-ii the conversion is idempotent (a second run does nothing)", again.created === 0 && again.removed === 0);
+  for (const row of policyRows) await deleteSource(A, row.id);
 
   // K26 — pseudo-embedding fallback never matches real content strongly
   const noise = pseudoEmbedding("unrelated noise vector");
@@ -556,8 +846,8 @@ async function catalogSync(ctx: {
 }): Promise<void> {
   section("Catalog / product sync (spec 02)");
   const { db, A, B, getQuota, setPlan } = ctx;
-  const { upsertProductFromWebhook, deleteProductFromWebhook, catalogAutoSyncAllowed } =
-    await import("../../app/lib/ingestion/catalog-sync.server");
+  const catalogSyncModule = await import("../../app/lib/ingestion/catalog-sync.server");
+  const { upsertProductFromWebhook, deleteProductFromWebhook } = catalogSyncModule;
   const { buildMetafieldText, applyMetafieldSelection, toStoredMetafield } = await import(
     "../../app/lib/ingestion/metafields.server"
   );
@@ -699,6 +989,31 @@ async function catalogSync(ctx: {
   const shopsAfter = await db.shop.count();
   ok("C9 webhook for unknown shop is a no-op (no shop row created)", shopsBefore === shopsAfter);
 
+  // C9b — collections webhooks are enqueue-only like products; the delete JOB
+  // removes the row and its membership for that shop only. (The upsert job
+  // calls the Admin API for membership, so it is not run against a fixture.)
+  const { deleteCollectionFromWebhook, upsertCollectionFromWebhook } = catalogSyncModule;
+  const qaCollection = "gid://shopify/Collection/900900";
+  await db.collection.create({ data: { shopId: A, shopifyCollectionId: qaCollection, title: `${TAG} Collection` } });
+  await db.collectionProduct.create({
+    data: { shopId: A, collectionId: qaCollection, shopifyProductId: "gid://shopify/Product/900101" },
+  });
+  await deleteCollectionFromWebhook(SHOP_A, { id: 900900, admin_graphql_api_id: qaCollection });
+  const collectionLeft =
+    (await db.collection.count({ where: { shopId: A, shopifyCollectionId: qaCollection } })) +
+    (await db.collectionProduct.count({ where: { shopId: A, collectionId: qaCollection } }));
+  const shopsBeforeCol = await db.shop.count();
+  await upsertCollectionFromWebhook("never-installed-qa-features.myshopify.com", { id: 1, title: "x" });
+  await deleteCollectionFromWebhook("never-installed-qa-features.myshopify.com", { id: 1 });
+  const routeSource = readFileSync(join(process.cwd(), "app/routes/webhooks.collections.tsx"), "utf-8");
+  ok(
+    "C9b collections/delete job removes the row + membership; unknown shop is a no-op; the route only enqueues",
+    collectionLeft === 0 &&
+      (await db.shop.count()) === shopsBeforeCol &&
+      !/\bdb\./.test(routeSource) && /enqueue\(JOBS\.collectionUpsert/.test(routeSource),
+    `left=${collectionLeft}`,
+  );
+
   // C10 — cross-shop isolation: shop B never sees shop A's catalog
   await upsertProductFromWebhook(
     SHOP_B,
@@ -816,15 +1131,27 @@ async function catalogSync(ctx: {
   const collA = await db.collection.count({ where: { shopId: A } });
   ok("C14 collections are shop-scoped", collA === 1 && collB === 0, `A=${collA} B=${collB}`);
 
-  // C15 — auto-sync gate: plan feature AND merchant toggle
-  await setPlan(A, "free");
-  const freeAllowed = await catalogAutoSyncAllowed(A, "products");
-  await setPlan(A, "plus");
-  const plusAllowed = await catalogAutoSyncAllowed(A, "products");
+  // C15 — background sync (2026-09-11, user decision): WEEKLY, every plan, no
+  // merchant toggle, and only for what no webhook reports — collection
+  // membership, pages, blogs. Products are left to their webhooks. The job body
+  // is a closure inside registerHandlers, so this reads the real source; plain
+  // substring checks, because a regex guard that silently stops matching passes
+  // forever while testing nothing.
+  const handlersSrc = readFileSync(join(process.cwd(), "app", "lib", "jobs", "handlers.server.ts"), "utf-8");
+  const reconcileBody = handlersSrc.slice(
+    handlersSrc.indexOf("boss.work(JOBS.reconcileAll"),
+    handlersSrc.indexOf("boss.schedule(JOBS.reconcileAll"),
+  );
   ok(
-    "C15 catalog_auto_sync gated by plan (free off, plus on)",
-    freeAllowed === false && plusAllowed === true,
-    `free=${freeAllowed} plus=${plusAllowed}`,
+    "C15 weekly background sync covers collections, pages and blogs — not products — with no plan gate",
+    reconcileBody.length > 0 &&
+      reconcileBody.includes("JOBS.collectionSync") &&
+      reconcileBody.includes("JOBS.pageSync") &&
+      reconcileBody.includes("JOBS.articleSync") &&
+      !reconcileBody.includes("JOBS.catalogSync") &&
+      !("catalogAutoSyncAllowed" in catalogSyncModule) &&
+      handlersSrc.includes('boss.schedule(JOBS.reconcileAll, "17 3 * * 1"'),
+    `body=${reconcileBody.length} chars`,
   );
 
   // C16 — learnEnabled=false products are excluded from search sourcing
@@ -1471,17 +1798,28 @@ async function campaigns(ctx: {
     sanitised.slice(0, 60),
   );
 
-  // P6 — active_campaigns quota (Free = 0)
+  // P6 — active_campaigns quota on Free, read live (it was 0 until the
+  // 2026-09-11 re-baseline made it 1). Fill the quota, then the next
+  // activation must be refused via save AND toggle.
   await setPlan(A, "free");
   const freeQuota = getQuota("free", "active_campaigns");
+  await db.campaign.updateMany({ where: { shopId: A }, data: { status: "inactive" } });
+  const freeIds: string[] = [];
+  for (let i = 0; i < freeQuota; i++) {
+    const r = await saveCampaign(A, "free", base({ name: `${TAG} free campaign ${i}`, status: "inactive" }));
+    if (r.ok && (await toggleCampaign(A, (r as any).id, true)) === true) freeIds.push((r as any).id);
+  }
   const activateOnFree = await saveCampaign(A, "free", base({ id, status: "active" }));
   const toggleOnFree = await toggleCampaign(A, id, true);
   ok(
-    `P6 active_campaigns quota (free = ${freeQuota}) refuses activation via save AND toggle`,
-    activateOnFree.ok === false && (activateOnFree as any).code === "plan_gate" &&
+    `P6 active_campaigns quota (free = ${freeQuota}) fills, then refuses activation via save AND toggle`,
+    freeIds.length === freeQuota &&
+      activateOnFree.ok === false && (activateOnFree as any).code === "plan_gate" &&
       typeof toggleOnFree === "object" && "error" in (toggleOnFree as any),
-    (activateOnFree as any).error?.slice(0, 50),
+    `filled=${freeIds.length} ${(activateOnFree as any).error?.slice(0, 50) ?? ""}`,
   );
+  // P7/P8 count actives from zero.
+  await db.campaign.updateMany({ where: { shopId: A, id: { in: freeIds } }, data: { status: "inactive" } });
 
   // P7 — Basic quota = 2: the third activation is refused, drafts are unlimited
   await setPlan(A, "basic");
@@ -1821,17 +2159,17 @@ async function analytics(ctx: {
     `free plan got ${wide.length} days of history for ?crange=12m (no clamp exists — app/lib/analytics/reports.server.ts:138)`,
   );
 
-  // A12 — exports feature gate
-  const exportOnFree = await threw(() => exportConversationsCsv(A));
+  // A12 — exports on EVERY plan (the "exports" feature gate was removed
+  // 2026-09-10, user decision) — well-formed on Free too
+  const freeCsv = await exportConversationsCsv(A);
   await setPlan(A, "plus");
   const csv = await exportConversationsCsv(A);
   const acsv = await exportAnalyticsCsv(A, "7d");
   ok(
-    "A12 CSV exports are plan-gated and well-formed when allowed",
-    exportOnFree !== null &&
+    "A12 CSV exports work on every plan (gate retired) and are well-formed",
+    freeCsv.startsWith("id,startedAt,status,mode,outcome,rating,messages") &&
       csv.startsWith("id,startedAt,status,mode,outcome,rating,messages") &&
       acsv.split("\n")[0].startsWith("date,conversations"),
-    exportOnFree?.message,
   );
 
   // A13 — CROSS-TENANT: shop B's export/report never contains shop A's rows
@@ -2387,7 +2725,6 @@ async function discounts(ctx: {
     "../../app/lib/ingestion/catalog-sync.server"
   );
   const { loadShopSettings } = await import("../../app/lib/settings/save.server");
-  const { invalidateShopConfig } = await import("../../app/lib/config/shop-config.server");
   const { DISCOUNT_INTENT_RE, discountFacts } = await import("../../app/lib/pipeline/index.server");
 
   const payload = (over: Record<string, any> = {}) => ({
@@ -2397,45 +2734,27 @@ async function discounts(ctx: {
     ...over,
   });
 
-  // D1 — Free plan: the realtime webhook is refused by the feature gate
+  // D1 — discount webhooks apply on EVERY plan (2026-09-11, user decision).
+  // They used to be refused below Pro and behind a merchant toggle, and with
+  // no scheduled discount sync a Free shop's new discount never reached the
+  // agent. The Admin refetch cannot run offline, so this also proves the
+  // fail-soft fallback to the payload fields.
   await setPlan(A, "free");
-  await upsertDiscountFromWebhook(SHOP_A, payload());
-  const onFree = await db.discount.count({ where: { shopId: A } });
-  ok("D1 discount_realtime_sync feature gate blocks the webhook on Free", onFree === 0, `rows=${onFree}`);
-
-  // D2/D3 — Pro plan but the merchant toggle is OFF: still refused
-  await setPlan(A, "pro");
-  const settings = await loadShopSettings(A);
-  ok(
-    "D2 discountRealtime is a real per-shop setting (schema default: on)",
-    typeof settings.discountRealtime === "boolean",
-    `default discountRealtime=${settings.discountRealtime}`,
-  );
-  await db.shopSettings.upsert({
-    where: { shopId: A },
-    create: { shopId: A, settings: { ...settings, discountRealtime: false } as any },
-    update: { settings: { ...settings, discountRealtime: false } as any },
-  });
-  invalidateShopConfig(A);
-  await upsertDiscountFromWebhook(SHOP_A, payload());
-  const toggleOff = await db.discount.count({ where: { shopId: A } });
-  ok("D3 merchant toggle OFF blocks the webhook even on Pro", toggleOff === 0, `rows=${toggleOff}`);
-
-  // D4 — plan + toggle on: the discount lands. The Admin refetch cannot run
-  // offline, so this also proves the fail-soft fallback to the payload fields.
-  await db.shopSettings.upsert({
-    where: { shopId: A },
-    create: { shopId: A, settings: { ...settings, discountRealtime: true } as any },
-    update: { settings: { ...settings, discountRealtime: true } as any },
-  });
-  invalidateShopConfig(A);
   await upsertDiscountFromWebhook(SHOP_A, payload());
   const synced = await db.discount.findFirst({ where: { shopId: A } });
   ok(
-    "D4 plan + toggle on: the discount syncs (Admin refetch failure falls back to the payload)",
+    "D1 a discount webhook syncs on the Free plan (no plan gate, no toggle)",
     Boolean(synced) && synced.title === `${TAG}-SAVE20` && synced.status === "active",
     synced ? `title=${synced.title} status=${synced.status}` : "no row",
   );
+  // D2 — the setting is gone, not just ignored: nothing left to switch off.
+  const settings = await loadShopSettings(A);
+  ok(
+    "D2 no discountRealtime / catalogAutoSync setting remains in shop settings",
+    !("discountRealtime" in settings) && !("catalogAutoSync" in settings),
+    Object.keys(settings).join(","),
+  );
+  await setPlan(A, "pro");
 
   // D5/D6 — expiry: only discounts inside their window are AI-visible
   const now = new Date();
@@ -3099,12 +3418,15 @@ async function gdpr(ctx: { db: any; A: string; B: string }): Promise<void> {
   const overdue = isDataRequestOverdue({ ...request, dueAt: new Date(Date.now() - 1000) } as any);
   ok("G3b an elapsed due date reads as overdue", overdue === true);
 
-  // G4 — no stored PII artifact: the export is computed on download
-  const stored = await db.dataRequest.findUnique({ where: { id: request.id }, select: { exportPath: true } });
+  // G4 — no stored PII artifact: the export is computed on download, and the
+  // table has no column that could even point at a stored file.
+  const pathColumns = await db.$queryRaw<{ n: bigint }[]>`
+    SELECT count(*)::bigint AS n FROM information_schema.columns
+    WHERE table_name = 'data_requests' AND column_name ILIKE '%path%'`;
   ok(
-    "G4 no PII artifact is stored on disk for a data request (computed on download)",
-    stored.exportPath === null,
-    `exportPath=${stored.exportPath}`,
+    "G4 no PII artifact can be stored for a data request (computed on download)",
+    Number(pathColumns[0].n) === 0,
+    `path columns=${pathColumns[0].n}`,
   );
 
   // ── customers/redact ──────────────────────────────────────────────────────
@@ -3268,6 +3590,146 @@ async function gdpr(ctx: { db: any; A: string; B: string }): Promise<void> {
 
   // Recreate shop B so teardown's own assertions still have a row to check.
   await db.shop.update({ where: { id: B }, data: { uninstalledAt: null, name: `${TAG} shop B` } });
+}
+
+// ── Module: Pages & Blogs sync (spec 22) ────────────────────────────────────
+
+async function pagesBlogs(ctx: { db: any; A: string; B: string }): Promise<void> {
+  section("Pages & Blogs sync (spec 22)");
+  const { db, A, B } = ctx;
+  const { pageRowFields, articleRowFields, rebuildContentBridge, BRIDGE_TYPE } = await import(
+    "../../app/lib/ingestion/content-sync.server"
+  );
+  const { listSources } = await import("../../app/lib/ingestion/sources.server");
+  const { loadShopSettings } = await import("../../app/lib/settings/save.server");
+  const { QUOTA_DIMENSIONS, GRANTABLE_DIMENSIONS, PLAN_IDS } = await import(
+    "../../app/lib/billing/plan-shared"
+  );
+  const plans = await import("../../app/lib/billing/plans.server");
+
+  // PB1/PB2 — Shopify node → row. HTML is stripped at sync, so neither the
+  // table nor the bridge ever handles markup.
+  const page = pageRowFields({
+    id: "gid://shopify/Page/1",
+    title: null,
+    handle: "shipping-info",
+    body: "<h2>Shipping</h2><p>We ship in <b>2 days</b>.</p>",
+    isPublished: false,
+    updatedAt: "2026-09-01T00:00:00Z",
+  });
+  ok(
+    "PB1 page body is stripped to text; a draft maps to isPublished=false; a null title falls back to the handle",
+    page.bodyText.includes("We ship in 2 days") && !page.bodyText.includes("<") &&
+      page.isPublished === false && page.title === "shipping-info",
+    JSON.stringify({ title: page.title, body: page.bodyText.slice(0, 40) }),
+  );
+  const article = articleRowFields({
+    id: "gid://shopify/Article/1",
+    title: "Caring for amethyst",
+    handle: "care",
+    body: "<p>Keep it out of direct sun.</p>",
+    summary: "<p>A short <i>care</i> guide</p>",
+    tags: ["care", "amethyst"],
+    isPublished: true,
+    updatedAt: null,
+    author: { name: "Priya" },
+    blog: { id: "gid://shopify/Blog/1", title: "Care guides" },
+  });
+  ok(
+    "PB2 article carries blog title, author, tags and a stripped summary",
+    article.blogTitle === "Care guides" && article.author === "Priya" &&
+      article.tags.length === 2 && article.summary === "A short care guide",
+    JSON.stringify({ blog: article.blogTitle, summary: article.summary }),
+  );
+
+  // PB3 — the bridge holds exactly the learnEnabled rows while the master is on.
+  await db.storePage.createMany({
+    data: [
+      { shopId: A, shopifyPageId: "gid://shopify/Page/901", title: `${TAG} Returns`, bodyText: "PB-ENABLED returns within 30 days", learnEnabled: true },
+      { shopId: A, shopifyPageId: "gid://shopify/Page/902", title: `${TAG} Secret`, bodyText: "PB-DISABLED internal note", learnEnabled: false },
+      { shopId: A, shopifyPageId: "gid://shopify/Page/903", title: `${TAG} Draft`, bodyText: "PB-DRAFT unreleased sale", isPublished: false, learnEnabled: false },
+    ],
+  });
+  await rebuildContentBridge(A, "pages", { inline: true });
+  const bridge = await db.dataSource.findFirst({ where: { shopId: A, type: BRIDGE_TYPE.pages } });
+  const chunks = await db.knowledge.findMany({ where: { shopId: A, dataSourceId: bridge?.id } });
+  const text = chunks.map((c: any) => c.body).join(" | ");
+  ok(
+    "PB3 the pages bridge contains the enabled page and NOT the disabled page or the draft",
+    bridge?.status === "active" && text.includes("PB-ENABLED") &&
+      !text.includes("PB-DISABLED") && !text.includes("PB-DRAFT"),
+    text.slice(0, 80) || "no chunks",
+  );
+
+  // PB4 — master switch off ⇒ the agent has none of it (bridge emptied, still active).
+  const settings = await loadShopSettings(A);
+  const saveLearn = (pages: boolean) =>
+    db.shopSettings.upsert({
+      where: { shopId: A },
+      create: { shopId: A, settings: { ...settings, learn: { ...settings.learn, pages } } },
+      update: { settings: { ...settings, learn: { ...settings.learn, pages } } },
+    });
+  await saveLearn(false);
+  await rebuildContentBridge(A, "pages", { inline: true });
+  const offCount = await db.knowledge.count({ where: { shopId: A, dataSourceId: bridge?.id } });
+  const offRow = await db.dataSource.findUnique({ where: { id: bridge?.id } });
+  ok(
+    "PB4 Learn pages OFF empties the bridge (0 chunks) without erroring the source",
+    offCount === 0 && offRow?.status === "active",
+    `chunks=${offCount} status=${offRow?.status}`,
+  );
+  await saveLearn(true);
+
+  // PB5 — articles bridge: the blog name travels with the title as context.
+  await db.blogArticle.create({
+    data: {
+      shopId: A,
+      shopifyArticleId: "gid://shopify/Article/901",
+      title: `${TAG} Cleansing crystals`,
+      blogTitle: "Care guides",
+      bodyText: "PB-ARTICLE rinse under running water",
+      learnEnabled: true,
+    },
+  });
+  await rebuildContentBridge(A, "blogs", { inline: true });
+  const articleChunk = await db.knowledge.findFirst({
+    where: { shopId: A, body: { contains: "PB-ARTICLE" } },
+  });
+  ok(
+    "PB5 an enabled article is learned, with its blog name in the topic",
+    Boolean(articleChunk) && articleChunk.topic.includes("(Care guides)"),
+    articleChunk?.topic,
+  );
+
+  // PB6 — bridges are managed on their own tabs, so Custom knowledge hides them.
+  const listed = await listSources(A);
+  const explicit = await listSources(A, BRIDGE_TYPE.pages);
+  ok(
+    "PB6 Custom knowledge hides the Pages/Blogs bridges; an explicit type filter still reaches them",
+    !listed.some((s: any) => s.type === "store_pages" || s.type === "blog_articles") && explicit.length === 1,
+    `listed=${listed.map((s: any) => s.type).join(",")}`,
+  );
+
+  // PB7 — CROSS-TENANT: nothing of A's mirror or bridge is visible to B.
+  const bPages = await db.storePage.count({ where: { shopId: B } });
+  const bLeak = await db.knowledge.count({ where: { shopId: B, body: { contains: "PB-" } } });
+  ok("PB7 CROSS-TENANT: pages, articles and their knowledge are shop-scoped", bPages === 0 && bLeak === 0, `B pages=${bPages} leaked chunks=${bLeak}`);
+
+  // PB8 — plan limits exist on every plan, editable like products_synced, and
+  // bonus-grantable (a grant is read at the sync cap in content-sync.server).
+  const dimsOk =
+    QUOTA_DIMENSIONS.includes("pages_synced") && QUOTA_DIMENSIONS.includes("articles_synced") &&
+    (GRANTABLE_DIMENSIONS as readonly string[]).includes("pages_synced") &&
+    (GRANTABLE_DIMENSIONS as readonly string[]).includes("articles_synced");
+  const perPlan = PLAN_IDS.map((id: string) => [
+    plans.getQuota(id, "pages_synced"),
+    plans.getQuota(id, "articles_synced"),
+  ]);
+  ok(
+    "PB8 pages_synced / articles_synced are quota dimensions on every plan and bonus-grantable",
+    dimsOk && perPlan.every(([p, a]: number[]) => Number.isFinite(p) && Number.isFinite(a)),
+    JSON.stringify(perPlan),
+  );
 }
 
 // ── teardown ────────────────────────────────────────────────────────────────

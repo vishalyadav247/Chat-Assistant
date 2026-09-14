@@ -48,6 +48,10 @@ const GOLDEN: GoldenCase[] = [
   { input: "a bottle that keeps drinks hot", expectOutcome: ["buy"], expectCards: true, expectCardTitle: /Tumbler|Bottle/ },
   // Bare "customer service" is a question, not a hand-off (handover.server.ts patterns).
   { input: "what is your customer service email?", expectOutcome: ["question", "fell_back"] },
+  // A question about the store itself is RAG, never small talk — the chat lane
+  // retrieves nothing and once invented "visits are not available" against a
+  // store page that said otherwise (tuning event 2026-09-11).
+  { input: "can I come and pick up my order in person?", expectOutcome: ["question"], expectInText: /mon|fri|10\s?am|4\s?pm|warehouse/i },
   // ── Field-aware ranking + model picks (2026-09-01) — the real-store failure:
   // long descriptions name OTHER products' colours and stones ("pairs with
   // black outfits", "recharge on a selenite plate"). A word only in the prose
@@ -267,4 +271,13 @@ withSeedCatalogueOnly(main)
     console.error("eval crashed:", error);
     process.exitCode = 1;
   })
-  .finally(() => dbCheck.$disconnect());
+  .finally(async () => {
+    await dbCheck.$disconnect();
+    // The pipeline runs on the app/db.server SINGLETON — a SECOND client whose
+    // pool keeps the event loop alive. Disconnecting only `dbCheck` left the
+    // process hanging forever AFTER printing its results, with the output still
+    // trapped in npm’s pipe buffer, so a finished run looked like a stuck one
+    // (2026-09-10: two completed runs wedged, one of them for 80 minutes).
+    const appDb = (await import("../app/db.server")).default;
+    await appDb.$disconnect().catch(() => undefined);
+  });

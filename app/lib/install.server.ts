@@ -35,19 +35,12 @@ export async function onShopAuthenticated(shopDomain: string): Promise<void> {
           role: "You are a friendly sales and support assistant for this store.",
           communicationStyle: "friendly",
           brandVoice: "Warm, approachable and helpful. Plain, encouraging language.",
+          // What the merchant edits in Instructions → General, and what the AI
+          // reads (buildPersonaPrompt). How many cards show is decided by the
+          // pipeline, so this deliberately names no number; grounding and the
+          // medical/legal blocks live in the lane prompts and banned topics.
           behaviours:
-            "Greet warmly. Understand the shopper's need before recommending. Suggest 1-3 products with a short reason each. Never pressure.",
-          guidelines: [
-            "Recommend only in-stock, in-budget items from the provided list",
-            "Ask one clarifying question if the request is vague",
-            "Keep replies to 2-3 short sentences",
-            "Always mention the price when recommending",
-          ],
-          avoid: [
-            "Inventing products, prices, or discounts",
-            "Medical, legal, or financial advice",
-            "Discussing competitor stores or prices",
-          ],
+            "Greet warmly. Understand the shopper's need before recommending, and give a short reason for each suggestion. Ask one clarifying question if the request is vague. Never pressure.",
           welcomeMessage: "Hi {{customer_name}} 👋 What can I help you find today?",
         },
       });
@@ -87,6 +80,11 @@ export async function onShopAuthenticated(shopDomain: string): Promise<void> {
       await enqueue(JOBS.collectionSync, { shopDomain });
       await enqueue(JOBS.discountSync, { shopDomain });
     }
+    // Spec 22 — its own stamps, so a shop installed before Pages/Blogs existed
+    // gets its first content sync on the next auth instead of waiting for a
+    // daily run its plan may not include.
+    if (!syncState?.pageSyncAt || wasUninstalled) await enqueue(JOBS.pageSync, { shopDomain });
+    if (!syncState?.articleSyncAt || wasUninstalled) await enqueue(JOBS.articleSync, { shopDomain });
   } catch (error) {
     // afterAuth must never break the OAuth flow.
     logError("after_auth_error", error);

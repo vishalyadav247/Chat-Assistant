@@ -22,6 +22,7 @@ import {
 } from "../lib/contacts/contacts.server";
 import { StatGrid, StatTile } from "../components/ui/StatTile";
 import { TabPills } from "../components/ui/TabPills";
+import { ConfirmDeleteModal } from "../components/ui/ConfirmDeleteModal";
 import { DataTable } from "../components/DataTable";
 import {
   CHANNEL_LABELS,
@@ -59,7 +60,6 @@ const overlay = (id: string) => document.getElementById(id) as OverlayEl | null;
 const EXPORT_MODAL_ID = "contacts-export-modal";
 const EDIT_MODAL_ID = "contacts-edit-modal";
 const CONVERT_MODAL_ID = "contacts-convert-modal";
-const DELETE_MODAL_ID = "contacts-delete-modal";
 
 function parseType(raw: string | null): ContactType | undefined {
   return (TAB_TYPES as readonly string[]).includes(raw ?? "")
@@ -458,7 +458,6 @@ export default function ContactsPage() {
       overlay(EDIT_MODAL_ID)?.hideOverlay();
       shopify.toast.show("Contact updated");
     } else if (result.intent === "contact-delete" && result.ok) {
-      overlay(DELETE_MODAL_ID)?.hideOverlay();
       setDeleteTarget(null);
       setDetailOpen(false);
       shopify.toast.show("Contact deleted");
@@ -642,7 +641,6 @@ export default function ContactsPage() {
                     accessibilityLabel="Delete contact"
                     onClick={() => {
                       setDeleteTarget(row);
-                      overlay(DELETE_MODAL_ID)?.showOverlay();
                     }}
                   />
                 </>
@@ -852,44 +850,21 @@ export default function ContactsPage() {
         </s-button>
       </s-modal>
 
-      {/* Delete confirm (contact4.png) — an s-modal so it renders at exactly
-          the same width as the Create/Convert modal. Deletes conversations. */}
-      <s-modal
-        id={DELETE_MODAL_ID}
-        heading={`Delete ${deleteTarget ? (TYPE_LABELS[deleteTarget.type] ?? "contact").toLowerCase() : "contact"}?`}
-      >
-        <s-paragraph>
-          {`This will delete ${
-            deleteTarget ? contactDisplayName(deleteTarget) : "this contact"
-          } along with their customer profile in Shopify (if one is linked) and all their linked conversations. This action can't be undone.`}
-        </s-paragraph>
-        <s-button
-          slot="primary-action"
-          variant="primary"
-          tone="critical"
-          loading={
-            rowFetcher.state !== "idle" && rowFetcher.formData?.get("intent") === "contact-delete"
-          }
-          onClick={() => {
-            if (!deleteTarget) return;
-            rowFetcher.submit(
-              { intent: "contact-delete", id: deleteTarget.id },
-              { method: "post" },
-            );
-          }}
-        >
-          Delete
-        </s-button>
-        <s-button
-          slot="secondary-actions"
-          onClick={() => {
-            overlay(DELETE_MODAL_ID)?.hideOverlay();
-            setDeleteTarget(null);
-          }}
-        >
-          Cancel
-        </s-button>
-      </s-modal>
+      {/* Delete confirm — the shared ConfirmDeleteModal, like every other delete
+          in the app. Deletes the contact's conversations too. */}
+      <ConfirmDeleteModal
+        open={deleteTarget !== null}
+        title={`Delete ${deleteTarget ? (TYPE_LABELS[deleteTarget.type] ?? "contact").toLowerCase() : "contact"}?`}
+        body={`This will delete ${
+          deleteTarget ? contactDisplayName(deleteTarget) : "this contact"
+        } along with their customer profile in Shopify (if one is linked) and all their linked conversations. This action can't be undone.`}
+        loading={rowFetcher.state !== "idle" && rowFetcher.formData?.get("intent") === "contact-delete"}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() =>
+          deleteTarget &&
+          rowFetcher.submit({ intent: "contact-delete", id: deleteTarget.id }, { method: "post" })
+        }
+      />
 
       <ContactDetailPanel
         open={detailOpen}
@@ -900,7 +875,6 @@ export default function ContactsPage() {
         onClose={() => setDetailOpen(false)}
         onDelete={(contact) => {
           setDeleteTarget(contact);
-          overlay(DELETE_MODAL_ID)?.showOverlay();
         }}
         onConvert={openConvert}
       />

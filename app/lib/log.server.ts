@@ -38,7 +38,7 @@ const STACK_LINES = 4;
 /**
  * Rate cap: rows per event code per hour, PER PROCESS (spec 21 rule 2).
  *
- * KNOWN LIMITATION (verified 2026-08-21): the window lives in this module's
+ * KNOWN LIMITATION: the window lives in this module's
  * memory, so an N-instance deployment writes up to 50·N rows/hour/event — a
  * fleet-wide retry storm against a down OpenAI on 4 instances costs ~200
  * rows/hour, not 50. That is still ~3 orders of magnitude below "a row per

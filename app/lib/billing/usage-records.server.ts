@@ -5,7 +5,7 @@ import { overageRate } from "./plans.server";
 import { invalidateUsageBalance, markCapExhausted } from "./usage-cap.server";
 import { logError, logWarn } from "../log.server";
 
-// Overage reporting (spec 15, hardened 2026-09-03): each conversation beyond
+// Overage reporting (spec 15): each conversation beyond
 // the plan allowance is billed to Shopify via appUsageRecordCreate at the
 // plan's overagePerConversation rate, against the subscription's usage line
 // item (Shop.usageLineItemId, stored on billing return).
@@ -27,7 +27,7 @@ import { logError, logWarn } from "../log.server";
 //
 // Mutation shape verified against @shopify/shopify-api
 // node_modules .../lib/billing/create-usage-record.mjs and revalidated against
-// the 2026-07 Admin schema (2026-09-03).
+// the 2026-07 Admin schema.
 
 const CREATE_USAGE_RECORD_MUTATION = `
   mutation AppUsageRecordCreate(

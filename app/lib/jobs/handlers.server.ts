@@ -7,10 +7,13 @@ import {
   fullDiscountSync,
   upsertProductFromWebhook,
   deleteProductFromWebhook,
+  upsertCollectionFromWebhook,
+  deleteCollectionFromWebhook,
   upsertDiscountFromWebhook,
   deleteDiscountFromWebhook,
   syncCollectionMembershipFromWebhook,
 } from "../ingestion/catalog-sync.server";
+import { fullArticleSync, fullPageSync } from "../ingestion/content-sync.server";
 import { logError, logWarn } from "../log.server";
 import { invalidateShopConfig } from "../config/shop-config.server";
 
@@ -18,12 +21,20 @@ import { invalidateShopConfig } from "../config/shop-config.server";
 export const JOBS = {
   catalogSync: "catalog-sync",
   collectionSync: "collection-sync",
-  // One collection's product membership (COLLECTIONS_UPDATE) — enumerating it
-  // is far past a webhook handler's budget.
+  // One collection's product membership. The collections webhook no longer
+  // sends it (collection-upsert refreshes membership itself); the worker stays
+  // registered so jobs already queued before that change still drain.
   collectionMembership: "collection-membership",
   discountSync: "discount-sync",
+  // Spec 22 — full sync only; Shopify has no page/article webhooks.
+  pageSync: "page-sync",
+  articleSync: "article-sync",
   productUpsert: "product-upsert",
   productDelete: "product-delete",
+  // Collections webhooks, enqueue-only like products (the upsert job also
+  // refreshes that collection's membership).
+  collectionUpsert: "collection-upsert",
+  collectionDelete: "collection-delete",
   discountUpsert: "discount-upsert",
   discountDelete: "discount-delete",
   reconcileAll: "reconcile-all",
@@ -76,6 +87,14 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
     await fullDiscountSync(job.data.shopDomain);
   });
 
+  await boss.work<ShopJob>(JOBS.pageSync, async ([job]) => {
+    await fullPageSync(job.data.shopDomain);
+  });
+
+  await boss.work<ShopJob>(JOBS.articleSync, async ([job]) => {
+    await fullArticleSync(job.data.shopDomain);
+  });
+
   await boss.work<ShopJob & { payload: unknown }>(JOBS.discountUpsert, async ([job]) => {
     await upsertDiscountFromWebhook(job.data.shopDomain, job.data.payload);
   });
@@ -84,24 +103,32 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
     await deleteDiscountFromWebhook(job.data.shopDomain, job.data.payload);
   });
 
-  // Daily reconcile (spec 02): re-sync every installed shop to heal missed webhooks.
+  // WEEKLY background sync — only for what no
+  // webhook reports, on every plan, with no merchant toggle:
+  //   - collections: smart-collection MEMBERSHIP follows product tags, and no
+  //     webhook says when a product moves in or out of one;
+  //   - pages / blogs: Shopify has no webhook topics for either (spec 22).
+  // Products and discounts are NOT here: their webhooks apply changes as they
+  // happen. The trade-off, accepted by the user: a webhook lost to an outage
+  // longer than Shopify's 4-hour retry window is not healed automatically —
+  // the tab's Sync button does it.
+  //
+  // Replaces the old daily, plan-gated, per-type-toggled reconcile, which
+  // re-read every product of every Pro/Plus shop each night to change nothing.
   await boss.work(JOBS.reconcileAll, async () => {
     const shops = await db.shop.findMany({
       where: { uninstalledAt: null },
-      select: { id: true, domain: true },
+      select: { domain: true },
     });
-    const { catalogAutoSyncAllowed } = await import("../ingestion/catalog-sync.server");
     for (const shop of shops) {
-      // Auto sync toggle + plan gate per data type (Products / Collections tabs).
-      if (await catalogAutoSyncAllowed(shop.id, "products")) {
-        await boss.send(JOBS.catalogSync, { shopDomain: shop.domain });
-      }
-      if (await catalogAutoSyncAllowed(shop.id, "collections")) {
-        await boss.send(JOBS.collectionSync, { shopDomain: shop.domain });
-      }
+      await boss.send(JOBS.collectionSync, { shopDomain: shop.domain });
+      await boss.send(JOBS.pageSync, { shopDomain: shop.domain });
+      await boss.send(JOBS.articleSync, { shopDomain: shop.domain });
     }
   });
-  await boss.schedule(JOBS.reconcileAll, "17 3 * * *", {}, {}).catch((error: unknown) => {
+  // Mondays 03:17 UTC. schedule() upserts by name, so this replaces the old
+  // daily cron on the next boot — no stale daily run is left behind.
+  await boss.schedule(JOBS.reconcileAll, "17 3 * * 1", {}, {}).catch((error: unknown) => {
     logError("reconcile_schedule_error", error);
   });
 
@@ -232,6 +259,14 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
 
   await boss.work<ShopJob & { payload: unknown }>(JOBS.productDelete, async ([job]) => {
     await deleteProductFromWebhook(job.data.shopDomain, job.data.payload);
+  });
+
+  await boss.work<ShopJob & { payload: unknown }>(JOBS.collectionUpsert, async ([job]) => {
+    await upsertCollectionFromWebhook(job.data.shopDomain, job.data.payload);
+  });
+
+  await boss.work<ShopJob & { payload: unknown }>(JOBS.collectionDelete, async ([job]) => {
+    await deleteCollectionFromWebhook(job.data.shopDomain, job.data.payload);
   });
 
   // Manage metafields (spec 07): after an enable/disable toggle, re-render
@@ -444,6 +479,11 @@ export async function cleanupShop(shopDomain: string): Promise<void> {
     db.collection.deleteMany({ where: { shopId } }),
     db.collectionProduct.deleteMany({ where: { shopId } }),
     db.discount.deleteMany({ where: { shopId } }),
+    // Spec 22 mirrors — storefront content, but shop-scoped data all the same.
+    db.storePage.deleteMany({ where: { shopId } }),
+    db.blogArticle.deleteMany({ where: { shopId } }),
+    // Bonus grants are shop data like any other (operator reason + name).
+    db.quotaGrant.deleteMany({ where: { shopId } }),
     db.syncState.deleteMany({ where: { shopId } }),
     db.dataRequest.deleteMany({ where: { shopId } }),
     // Team logins for the standalone web app (spec 18).
@@ -532,6 +572,9 @@ export async function countShopRows(
     ["product_metafield_definitions", await db.productMetafieldDefinition.count(where)],
     ["collections", await db.collection.count(where)],
     ["discounts", await db.discount.count(where)],
+    ["store_pages", await db.storePage.count(where)],
+    ["blog_articles", await db.blogArticle.count(where)],
+    ["quota_grants", await db.quotaGrant.count(where)],
     ["sync_states", await db.syncState.count(where)],
     ["data_requests", await db.dataRequest.count(where)],
     ["push_subscriptions", await db.pushSubscription.count(where)],

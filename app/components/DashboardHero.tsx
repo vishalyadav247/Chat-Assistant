@@ -3,8 +3,8 @@ import { BRAND, RADIUS, SHADOW, SPACE } from "./ui/tokens";
 // Dashboard hero banner (spec 13, design dashboard.html .hero): brand
 // gradient card with decorative circles, time-of-day greeting, pulsing
 // "Assistant online" pill, dynamic subline, three actions. The gradient is a
-// sanctioned hero/marketing surface (polaris-admin-ui skill, decision
-// 2026-08-10) — its buttons are custom-styled because s-button cannot render
+// sanctioned hero/marketing surface (polaris-admin-ui skill) — its buttons
+// are custom-styled because s-button cannot render
 // white-on-gradient; focus outlines are preserved.
 
 const HERO_CSS = `

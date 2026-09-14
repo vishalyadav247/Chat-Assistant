@@ -130,12 +130,19 @@ const DEFAULT_FALLBACK =
 const CLARIFY_MESSAGE = "I couldn't find a match — what kind of item are you after?";
 const BUSY_MESSAGE = "You're sending messages very quickly — give me a few seconds and try again.";
 const CAP_MESSAGE = "Our chat assistant is offline right now — leave your email and we'll follow up.";
+/** First reply in human-support mode (AI agent not activated — the team
+ *  answers from the Inbox). Sent once per conversation: the flip to
+ *  mode="human" below routes every later turn through the human-mode branch.
+ *  Merchant-editable (shopSettingsSchema.humanModeMessage, Settings →
+ *  Chatbox tab) — this constant is the default for a blank value. */
+const HUMAN_WAIT_MESSAGE =
+  "Thanks for reaching out! Our team is helping other customers right now — we'll connect you with an agent shortly.";
 const BLOCKED_MESSAGE = "This chat has been closed by the store team.";
 /** Ranked candidates the reply model may choose cards from (the allow-list).
  *  Cards shown stay ≤ 4 (+ cross-sell); this is what the model gets to READ. */
 const MODEL_CANDIDATES = 8;
 
-// Cards shown per recommendation (user, 2026-09-09). The MINIMUM is a
+// Cards shown per recommendation. The MINIMUM is a
 // best-effort floor, not a guarantee: it is only reached from the same
 // relevance tier, so a genuinely single-answer question still answers with one
 // product rather than padding to two. The MAXIMUM is hard.
@@ -213,6 +220,36 @@ export async function* runPipeline(
       notifiedTeam: !input.isTest,
     });
     if (!input.isTest) await notifyShopperMessage(shopId, convo.id);
+    yield { type: "done", outcome: "human_mode", conversationId: convo.id };
+    return;
+  }
+
+  // Human-support mode: a shop that has NOT
+  // activated the AI agent runs chat as a HUMAN channel — no separate setting,
+  // deactivated AI *is* human support. The conversation flips to mode="human"
+  // on its first turn (so every later turn takes the human-mode branch above:
+  // AI dormant, team notified, replies flow from the Inbox) instead of
+  // dead-ending on the offline message. FAQ/order-tracking/contact/starters
+  // never reach this code and keep working as before. Test AI is exempt —
+  // its job is testing the AI, so it keeps the plain "switched off" notice.
+  // The waiting message's sourceLayer is "human", NOT "handover": the
+  // analytics rollup counts handovers by that layer, and a human-support
+  // conversation is not a handover.
+  if (!config.aiEnabled && !isTest) {
+    trace.step("human_support", "AI not activated — human support mode", "hit", {
+      notifiedTeam: true,
+    });
+    await db.conversation.updateMany({
+      where: { id: convo.id, shopId },
+      data: { mode: "human" },
+    });
+    const waitText = config.settings.humanModeMessage?.trim() || HUMAN_WAIT_MESSAGE;
+    await saveMessage(shopId, convo.id, {
+      role: "out", author: "system", content: waitText, sourceLayer: "human",
+    });
+    await notifyShopperMessage(shopId, convo.id);
+    yield { type: "message", text: waitText };
+    // human_mode flips the widget into human mode (5s reply polling).
     yield { type: "done", outcome: "human_mode", conversationId: convo.id };
     return;
   }
@@ -413,6 +450,12 @@ export async function* runPipeline(
     },
   );
   if (curated && curated.score >= curatedBorderline) {
+    // Learn products OFF ⇒ no product data reaches the shopper (spec 07), so a
+    // curated answer's pinned products are withheld, not looked up.
+    const curatedCards = (ids: string[]): Promise<ProductCard[]> =>
+      config.settings.learn.products
+        ? cardsForShopifyIds(shopId, ids, config.settings.recommendationRules.excludeOutOfStock)
+        : Promise.resolve([]);
     let use = curated.score >= curatedThreshold;
     if (!use) {
       const answer = await getLlmProvider().chat(
@@ -433,14 +476,13 @@ export async function* runPipeline(
       );
     }
     if (use) {
-      const cards = await cardsForShopifyIds(
-        shopId, curated.productIds, config.settings.recommendationRules.excludeOutOfStock,
-      );
+      const cards = await curatedCards(curated.productIds);
       // Spec 09 "all dead → no-match": an answer whose hand-picked products are
       // ALL unavailable/deleted must not be served card-less — fall through to
       // the next layer instead (QA D11). Answers with no products are text-only
-      // by design and still serve.
-      if (curated.productIds.length > 0 && cards.length === 0) {
+      // by design and still serve. With Learn products OFF the products are not
+      // dead, they are withheld, so the merchant's words still serve.
+      if (config.settings.learn.products && curated.productIds.length > 0 && cards.length === 0) {
         use = false;
         trace.step("curated_cards", "Curated products all unavailable", "miss", {
           pinnedProducts: curated.productIds.length,
@@ -450,9 +492,7 @@ export async function* runPipeline(
       }
     }
     if (use) {
-      const cards = await cardsForShopifyIds(
-        shopId, curated.productIds, config.settings.recommendationRules.excludeOutOfStock,
-      );
+      const cards = await curatedCards(curated.productIds);
       await db.curatedAnswer.updateMany({
         where: { id: curated.id, shopId },
         data: { servedCount: { increment: 1 } },
@@ -480,21 +520,26 @@ export async function* runPipeline(
 
   // ── App recommendations (ranked below merchant curated, spec 08) ──────────
   const recommendation = await recommendationPromise;
+  const recommendationMatched = Boolean(recommendation && recommendation.score >= curatedThreshold);
+  // A rule's whole answer IS product cards, so Learn products OFF (spec 07:
+  // the AI must not use that data type at all) switches rules off with it.
+  const recommendationFires = recommendationMatched && config.settings.learn.products;
   trace.step(
     "recommendation_match",
     "App recommendations (vector)",
-    recommendation && recommendation.score >= curatedThreshold ? "hit" : "miss",
+    recommendationFires ? "hit" : recommendationMatched ? "skip" : "miss",
     {
       bestMatch: recommendation?.title ?? null,
       score: recommendation?.score ?? null,
       threshold: curatedThreshold,
       pinnedProducts: recommendation?.productIds.length ?? 0,
+      reason: recommendationMatched && !recommendationFires ? "Learn products is off" : null,
     },
   );
-  if (recommendation && recommendation.score >= curatedThreshold) {
+  if (recommendation && recommendationFires) {
     // Pool = pinned products + members of pinned collections, shuffled within
     // each tier so the same trigger shows different picks on repeat visits
-    // (user decision 2026-09-10), capped at 4 cards.
+    // capped at 4 cards.
     const pool = await recommendationRulePool(shopId, recommendation, {
       excludeOutOfStock: config.settings.recommendationRules.excludeOutOfStock,
       priceMax: null,
@@ -689,7 +734,7 @@ export async function* runPipeline(
 
   // Reply language (spec 08): appended to the persona prompt so EVERY
   // generation lane (chat / buy / question) honours it — first message and
-  // mid-chat switches alike. Available on every plan (un-gated 2026-09-03).
+  // mid-chat switches alike. Available on every plan.
   const language = languageInstruction(config.persona);
   trace.step("language", "Reply language policy", "info", {
     autoDetectLanguage: config.persona?.autoDetectLanguage ?? false,
@@ -709,8 +754,8 @@ export async function* runPipeline(
   }${language ? `\n${language}` : ""}${shopper ? `\n${shopper}` : ""}`;
 
   // A question ABOUT a product already on screen is not a request for more
-  // products — and it is not a policy question either (spec 03 delta
-  // 2026-09-07; widened to every lane 2026-09-08). The router cannot see this
+  // products — and it is not a policy question either (spec 03; every
+  // lane). The router cannot see this
   // case at all: "tell me more about this" / "product details" carry no
   // product words, so they route as `question` (or `chat`) — and gated inside
   // the buy branch alone, the check never ran and the turn died in the RAG
@@ -849,7 +894,7 @@ export function configuredTopicNamedBy(reason: string, topics: string[]): string
  * this conversation already put in front of this shopper, so it cannot wander
  * into the catalogue, and one card — the one being discussed — is all that is
  * rendered, and only when it is not already the card directly above
- * (2026-09-08: repeated detail questions were re-rendering the same card
+ * (repeated detail questions would otherwise re-render the same card
  * every turn).
  */
 async function* detailLane(args: {
@@ -919,7 +964,7 @@ async function* detailLane(args: {
     // The card exists to say WHICH product is being answered about. When the
     // most recent card in the thread is already exactly this one product, it
     // says nothing new — and a shopper asking three detail questions in a row
-    // was seeing the same card three more times (user report 2026-09-08). It
+    // was seeing the same card three more times. It
     // still renders when the last card set had several products (it picks the
     // subject out of them) or when the subject switches.
     const lastCards = await db.message.findFirst({
@@ -993,7 +1038,7 @@ async function* buyLane(args: {
   // clarify path below. Per-product learnEnabled applies only when this is on.
   const learnProducts = args.config.settings.learn.products;
 
-  // Merged recommendation rules (spec 08, Option B 2026-09-10): when one of a
+  // Merged recommendation rules (spec 08): when one of a
   // rule's trigger phrases appears INSIDE the shopping message, the candidate
   // pool is constrained to that rule's products/collections. (The same rule's
   // whole-message semantic match already fired earlier as an instant answer.)
@@ -1161,7 +1206,7 @@ async function* buyLane(args: {
         },
       ],
       { shopId: args.shopId, purpose: "reply" },
-      // Compact reply (user decision 2026-08-18): 1-2 sentences, no titles/prices.
+      // Compact reply: 1-2 sentences, no titles/prices.
       // 110 = the 90-token reply budget plus the PICKS line.
       { temperature: 0.3, maxTokens: 110 },
     ),
@@ -1199,7 +1244,7 @@ async function* buyLane(args: {
         chosen.push(candidate);
         if (chosen.length >= MAX_PICKS) break;
       }
-      // MIN_PICKS (user, 2026-09-09): one card next to "here's what I'd
+      // MIN_PICKS: one card next to "here's what I'd
       // suggest" looks thin, so top up to two.
       //
       // Only ever from the SAME relevance tier the fallback would have shown —
@@ -1242,7 +1287,7 @@ async function* buyLane(args: {
     let cards = chosen.map(toCard);
     const before = cards.length;
     // Cross-sell (spec 08): append companions of any anchored card (cap 6
-    // total) — unless the merchant switched it off (Rules card, 2026-09-10).
+    // total) — unless the merchant switched it off (Rules card).
     if (args.config.settings.recommendationRules.crossSellEnabled) {
       cards = await appendCrossSell(args.shopId, cards, excludeOutOfStock);
     }
@@ -1355,9 +1400,9 @@ async function* questionLane(args: {
       })),
     },
   );
-  // Language-agnostic safety net for the discount question (2026-09-09, user:
-  // "if we are syncing the discounts that means the AI agent should know the
-  // discounts and offers currently available and tell the shopper"). The regex
+  // Language-agnostic safety net for the discount question: the agent must
+  // know the discounts and offers currently available and tell the shopper.
+  // The regex
   // above is English, but the agent answers in five languages — "kya koi offer
   // hai?", "¿tienen ofertas?" match nothing, so a store with live discounts in
   // the table still answered "I'm not sure". When the regex missed AND nothing
@@ -1609,7 +1654,7 @@ async function* resumeStream<T>(first: IteratorResult<T>, iterator: AsyncIterato
   }
 }
 
-// ── Discount grounding (spec 02 delta closed 2026-08-10) ────────────────────
+// ── Discount grounding (spec 02) ────────────────────
 // Mechanical context injection: when the shopper's message reads like a
 // discount question, the currently-active synced discounts (title + Shopify's
 // human-readable summary) are appended to the question-lane store info. The
@@ -1624,8 +1669,8 @@ async function* resumeStream<T>(first: IteratorResult<T>, iterator: AsyncIterato
 // Exported so the QA suite can assert against the REAL pattern. It previously
 // kept its own copy, which meant the test could not tell a fixed regex from a
 // broken one.
-// Widened 2026-09-09 (user: asked "how many offers are running" repeatedly and
-// got the fallback). The synced Discount mirror is the ONLY grounding for this
+// Wide on purpose — "how many offers are running" must not hit
+// the fallback. The synced Discount mirror is the ONLY grounding for this
 // question, so a phrasing that misses here is answered "I'm not sure" while
 // live discounts sit in the table. Whole words throughout, so a product called
 // "Sale Rack" does not turn every mention of it into a discount question.
@@ -1657,7 +1702,7 @@ export async function discountFacts(shopId: string): Promise<string> {
     // without "use SAVE20 at checkout" sends the shopper hunting.
     //
     // Three states, and the third matters: a code discount whose `code` is
-    // still "" is a row synced before the code column existed (2026-09-09), not
+    // still "" is a row synced before the code column existed, not
     // a codeless discount. Saying "applies automatically" there would be a
     // confident falsehood, so it says nothing about claiming and the prompt's
     // "never invent" rule keeps the model quiet too.
@@ -2005,7 +2050,7 @@ async function saveMessage(
   return row.id;
 }
 
-// ── Merged recommendation rules (spec 08, Option B 2026-09-10) ──────────────
+// ── Merged recommendation rules (spec 08) ──────────────
 // One rule (Recommendation row) fires two ways: whole-message semantic match →
 // the instant deterministic answer near the top of the pipeline; a trigger
 // phrase CONTAINED in a shopping message → this pool constraint inside the buy
@@ -2097,6 +2142,7 @@ async function recommendationRulePool(
       where: {
         shopId,
         shopifyProductId: { in: targetIds },
+        ...SHOWABLE_PRODUCT,
         ...purchasableWhere(opts.excludeOutOfStock),
         ...(opts.priceMax !== null ? { price: { lte: opts.priceMax } } : {}),
       },
@@ -2171,6 +2217,16 @@ async function appendCrossSell(
   }
 }
 
+/**
+ * What product search requires before a product may be shown (the SQL filter
+ * in product-search.server.ts), for the paths that look products up BY ID
+ * instead — curated cards, recommendation rules, cross-sell companions. Those
+ * used to check stock alone, so a product the merchant switched off, or one
+ * that is draft/archived or not on the Online Store, could still be carded —
+ * the last two as a link that 404s.
+ */
+const SHOWABLE_PRODUCT = { learnEnabled: true, status: "active", publishedOnline: true } as const;
+
 async function cardsForShopifyIds(
   shopId: string,
   shopifyProductIds: string[],
@@ -2181,6 +2237,7 @@ async function cardsForShopifyIds(
     where: {
       shopId,
       shopifyProductId: { in: shopifyProductIds },
+      ...SHOWABLE_PRODUCT,
       ...purchasableWhere(excludeOutOfStock),
     },
     select: {

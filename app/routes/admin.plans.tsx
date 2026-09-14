@@ -41,31 +41,48 @@ import {
 const QUOTA_LABELS: Record<QuotaDimension, string> = {
   conversations: "Conversations / month",
   products_synced: "Products synced",
+  pages_synced: "Pages synced",
+  articles_synced: "Blog articles synced",
   curated_answers: "Curated answers",
-  manual_qas: "Manual Q&As",
-  policy_pages: "Policy pages",
-  crawl_pages: "Website pages crawled",
+  faqs: "FAQs",
+  crawl_pages: "URL sources",
   file_uploads: "File uploads",
   metafields_enabled: "Metafields enabled for AI",
   team_seats: "Team seats",
   active_campaigns: "Active proactive campaigns",
   analytics_range_days: "Analytics history (days)",
-  cross_sell_pairs: "Cross-sell pairs",
   recommendation_rules: "App recommendation rules",
+};
+
+/**
+ * Limits on what the AI LEARNS FROM, shown under their own "Data sources"
+ * heading (2026-09-11). Listed in the order the merchant meets them: the synced
+ * catalogue and content first, then what they add by hand. Every other quota
+ * stays under "Quotas".
+ */
+const DATA_SOURCE_DIMENSIONS: QuotaDimension[] = [
+  "products_synced",
+  "pages_synced",
+  "articles_synced",
+  "metafields_enabled",
+  "faqs",
+  "crawl_pages",
+  "file_uploads",
+];
+
+const QUOTA_GRID: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))",
+  gap: SPACE.md,
 };
 
 const FEATURE_LABELS: Record<GatedFeature, string> = {
   remove_branding: "Remove ChatConvert branding",
   unanswered_analytics: "Unanswered-questions analytics",
-  discount_realtime_sync: "Real-time discount sync",
-  catalog_auto_sync: "Catalog auto-sync",
   premium_campaign_templates: "Premium campaign templates",
   inbox_cart_view: "Inbox cart view",
-  exports: "Data exports",
-  csv_import: "CSV import",
-  file_upload: "File upload sources",
-  survey: "Post-chat survey (CSAT)",
   push_notifications: "Browser push notifications",
+  order_tracking: "Order tracking in chat",
 };
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -176,6 +193,35 @@ export default function AdminPlans() {
   const patchDraft = (patch: Partial<PlanDraft>) =>
     setDrafts((prev) => ({ ...prev, [tier]: { ...prev[tier], ...patch } }));
 
+  const renderQuota = (dim: QuotaDimension) =>
+    // Analytics history is the one quota the merchant does not spend down — it
+    // maps onto the four ranges the range picker offers. A free number box let
+    // an operator set 45, which clampRange rounds back to 30: the extra 15 days
+    // bought the merchant nothing and nothing said so. Offer the same four
+    // choices the app actually renders.
+    dim === "analytics_range_days" ? (
+      <s-select
+        key={dim}
+        label={QUOTA_LABELS[dim]}
+        value={String(draft.quotas[dim])}
+        onInput={(e) => patchDraft({ quotas: { ...draft.quotas, [dim]: e.currentTarget.value } })}
+      >
+        {ANALYTICS_RANGES.map((range) => (
+          <s-option key={range} value={String(ANALYTICS_RANGE_DAYS[range])}>
+            {ANALYTICS_RANGE_LABELS[range]}
+          </s-option>
+        ))}
+      </s-select>
+    ) : (
+      <s-number-field
+        key={dim}
+        label={QUOTA_LABELS[dim]}
+        min={0}
+        value={draft.quotas[dim]}
+        onInput={(e) => patchDraft({ quotas: { ...draft.quotas, [dim]: e.currentTarget.value } })}
+      />
+    );
+
   const savePlan = () => {
     const num = (value: string, fallback: number) => {
       const n = Number(value);
@@ -249,7 +295,9 @@ export default function AdminPlans() {
               <s-divider />
 
               <s-text type="strong">Pricing</s-text>
-              <s-stack direction="inline" gap="base">
+              {/* One row of three (user, 2026-09-11). Free shows two — it has no
+                  overage — and keeps the same column widths as the paid tiers. */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: SPACE.md, alignItems: "start" }}>
                 <s-text-field
                   label="Monthly price ($)"
                   value={draft.priceMonthly}
@@ -271,62 +319,33 @@ export default function AdminPlans() {
                   <s-text-field
                     label="Overage $ / conversation"
                     placeholder="blank = AI stops at cap"
-                    details="Charged per conversation once a store passes its allowance. Free is never billed overage, whatever is set here."
                     value={draft.overage}
                     onInput={(e) => patchDraft({ overage: e.currentTarget.value })}
                   />
                 )}
-              </s-stack>
+              </div>
               <s-text color="subdued">
                 Price changes apply to new subscriptions only — existing Shopify subscriptions keep their agreed charge.
                 {tier === "free"
                   ? " Free can't bill overage at all (no subscription, no usage line), so it has no rate — it stops the AI at the cap."
-                  : " A rate change applies to conversations recorded from then on."}
+                  : " Overage is charged per conversation past the allowance; a rate change applies to conversations recorded from then on."}
               </s-text>
 
               <s-divider />
 
               <s-text type="strong">Quotas</s-text>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))",
-                  gap: SPACE.md,
-                }}
-              >
-                {QUOTA_DIMENSIONS.map((dim) =>
-                  // Analytics history is the one quota the merchant does not
-                  // spend down — it maps onto the four ranges the range picker
-                  // offers. A free number box let an operator set 45, which
-                  // clampRange rounds back to 30: the extra 15 days bought the
-                  // merchant nothing and nothing said so. Offer the same four
-                  // choices the app actually renders.
-                  dim === "analytics_range_days" ? (
-                    <s-select
-                      key={dim}
-                      label={QUOTA_LABELS[dim]}
-                      value={String(draft.quotas[dim])}
-                      onInput={(e) =>
-                        patchDraft({ quotas: { ...draft.quotas, [dim]: e.currentTarget.value } })
-                      }
-                    >
-                      {ANALYTICS_RANGES.map((range) => (
-                        <s-option key={range} value={String(ANALYTICS_RANGE_DAYS[range])}>
-                          {ANALYTICS_RANGE_LABELS[range]}
-                        </s-option>
-                      ))}
-                    </s-select>
-                  ) : (
-                    <s-number-field
-                      key={dim}
-                      label={QUOTA_LABELS[dim]}
-                      min={0}
-                      value={draft.quotas[dim]}
-                      onInput={(e) => patchDraft({ quotas: { ...draft.quotas, [dim]: e.currentTarget.value } })}
-                    />
-                  ),
+              <div style={QUOTA_GRID}>
+                {QUOTA_DIMENSIONS.filter((dim) => !DATA_SOURCE_DIMENSIONS.includes(dim)).map(
+                  renderQuota,
                 )}
               </div>
+
+              <s-divider />
+
+              {/* Separate heading (user, 2026-09-11): the limits on what the AI
+                  LEARNS FROM read as one group, distinct from usage limits. */}
+              <s-text type="strong">Data sources</s-text>
+              <div style={QUOTA_GRID}>{DATA_SOURCE_DIMENSIONS.map(renderQuota)}</div>
 
               <s-divider />
 

@@ -28,8 +28,8 @@ import {
 // Enforcement stays OPEN (plans.server.ts): subscribing persists the plan on the
 // Shop row but no feature is blocked anywhere.
 
-// Monthly is the ONLY billing interval. Annual was withdrawn entirely on
-// 2026-09-07: Shopify rejects usage lines on ANNUAL subscriptions, so a yearly
+// Monthly is the ONLY billing interval. Annual was withdrawn entirely:
+// Shopify rejects usage lines on ANNUAL subscriptions, so a yearly
 // subscriber could never be billed for conversations past their quota and hard-
 // capped instead — on the top tier with nothing left to upgrade to. Keeping the
 // named type (rather than deleting the parameter) means the callback URL, the
@@ -232,8 +232,8 @@ const SHOP_PLAN_QUERY = `#graphql
 /**
  * Is this a development store?
  *
- * Replaces the old `billingForceTestCharges` operator switch (removed
- * 2026-09-07). That switch was global and manual: left on, EVERY merchant's
+ * Replaces the old `billingForceTestCharges` operator switch, which was
+ * global and manual: left on, EVERY merchant's
  * subscription was created with `test: true` and Shopify never billed any of
  * them — silently, with nothing on screen. Shopify's own guidance is the same
  * trap in prose: "After you finish testing, set test to false. Otherwise, app
@@ -654,7 +654,7 @@ export async function downgradeToFree(shopDomain: string): Promise<BillingReturn
   return { ok: true };
 }
 
-// ── Raising the usage ceiling (spec 15, added 2026-09-03) ──────────────────
+// ── Raising the usage ceiling (spec 15) ──────────────────
 //
 // `cappedAmount` is the merchant's approved maximum for one 30-day billing
 // cycle. Once it is reached Shopify refuses further usage records, and the app

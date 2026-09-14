@@ -1,5 +1,5 @@
 // Plan tier cards (spec 15, design plan-usage.html). Monthly only — annual
-// billing was withdrawn entirely on 2026-09-07, so there is no interval to pick.
+// billing was withdrawn, so there is no interval to pick.
 // All numbers/prices arrive serialized from the server plan matrix — never
 // hard-coded here. CTA labels derive from tier order (Current / Upgrade to X /
 // Downgrade to X) — the design's all-"Downgrade" buttons are a known design bug.
@@ -133,7 +133,7 @@ export function PlanCards(props: {
         className="cc-plan-carousel"
         style={{
           display: "grid",
-          // 2-up grid (user decision 2026-08-10): four plans render as 2×2.
+          // 2-up grid: four plans render as 2×2.
           // Phones swipe a snap carousel with a peeking next card
           // (.cc-plan-carousel, Chatty reference plans.png).
           gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
@@ -153,7 +153,7 @@ export function PlanCards(props: {
               key={plan.id}
               style={{
                 // Only the CURRENT plan gets an accent border; "Most popular" is
-                // conveyed by the badge alone (user decision 2026-08-21).
+                // conveyed by the badge alone.
                 border:
                   cta.kind === "current"
                     ? `2px solid ${BRAND.accent}`

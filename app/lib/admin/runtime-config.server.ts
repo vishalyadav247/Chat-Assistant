@@ -152,7 +152,7 @@ export function runtimeConfig(): EffectiveRuntime {
     // isBillingTestMode(), so the default there is belt and braces.
     billingTestMode:
       stored.billingTestMode ?? envBool("BILLING_TEST_MODE") ?? process.env.NODE_ENV !== "production",
-    // Default ON since 2026-08-26: read_themes is now a declared scope, so the
+    // Default ON: read_themes is a declared scope, so the
     // themes query can actually succeed. It stays a flag so an operator can kill
     // it without a deploy if Shopify throttles the themes API, and because a
     // shop that authorised BEFORE the scope was added still lacks the grant —
@@ -176,7 +176,7 @@ export async function saveRuntimeConfig(patch: Partial<RuntimeConfig>): Promise<
   // in the meantime by another app instance (or another operator's browser
   // hitting a different instance): saving "Links" would restore the previous
   // email provider and wipe a Resend key that had just been rotated. Reading
-  // the row first makes a partial save actually partial (QA 2026-08-26).
+  // the row first makes a partial save actually partial.
   await loadRuntimeConfig();
   const merged = runtimeConfigSchema.parse({ ...stored, ...patch });
   const forStorage: Record<string, unknown> = { ...merged };

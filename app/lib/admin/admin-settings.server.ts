@@ -4,6 +4,7 @@ import { env } from "../env.server";
 import {
   loadPlanConfig,
   planConfigSchema,
+  storedPlanConfigSchema,
   PLAN_CONFIG_SECRET_KEY,
   type PlanConfig,
 } from "../billing/plans.server";
@@ -18,7 +19,7 @@ export const AI_SECRET_KEY = "admin:ai";
 
 export const aiOverridesSchema = z.object({
   // "" / absent = env CHAT_MODEL. Shape-validated here so a typo/pasted
-  // sentence can never become every tenant's chat model (QA 2026-08-21).
+  // sentence can never become every tenant's chat model.
   chatModel: z
     .string()
     .trim()
@@ -78,7 +79,7 @@ export async function saveAiOverrides(value: AiOverrides): Promise<void> {
   cachedAt = Date.now();
 }
 
-// ── Embedding-model marker (QA 2026-08-21) ──────────────────────────────────
+// ── Embedding-model marker ──────────────────────────────────
 // Stored vectors carry no record of which model produced them, and a product's
 // contentHash is a hash of its TEXT only — so after switching EMBEDDING_MODEL
 // the re-embed script saw "0 to re-embed" while every stored vector silently
@@ -151,11 +152,14 @@ export async function getStoredPlanConfig(): Promise<PlanConfig> {
   );
   if (!row) return {};
 
-  let parsed: ReturnType<typeof planConfigSchema.safeParse>;
+  // Tolerant read schema — a retired quota dimension in a stored row must not
+  // trip the corrupt-row path and discard every other override (see
+  // storedPlanConfigSchema in plans.server.ts).
+  let parsed: ReturnType<typeof storedPlanConfigSchema.safeParse>;
   try {
-    parsed = planConfigSchema.safeParse(JSON.parse(row.value));
+    parsed = storedPlanConfigSchema.safeParse(JSON.parse(row.value));
   } catch (error) {
-    parsed = { success: false } as ReturnType<typeof planConfigSchema.safeParse>;
+    parsed = { success: false } as ReturnType<typeof storedPlanConfigSchema.safeParse>;
     logError("plan_config_unparseable", error);
   }
   if (parsed.success) return parsed.data;

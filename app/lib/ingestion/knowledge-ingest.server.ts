@@ -1,11 +1,10 @@
 import { Prisma } from "@prisma/client";
 import db from "../../db.server";
-import { getQuota } from "../billing/plans.server";
 import { embedTexts, toSqlVector } from "../embeddings/embedding.server";
 import { runtimeConfig } from "../admin/runtime-config.server";
 import { stripToText } from "../sanitize.server";
 import { requireShopId } from "../tenancy.server";
-import { crawl, htmlToText, HARD_CRAWL_PAGE_CAP, type CrawlScope } from "./fetchers.server";
+import { fetchPageText, htmlToText } from "./fetchers.server";
 
 // Knowledge ingestion pipeline (spec 04): fetch content per source type →
 // deterministic chunking (~1500/150) → batch embed → shop-scoped knowledge
@@ -73,7 +72,7 @@ export async function ingestSource(shopId: string, sourceId: string): Promise<In
   const meta = { ...((source.metadata ?? {}) as Record<string, unknown>) };
 
   try {
-    const docs = await loadDocs(shopId, source.type, source.url, source.crawlScope, meta);
+    const docs = await loadDocs(shopId, source.type, source.url, meta, source.name);
 
     const chunks: Doc[] = [];
     for (const doc of docs) {
@@ -157,20 +156,17 @@ async function loadDocs(
   shopId: string,
   type: string,
   url: string | null,
-  crawlScope: string | null,
   meta: Record<string, unknown>,
+  name = "",
 ): Promise<Doc[]> {
   switch (type) {
     case "url": {
       if (!url) throw new Error("url source has no URL");
-      const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
-      // Plan quota seam = per-crawl page cap (never above the hard safety cap).
-      const cap = Math.min(getQuota(shop?.plan ?? "free", "crawl_pages"), HARD_CRAWL_PAGE_CAP);
-      const scope: CrawlScope =
-        crawlScope === "linked" || crawlScope === "sitemap" ? crawlScope : "page";
-      const pages = await crawl(url, scope, cap);
-      meta.pagesUsed = pages.length; // "N of M pages used" meters read this
-      return pages.map((page) => ({ topic: page.title, body: page.text }));
+      // Exactly the page the merchant typed (spec 22); crawl_pages caps how
+      // many URL sources exist, at creation.
+      const page = await fetchPageText(url);
+      meta.pagesUsed = 1; // "N of M pages used" meters read this
+      return [{ topic: page.title, body: page.text }];
     }
     case "manual": {
       const question = asString(meta.question);
@@ -199,9 +195,18 @@ async function loadDocs(
           asString(meta.error) || "file source has no extracted text (parser pending)",
         );
       }
-      return [{ topic: asString(meta.filename) || "Uploaded file", body: text }];
+      // The merchant's title says what the file IS — better RAG
+      // context than a filename like "doc_final_v3.pdf".
+      return [{ topic: name || asString(meta.filename) || "Uploaded file", body: text }];
     }
     case "pages": {
+      // Re-fetch from Shopify first. This case used to read only
+      // the snapshot saved at connect time, so Re-sync — and the weekly
+      // re-crawl, which runs the same job — re-embedded the SAME old text: a
+      // merchant who edited their refund policy and clicked Re-sync kept the
+      // agent quoting the old one. Mutates meta.pages, which ingestSource
+      // persists, so the stored snapshot tracks Shopify too.
+      await refreshConnectedPages(shopId, meta);
       const pages = Array.isArray(meta.pages) ? meta.pages : [];
       const docs: Doc[] = [];
       for (const page of pages) {
@@ -214,6 +219,72 @@ async function loadDocs(
       }
       if (docs.length === 0) throw new Error("pages source has no readable pages");
       return docs;
+    }
+    // Spec 22 bridges. Built from the mirror tables, never from Shopify, so a
+    // toggle rebuild costs no Admin call. Master switch off ⇒ no docs at all:
+    // the source goes active with zero chunks, which is exactly "the agent has
+    // none of it". Per-row learnEnabled applies only while the master is on.
+    case "store_pages": {
+      const { loadShopSettings } = await import("../settings/save.server");
+      if (!(await loadShopSettings(shopId)).learn.pages) return [];
+      const pages = await db.storePage.findMany({
+        where: { shopId, learnEnabled: true },
+        orderBy: { title: "asc" },
+        select: { title: true, bodyText: true },
+      });
+      return pages
+        .filter((page) => page.bodyText.trim().length > 0)
+        .map((page) => ({ topic: page.title, body: page.bodyText }));
+    }
+    case "blog_articles": {
+      const { loadShopSettings } = await import("../settings/save.server");
+      if (!(await loadShopSettings(shopId)).learn.blogs) return [];
+      const articles = await db.blogArticle.findMany({
+        where: { shopId, learnEnabled: true },
+        orderBy: { title: "asc" },
+        select: { title: true, blogTitle: true, summary: true, bodyText: true },
+      });
+      return articles
+        .map((article) => ({
+          // The blog name tells the model what kind of post it is reading
+          // ("Care guides" vs "News") — context the title alone often lacks.
+          topic: article.blogTitle ? `${article.title} (${article.blogTitle})` : article.title,
+          body: article.bodyText.trim() || article.summary.trim(),
+        }))
+        .filter((doc) => doc.body.length > 0);
+    }
+    case "policy": {
+      // One Shopify legal policy. Re-read live so an edited refund
+      // policy reaches the agent on re-sync / the weekly run. Same fail-soft
+      // rule as the legacy pages connector: if Shopify can't be read, the
+      // snapshot is re-embedded — an outage must never wipe connected knowledge.
+      const policyType = asString(meta.policyType);
+      if (!policyType) throw new Error("policy source has no policy type");
+      const shop = await db.shop.findUnique({ where: { id: shopId }, select: { domain: true } });
+      if (shop) {
+        const { fetchShopPolicies } = await import("./sources.server");
+        try {
+          const live = (await fetchShopPolicies(shop.domain, { strict: true })).find(
+            (policy) => policy.type === policyType,
+          );
+          if (live) {
+            meta.title = live.title;
+            meta.body = live.body;
+            delete meta.removedInShopify;
+          } else {
+            // Deleted or emptied in Shopify: stop quoting it (zero chunks) and
+            // flag the row so the merchant sees why, rather than an error that
+            // would leave the old chunks retrievable.
+            meta.body = "";
+            meta.removedInShopify = true;
+          }
+        } catch (error) {
+          const { logError } = await import("../log.server");
+          logError("policy_refresh_failed_kept_snapshot", error, { shopId });
+        }
+      }
+      const body = asString(meta.body);
+      return body ? [{ topic: asString(meta.title) || name || "Store policy", body }] : [];
     }
     case "faq": {
       const faqs = await db.faq.findMany({
@@ -228,6 +299,45 @@ async function loadDocs(
     default:
       throw new Error(`unknown source type "${type}"`);
   }
+}
+
+/**
+ * Replace a Connect source's stored page list with what Shopify holds NOW.
+ *
+ * Fail-soft by design: if Shopify can't be read (missing scope, a transient
+ * error, the shop's token gone) the stored snapshot is kept and re-embedded,
+ * exactly as before this existed — an outage must never wipe knowledge the
+ * merchant connected. That is why the fetch runs in strict mode: the lenient
+ * connector fetchers return [] on failure, which would be indistinguishable
+ * from "every page was deleted".
+ *
+ * A source without `policyTypes` (seeded or pre-connector rows) has nothing to
+ * look up, so it too keeps its snapshot.
+ */
+async function refreshConnectedPages(shopId: string, meta: Record<string, unknown>): Promise<void> {
+  const selected = Array.isArray(meta.policyTypes)
+    ? meta.policyTypes.filter((t): t is string => typeof t === "string")
+    : [];
+  if (selected.length === 0) return;
+  const shop = await db.shop.findUnique({ where: { id: shopId }, select: { domain: true } });
+  if (!shop) return;
+  // Dynamic: sources.server imports this module (resyncSource → ingestSource).
+  const { fetchPageCandidates, mergeRefreshedPages } = await import("./sources.server");
+  let fresh: Awaited<ReturnType<typeof fetchPageCandidates>>;
+  try {
+    fresh = await fetchPageCandidates(shop.domain, { strict: true });
+  } catch (error) {
+    const { logError } = await import("../log.server");
+    logError("pages_refresh_failed_kept_snapshot", error, { shopId });
+    return;
+  }
+  const snapshot = (Array.isArray(meta.pages) ? meta.pages : []) as Array<{
+    type?: string;
+    title: string;
+    url: string;
+    body: string;
+  }>;
+  meta.pages = mergeRefreshedPages(selected, fresh, snapshot);
 }
 
 function asString(value: unknown): string {

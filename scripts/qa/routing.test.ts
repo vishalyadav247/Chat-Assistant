@@ -127,7 +127,7 @@ const WEB_ROUTES = [
 const ADMIN_ROUTES = [
   "admin.tsx",
   "admin._index.tsx",
-  "admin.admins.tsx",
+  "admin.access.tsx",
   "admin.ai.tsx",
   "admin.login.tsx",
   "admin.logout.tsx",

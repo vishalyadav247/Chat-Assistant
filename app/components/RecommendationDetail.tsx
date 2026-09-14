@@ -13,7 +13,7 @@ import { ChipInput } from "./ChipInput";
 import { SaveBar } from "./SaveBar";
 
 // App recommendation detail (spec 08, design ai-agent.html #viewRec — merged
-// rule since 2026-09-10): title, trigger-phrase chips, status, product AND
+// rule): title, trigger-phrase chips, status, product AND
 // collection pickers. A trigger fires two ways at runtime: whole message ≈
 // phrase → instant answer with shuffled picks; phrase contained in a shopping
 // message → the buy lane recommends from this rule's pool. Save upserts the
@@ -35,7 +35,7 @@ export function RecommendationDetail(props: {
   const [status, setStatus] = useState(existing?.status ?? "active");
   const [productIds, setProductIds] = useState<string[]>(existing?.productIds ?? []);
   const [collectionIds, setCollectionIds] = useState<string[]>(existing?.collectionIds ?? []);
-  // Products XOR collections (user decision 2026-09-10) via a source dropdown —
+  // Products XOR collections via a source dropdown —
   // only the chosen source's picker renders. Both lists stay in local state so
   // switching back restores; the SAVE sends only the active source's ids.
   const [source, setSource] = useState<"products" | "collections">(
@@ -128,7 +128,7 @@ export function RecommendationDetail(props: {
             accessibilityLabel="Back to recommendations"
             onClick={props.onClose}
           >
-            Recommendations
+            Product Recommendations
           </s-button>
           {triggers[0] ? (
             <s-text tone="neutral">Product recommendations for &quot;{triggers[0]}&quot;</s-text>

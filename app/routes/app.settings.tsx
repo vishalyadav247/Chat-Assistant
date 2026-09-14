@@ -29,7 +29,12 @@ import { SettingsPrivacy } from "../components/SettingsPrivacy";
 import { requireShopAccess } from "../lib/access.server";
 import { applyTeamIntent, isTeamIntent } from "../lib/team/team-intents.server";
 import { listMembers } from "../lib/team/team.server";
-import { getQuota, hasFeature, nextPlanNameForQuota, requiredPlanName } from "../lib/billing/plans.server";
+import {
+  getQuota,
+  hasFeature,
+  nextPlanNameForQuota,
+  requiredPlanName,
+} from "../lib/billing/plans.server";
 import { emailConfigured } from "../lib/email/email.server";
 import { formatDate as formatDateWithPrefs } from "../lib/format/datetime";
 import { routeError } from "../lib/ui/route-error";
@@ -96,6 +101,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       return getEmbedDetail(shopDomain, { fresh: true });
     })(),
     defaultStoreName: shop?.name ?? fallbackName,
+    // Tier that unlocks order tracking (live matrix); null when this plan has it.
+    orderTrackingPlan: hasFeature(shop?.plan ?? "free", "order_tracking")
+      ? null
+      : requiredPlanName("order_tracking"),
     // null until SHOPIFY_APP_STORE_HANDLE is set (listing live) — link hidden.
     reviewUrl: reviewFallbackUrl(env().SHOPIFY_APP_STORE_HANDLE),
     owner: {
@@ -117,11 +126,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       surface: access.surface,
       selfId: access.member?.id ?? null,
     },
-    // CSAT survey is plan-gated at proxy.survey; without this the merchant
-    // configures a survey that silently never reaches a shopper.
-    surveyPlan: hasFeature(shop?.plan ?? "free", "survey")
-      ? null
-      : requiredPlanName("survey"),
     availabilityPreview: { status: preview.status, message: preview.message },
     dataRequests: dataRequestRows.map((row) => ({
       id: row.id,
@@ -230,6 +234,7 @@ function sliceFor(view: View, settings: ShopSettingsData, timezone: string): unk
       // so typing a key must not arm the SaveBar or ride along with Save.
       return {
         cartDrawer: settings.cartDrawer,
+        humanModeMessage: settings.humanModeMessage,
         orderTracking: {
           mode: settings.orderTracking.mode,
           customUrl: settings.orderTracking.customUrl,
@@ -358,7 +363,12 @@ export default function SettingsPage() {
               },
             };
           case "chatbox":
-            return { ...current, cartDrawer: init.cartDrawer, orderTracking: init.orderTracking };
+            return {
+              ...current,
+              cartDrawer: init.cartDrawer,
+              humanModeMessage: init.humanModeMessage,
+              orderTracking: init.orderTracking,
+            };
           case "availability":
             return { ...current, availability: init.availability };
           case "survey":
@@ -496,10 +506,15 @@ export default function SettingsPage() {
             ) : null}
             <SettingsChatbox
               cartDrawer={draft.cartDrawer}
+              humanModeMessage={draft.humanModeMessage}
               orderTracking={draft.orderTracking}
               savedTracking={data.settings.orderTracking}
+              orderTrackingPlan={data.orderTrackingPlan}
               connecting={connecting}
               onCartDrawerChange={(cartDrawer) => setDraft((d) => ({ ...d, cartDrawer }))}
+              onHumanModeMessageChange={(humanModeMessage) =>
+                setDraft((d) => ({ ...d, humanModeMessage }))
+              }
               onOrderTrackingChange={(orderTracking) => setDraft((d) => ({ ...d, orderTracking }))}
               onConnect={(apiKey) =>
                 connectFetcher.submit(
@@ -527,7 +542,6 @@ export default function SettingsPage() {
         {view === "survey" ? (
           <SettingsSurvey
             value={draft.survey}
-            planLock={data.surveyPlan}
             onChange={(survey) => setDraft((d) => ({ ...d, survey }))}
             onCancel={cancelSubView}
           />

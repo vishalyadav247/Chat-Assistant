@@ -7,8 +7,8 @@ import { handoverConfigSchema, shopSettingsSchema, type HandoverConfigData } fro
 import { getQuota } from "../billing/plans.server";
 
 // Instructions save workflow (spec 08): General tab → Persona + Guardrails,
-// Product recommendations tab → Recommendation (merged model, Option B
-// 2026-09-10) / CrossSellPair rows, Human handover tab → HandoverConfig.config (zod shape
+// Product recommendations tab → Recommendation (merged model) and
+// CrossSellPair rows, Human handover tab → HandoverConfig.config (zod shape
 // from app/lib/settings/schemas.ts — the canonical, frozen config shape).
 //
 // Every function takes a TRUSTED shopId (from authenticate.admin) and scopes
@@ -43,7 +43,7 @@ const generalSchema = z.object({
 });
 export type GeneralInstructionsData = z.infer<typeof generalSchema>;
 
-// Merged rule (Option B, 2026-09-10): the former CustomRecommendation shape
+// Merged rule: the former CustomRecommendation shape
 // folded in — one rule carries products AND collections, and its trigger
 // phrases fire both semantically (instant answer) and as contained keywords
 // (buy-lane pool constraint).
@@ -70,7 +70,7 @@ export async function saveGeneralInstructions(
   requireShopId(shopId);
   const data = generalSchema.parse(raw);
 
-  // Auto-detect language is available on every plan (un-gated 2026-09-03) —
+  // Auto-detect language is available on every plan —
   // no feature check here anymore.
   const personaData = {
     role: data.role.trim(),
@@ -109,7 +109,7 @@ export async function saveRecommendation(shopId: string, raw: unknown): Promise<
   if (data.productIds.length === 0 && data.collectionIds.length === 0) {
     throw new Error("Add at least one product or collection");
   }
-  // Either/or, never both (user decision 2026-09-10): a rule recommends from
+  // Either/or, never both: a rule recommends from
   // hand-picked products OR from collections — mixing the two made it unclear
   // which picks "win". The runtime pool stays tolerant of legacy mixed rows.
   if (data.productIds.length > 0 && data.collectionIds.length > 0) {
@@ -130,7 +130,7 @@ export async function saveRecommendation(shopId: string, raw: unknown): Promise<
     if (result.count === 0) throw new Error("Recommendation not found");
     return data.id;
   }
-  // recommendation_rules quota (2026-09-10, user decision 5/10/25/50): the
+  // recommendation_rules quota: the
   // COUNT of rules is tiered — editing an existing rule is never blocked.
   const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
   const quota = getQuota(shop?.plan ?? "free", "recommendation_rules");
@@ -162,31 +162,16 @@ export async function deleteRecommendation(shopId: string, id: string): Promise<
 }
 
 // ── Cross-sell pairs ────────────────────────────────────────────────────────
-// Available on EVERY plan since 2026-09-10 (user decision — the old
-// custom_recommendations gate is gone). What differs per plan is the NUMBER of
-// pairs a merchant may configure: the `cross_sell_pairs` quota, editable per
-// tier at /admin/plans and enforced here on creating a NEW anchor (editing an
-// existing pair is never blocked).
+// Available on EVERY plan with NO limit (2026-09-11, user decision). A pair
+// costs nothing per chat turn and is already bounded: one pair per anchor
+// product (@@unique shopId+productId), ≤20 companions each (crossSellSchema),
+// and anchors are synced products, which products_synced caps per plan.
 
 export async function saveCrossSellPair(shopId: string, raw: unknown): Promise<void> {
   requireShopId(shopId);
   const data = crossSellSchema.parse(raw);
   const companionIds = [...new Set(data.companionIds.filter((id) => id !== data.productId))];
   if (companionIds.length === 0) throw new Error("Pick at least one companion product");
-  const existing = await db.crossSellPair.findUnique({
-    where: { shopId_productId: { shopId, productId: data.productId } },
-    select: { id: true },
-  });
-  if (!existing) {
-    const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
-    const quota = getQuota(shop?.plan ?? "free", "cross_sell_pairs");
-    const count = await db.crossSellPair.count({ where: { shopId } });
-    if (count >= quota) {
-      throw new Error(
-        `Your plan allows ${quota} cross-sell pair${quota === 1 ? "" : "s"} — remove one or upgrade to add more`,
-      );
-    }
-  }
   await db.crossSellPair.upsert({
     where: { shopId_productId: { shopId, productId: data.productId } },
     update: { companionIds, status: "active" },

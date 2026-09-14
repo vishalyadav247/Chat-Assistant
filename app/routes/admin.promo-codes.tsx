@@ -158,7 +158,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       };
     const plans = form.getAll("plans").map(String).filter(isPaidPlan);
     // Monthly is the only billing interval since annual was withdrawn
-    // (2026-09-07), so a code is never scoped by interval any more. The column
+    // so a code is never scoped by interval any more. The column
     // stays for the rows written before that; empty means "any".
     const intervals: string[] = [];
 
@@ -296,7 +296,7 @@ export default function AdminPromoCodes() {
               decision than any individual code, and an operator who has just
               switched it off should not have to wonder what the list below
               still means. */}
-          {/* Same control as the plan-enforcement switch (user, 2026-09-03):
+          {/* Same control as the plan-enforcement switch:
               one switch shape for every operator-level on/off. */}
           <AdminCard heading="Availability">
             <s-switch

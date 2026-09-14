@@ -237,8 +237,8 @@ export async function updateContactInfo(
 
 /** Delete a contact, their linked conversations (messages → unresolved
  *  questions → conversations, mirroring the retention purge) AND their Shopify
- *  customer profile if one is linked (contact4.png; merchant-confirmed
- *  2026-08-14). The Shopify delete is fail-soft: Shopify refuses to delete
+ *  customer profile if one is linked (contact4.png).
+ *  The Shopify delete is fail-soft: Shopify refuses to delete
  *  customers with orders — the app-side delete still proceeds. NOTE: the
  *  Contacts loader must NOT backfill contact-less conversations — a deleted
  *  contact would be recreated on the very next load. New conversations bind a

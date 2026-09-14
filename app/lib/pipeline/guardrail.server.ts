@@ -65,7 +65,7 @@ declare global {
  *
  * Filling this lazily inside the first chat turn cost that shopper ~600 ms of
  * OpenAI round trip for work that has nothing to do with their message
- * (measured 2026-09-04). `primeBannedVectors` below lets the widget's config
+ * `primeBannedVectors` below lets the widget's config
  * fetch — which happens when the panel OPENS, before anyone types — pay it
  * instead.
  */

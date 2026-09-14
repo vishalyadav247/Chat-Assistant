@@ -94,7 +94,6 @@ export function InboxThread({
   const isMobile = useIsMobile();
   const [text, setText] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
   // Phone composer only: the six-emoji strip as a popover above the pill.
   const [emojiOpen, setEmojiOpen] = useState(false);
   const msgsRef = useRef<HTMLDivElement>(null);
@@ -105,7 +104,6 @@ export function InboxThread({
   useEffect(() => {
     setText("");
     setMenuOpen(false);
-    setConfirmDelete(false);
   }, [activeId]);
   const messageCount = active?.messages.length ?? 0;
   useEffect(() => {
@@ -244,17 +242,13 @@ export function InboxThread({
               <button
                 type="button"
                 className="del"
+                // The route confirms in the shared ConfirmDeleteModal.
                 onClick={() => {
-                  if (!confirmDelete) {
-                    setConfirmDelete(true);
-                    return;
-                  }
                   setMenuOpen(false);
-                  setConfirmDelete(false);
                   onDelete();
                 }}
               >
-                {confirmDelete ? "Confirm delete?" : "Delete conversation"}
+                Delete conversation
               </button>
             </span>
           ) : null}

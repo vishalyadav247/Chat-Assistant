@@ -50,7 +50,7 @@ const EMPTY_INVITE = { name: "", email: "", role: "agent" as "agent" | "admin" }
 
 export function SettingsGeneral(props: {
   name: string;
-  /** Global date/time display format (spec 16 delta 2026-08-19). */
+  /** Global date/time display format (spec 16). */
   dateFormat: DateFormat;
   timeFormat: TimeFormat;
   /** Store time zone — lives here with the formats it applies to. */
@@ -147,8 +147,10 @@ export function SettingsGeneral(props: {
   const uploading = inFlightIntent === "upload-logo";
   const removing = inFlightIntent === "remove-logo";
 
+  const [confirmLogoRemove, setConfirmLogoRemove] = useState(false);
   useEffect(() => {
     if (uploadFetcher.state === "idle" && uploadFetcher.data) {
+      if (uploadFetcher.data.intent === "remove-logo") setConfirmLogoRemove(false);
       if (uploadFetcher.data.ok) {
         shopify.toast.show(uploadFetcher.data.intent === "remove-logo" ? "Logo removed" : "Logo updated");
       } else if (uploadFetcher.data.error) {
@@ -243,7 +245,7 @@ export function SettingsGeneral(props: {
                 onInput={(e) => props.onNameChange(e.currentTarget.value)}
               />
             </s-box>
-            {/* Logo below the name (user request 2026-08-17); ✕ removes it
+            {/* Logo below the name; ✕ removes it
                 (immediate, like the upload — own fetcher, not the save bar). */}
             <s-stack gap="small">
               <s-text>Logo</s-text>
@@ -258,11 +260,7 @@ export function SettingsGeneral(props: {
                       aria-label="Remove logo"
                       title="Remove logo"
                       disabled={removing || uploading}
-                      onClick={() => {
-                        const fd = new FormData();
-                        fd.set("intent", "remove-logo");
-                        uploadFetcher.submit(fd, { method: "post" });
-                      }}
+                      onClick={() => setConfirmLogoRemove(true)}
                       style={{
                         position: "absolute",
                         top: -6,
@@ -717,6 +715,20 @@ export function SettingsGeneral(props: {
         loading={teamBusy}
         onCancel={() => setRemoveTarget(null)}
         onConfirm={() => removeTarget && submitTeam("team-remove", { id: removeTarget.id })}
+      />
+
+      <ConfirmDeleteModal
+        open={confirmLogoRemove}
+        title="Remove the store logo?"
+        body="It's removed right away, including from the chat avatar when that uses your store branding. You can upload a new one at any time."
+        confirmLabel="Remove logo"
+        loading={removing}
+        onCancel={() => setConfirmLogoRemove(false)}
+        onConfirm={() => {
+          const fd = new FormData();
+          fd.set("intent", "remove-logo");
+          uploadFetcher.submit(fd, { method: "post" });
+        }}
       />
     </s-stack>
   );

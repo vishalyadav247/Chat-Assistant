@@ -16,7 +16,7 @@ import { logError } from "../log.server";
 // reach the candidate list. `ts_headline` returns the matching fragment of a
 // long description so the LLM sees WHY a product matched (index.server.ts).
 //
-// Coverage is FIELD-AWARE (2026-09-01): a query word found in the title, type,
+// Coverage is FIELD-AWARE: a query word found in the title, type,
 // vendor or tags counts in full; a word found only in the description counts
 // DESC_WEIGHT of that. Real catalogues carry long SEO descriptions that name
 // other products' colours and stones ("pairs with black outfits", "keep it on
@@ -655,8 +655,8 @@ function cleanHeadline(headline: string | null | undefined): string | null {
 }
 
 /**
- * Relevance cut (user decision 2026-08-17: "don't show 4 items just to fill
- * the count"). Candidates arrive sorted (coverage, then fused). Keep only the
+ * Relevance cut — never show 4 items just to fill
+ * the count. Candidates arrive sorted (coverage, then fused). Keep only the
  * top relevance tier:
  *  - keyword tier present (top coverage > 0): every candidate within
  *    TIER_MARGIN of the top coverage — one black bracelet or four, whatever

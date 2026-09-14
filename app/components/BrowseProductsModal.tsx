@@ -171,6 +171,21 @@ export function BrowseProductsModal(props: {
    * sees the limit while picking instead of a rejected save (QA D12a).
    */
   maxSelected?: number;
+  /** Pick exactly one product: radio rows, a new pick REPLACES the old one
+   *  (instead of being blocked at a cap of 1), and the footer names the pick. */
+  single?: boolean;
+  /** Modal heading — defaults to "Browse products". */
+  title?: string;
+  /** Primary button label — defaults to "Add". */
+  confirmLabel?: string;
+  /** What the count is of, plural ("companions") — defaults to "products". */
+  noun?: string;
+  /** Disable the primary button until something is selected. */
+  requireSelection?: boolean;
+  /** Rows shown but not selectable, with the reason shown under the title. */
+  disabledIds?: Record<string, string>;
+  /** Renders a Back button (multi-step flows). */
+  onBack?: () => void;
   onConfirm: (ids: string[], meta?: Record<string, BrowseItemMeta>) => void;
 }) {
   const fetcher = useFetcher<BrowseData>();
@@ -223,8 +238,13 @@ export function BrowseProductsModal(props: {
     }
   }, [data]);
 
-  const cap = props.maxSelected;
+  const cap = props.single ? 1 : props.maxSelected;
   const toggle = (id: string) => {
+    if (props.disabledIds?.[id]) return;
+    if (props.single) {
+      setSelected(new Set([id]));
+      return;
+    }
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -241,28 +261,42 @@ export function BrowseProductsModal(props: {
     }).format(price);
 
   const count = selected.size;
-  const atCap = cap !== undefined && count >= cap;
+  // Single-pick never "reaches a limit" — choosing one is the whole task.
+  const atCap = !props.single && cap !== undefined && count >= cap;
+  const noun = props.noun ?? "products";
+  const [firstSelected] = selected;
+
+  const footerText = props.single
+    ? firstSelected
+      ? `Selected: ${seenMeta.current[firstSelected]?.title ?? "1 product"}`
+      : "No product selected"
+    : cap === undefined
+      ? `${count} ${count === 1 ? noun.replace(/s$/, "") : noun} selected`
+      : `${count} of ${cap} ${noun} selected${atCap ? " — limit reached" : ""}`;
 
   return (
     <BrowseModalShell
       open={props.open}
-      title="Browse products"
+      title={props.title ?? "Browse products"}
       onClose={props.onClose}
       footer={
         <>
-          <span style={{ marginRight: "auto" }}>
-            <s-text tone={atCap ? "critical" : "neutral"}>
-              {cap === undefined
-                ? `${count} product${count === 1 ? "" : "s"} selected`
-                : `${count} of ${cap} products selected${atCap ? " — limit reached" : ""}`}
-            </s-text>
+          <span style={{ marginRight: "auto", minWidth: 0 }}>
+            <s-text tone={atCap ? "critical" : "neutral"}>{footerText}</s-text>
           </span>
-          <s-button onClick={props.onClose}>Cancel</s-button>
+          {props.onBack ? (
+            <s-button icon="arrow-left" onClick={props.onBack}>
+              Back
+            </s-button>
+          ) : (
+            <s-button onClick={props.onClose}>Cancel</s-button>
+          )}
           <s-button
             variant="primary"
+            disabled={props.requireSelection && count === 0}
             onClick={() => props.onConfirm(Array.from(selected), { ...seenMeta.current })}
           >
-            Add
+            {props.confirmLabel ?? "Add"}
           </s-button>
         </>
       }
@@ -287,7 +321,11 @@ export function BrowseProductsModal(props: {
           }}
         />
 
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {/* One row of three equal columns (user, 2026-09-11). The flex-wrap row
+            it replaced let each s-select take its own line. minmax(0, 1fr)
+            lets a long vendor/tag/collection name truncate inside its column
+            instead of stretching the row. */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
           <s-select
             label="Vendor"
             labelAccessibilityVisibility="exclusive"
@@ -348,7 +386,9 @@ export function BrowseProductsModal(props: {
           </s-box>
         ) : (
           <div>
-            {(data?.products ?? []).map((item) => (
+            {(data?.products ?? []).map((item) => {
+              const lockedReason = props.disabledIds?.[item.id];
+              return (
               <label
                 key={item.id}
                 htmlFor={`browse-product-${item.id}`}
@@ -358,14 +398,16 @@ export function BrowseProductsModal(props: {
                   gap: 10,
                   padding: "9px 4px",
                   borderBottom: "1px solid var(--s-color-border-secondary, #f1f1f1)",
-                  cursor: "pointer",
+                  cursor: lockedReason ? "default" : "pointer",
+                  opacity: lockedReason ? 0.55 : 1,
                 }}
               >
                 <input
                   id={`browse-product-${item.id}`}
-                  type="checkbox"
+                  type={props.single ? "radio" : "checkbox"}
+                  name={props.single ? "browse-product-single" : undefined}
                   checked={selected.has(item.id)}
-                  disabled={atCap && !selected.has(item.id)}
+                  disabled={Boolean(lockedReason) || (atCap && !selected.has(item.id))}
                   onChange={() => toggle(item.id)}
                 />
                 <BrowseThumb imageUrl={item.imageUrl} title={item.title} />
@@ -373,11 +415,12 @@ export function BrowseProductsModal(props: {
                   <span style={{ display: "block", fontWeight: 600, fontSize: 13 }}>
                     {item.title}
                   </span>
-                  <s-text tone="neutral">{item.stockLabel}</s-text>
+                  <s-text tone="neutral">{lockedReason ?? item.stockLabel}</s-text>
                 </span>
                 <span style={{ fontSize: 13, whiteSpace: "nowrap" }}>{formatPrice(item.price)}</span>
               </label>
-            ))}
+              );
+            })}
           </div>
         )}
 

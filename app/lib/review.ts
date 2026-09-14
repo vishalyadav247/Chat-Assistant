@@ -10,8 +10,8 @@ export const REVIEW_MIN_INSTALL_AGE_MS = 24 * 60 * 60 * 1000;
  *
  *  NOT the same field as `handle` in shopify.app.toml — that one is the App
  *  Home admin-URL slug, and the two drifted apart (the toml said
- *  "chatconvert-app" while the listing had been live at "chatconvert-2" since
- *  2026-07-22, so every App Store link in the app pointed at a 404).
+ *  "chatconvert-app" while the listing is live at "chatconvert-2", so every
+ *  App Store link in the app pointed at a 404).
  *
  *  Baked in as the LAST fallback so the links work with no ops step. Admin →
  *  Settings and SHOPIFY_APP_STORE_HANDLE both still win over it — that is the

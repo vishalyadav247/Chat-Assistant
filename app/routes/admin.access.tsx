@@ -136,8 +136,8 @@ export default function AdminAccess() {
         heading="Access"
         subheading="Who can sign in to this console."
         actions={
-          // Polaris, like every other action button in the console (user,
-          // 2026-09-03) — the console owns its chrome, not its controls.
+          // Polaris, like every other action button in the console —
+          // the console owns its chrome, not its controls.
           <s-button variant="primary" onClick={() => modalEl(ADD_MODAL)?.showOverlay()}>
             Add admin
           </s-button>
