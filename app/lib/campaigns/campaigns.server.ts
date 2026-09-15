@@ -15,9 +15,8 @@ import { campaignTemplate, isPremiumTemplate } from "./templates";
 import { logError } from "../log.server";
 
 // Proactive-chat campaign CRUD + widget projection + metric counters (spec 12).
-// Every function is shop-scoped; premium templates, the Product Quiz message
-// type and the "similar products" recommendation source are gated server-side
-// both on save (requirePlan) and on widget serve (activeCampaignsForWidget).
+// Every function is shop-scoped; premium templates are gated server-side both
+// on save (requirePlan) and on widget serve (activeCampaignsForWidget).
 
 export interface CampaignRow {
   id: string;
@@ -213,8 +212,8 @@ export type SaveCampaignResult =
   | { ok: false; error: string; code?: "plan_gate" | "not_found" | "invalid" };
 
 /** Create or update (upsert-by-id) a campaign. Validates settings strictly and
- *  enforces every plan gate the editor renders (premium template, Product Quiz
- *  message type, "similar products" recommendation, active-campaign quota). */
+ *  enforces every plan gate the editor renders (premium template,
+ *  active-campaign quota). */
 export async function saveCampaign(
   shopId: string,
   plan: string,
@@ -264,25 +263,8 @@ export async function saveCampaign(
   if (!template.messageKinds.includes(settings.message.kind)) {
     return { ok: false, error: "That message type isn't available for this template.", code: "invalid" };
   }
-  // Product Quiz has no runtime yet: widget-renderer.js has no quiz branch, so a
-  // saved quiz falls through to renderText() and the shopper gets a plain text
-  // bubble. Refusing it for EVERY plan is the honest behaviour until the
-  // renderer exists — gating it on Pro+ meant paying customers were the only
-  // ones who could configure something that silently does not work.
-  if (settings.message.kind === "product_quiz") {
-    return { ok: false, error: "Product Quiz isn't available yet.", code: "invalid" };
-  }
-  if (
-    settings.message.kind === "product_recommendation" &&
-    settings.message.recommendation === "similar" &&
-    !hasFeature(plan, "custom_recommendations")
-  ) {
-    return {
-      ok: false,
-      error: "“Recommend similar products” requires a Pro or Plus plan.",
-      code: "plan_gate",
-    };
-  }
+  // Product Quiz has no widget renderer, so no template offers it (templates.ts)
+  // and the check above refuses it on every plan.
 
   // active_campaigns quota (spec 15). Only saving AS ACTIVE is gated — drafts
   // are unlimited, and an already-active campaign re-saved stays active.
@@ -522,6 +504,7 @@ async function staticRecommendationCards(
         shopId,
         shopifyProductId: { in: ordered },
         status: "active",
+        publishedOnline: true,
         stock: { gt: 0 },
       },
       select: CARD_SELECT,
@@ -544,7 +527,7 @@ async function staticRecommendationCards(
   const curatedIds = (curated?.productIds ?? []).slice(0, MAX_CAMPAIGN_CARDS);
   if (curatedIds.length > 0) {
     const rows = await db.product.findMany({
-      where: { shopId, shopifyProductId: { in: curatedIds }, status: "active", stock: { gt: 0 } },
+      where: { shopId, shopifyProductId: { in: curatedIds }, status: "active", publishedOnline: true, stock: { gt: 0 } },
       select: CARD_SELECT,
     });
     const byGid = new Map(rows.map((r) => [r.shopifyProductId, toCard(r)]));
@@ -553,7 +536,7 @@ async function staticRecommendationCards(
   }
 
   const rows = await db.product.findMany({
-    where: { shopId, status: "active", stock: { gt: 0 } },
+    where: { shopId, status: "active", publishedOnline: true, stock: { gt: 0 } },
     orderBy: source === "new_arrivals" ? { createdAt: "desc" } : { updatedAt: "desc" },
     take: MAX_CAMPAIGN_CARDS,
     select: CARD_SELECT,
@@ -577,7 +560,7 @@ export async function contextualRecommendationCards(
     const ids = (pair?.companionIds ?? []).slice(0, MAX_CAMPAIGN_CARDS);
     if (ids.length > 0) {
       const rows = await db.product.findMany({
-        where: { shopId, shopifyProductId: { in: ids }, status: "active", stock: { gt: 0 } },
+        where: { shopId, shopifyProductId: { in: ids }, status: "active", publishedOnline: true, stock: { gt: 0 } },
         select: CARD_SELECT,
       });
       const byGid = new Map(rows.map((r) => [r.shopifyProductId, toCard(r)]));
@@ -596,6 +579,7 @@ export async function contextualRecommendationCards(
     where: {
       shopId,
       status: "active",
+      publishedOnline: true,
       stock: { gt: 0 },
       shopifyProductId: { not: anchorProductId },
       ...(anchor?.productType
@@ -626,7 +610,7 @@ export async function anchorProductDetail(
 ): Promise<CampaignAnchorProduct | null> {
   requireShopId(shopId);
   const row = await db.product.findFirst({
-    where: { shopId, shopifyProductId: productId, status: "active" },
+    where: { shopId, shopifyProductId: productId, status: "active", publishedOnline: true },
     select: CARD_SELECT,
   });
   if (!row) return null;
@@ -674,23 +658,20 @@ export async function activeCampaignsForWidget(
     orderBy: [{ priority: "asc" }, { updatedAt: "desc" }],
   });
   const premiumAllowed = hasFeature(plan, "premium_campaign_templates");
-  const similarAllowed = hasFeature(plan, "custom_recommendations");
   const allowed = rows.filter((r) => premiumAllowed || !isPremiumTemplate(r.templateType));
 
   const campaigns = allowed
     .map((r) => ({ row: r, settings: parseCampaignSettings(r.settings) }))
-    // Product Quiz is Pro+ — below that the campaign has no renderable body,
-    // so drop it entirely rather than serve an empty bubble.
-    .filter((c) => premiumAllowed || c.settings.message.kind !== "product_quiz");
+    // A Product Quiz has no widget renderer on any plan and can no longer be
+    // saved; drop any legacy one rather than serve an empty bubble.
+    .filter((c) => c.settings.message.kind !== "product_quiz");
 
   const projected: WidgetCampaign[] = [];
   for (const { row, settings } of campaigns) {
     const wantsProducts = settings.message.kind === "product_recommendation";
-    // Below Pro, "similar" degrades to best sellers instead of showing nothing.
-    const source =
-      settings.message.recommendation === "similar" && !similarAllowed
-        ? "best_sellers"
-        : settings.message.recommendation;
+    // "similar" is available on every plan (un-gated with the
+    // merged recommendation rules) — no per-plan degrade.
+    const source = settings.message.recommendation;
     const contextual = wantsProducts && isContextualRecommendation(source);
     const products =
       wantsProducts && !contextual
@@ -771,6 +752,8 @@ async function serverSideAtcRevenue(shopId: string, campaignId: string): Promise
     const cheapest = await db.product.findFirst({
       where: {
         shopId,
+        status: "active",
+        publishedOnline: true,
         stock: { gt: 0 },
         ...(productIds.length > 0 ? { shopifyProductId: { in: productIds } } : {}),
       },

@@ -1,7 +1,7 @@
 // LLM price table (spec 19 · admin usage analytics). Client-safe: pure data
 // + math, no DB, no secrets — the admin UI formats costs with it.
 //
-// Maintained IN CODE deliberately (user decision 2026-08-20: no manual price
+// Maintained IN CODE deliberately (no manual price
 // entry). Figures are USD per 1M tokens, taken from OpenAI's official pricing
 // page (developers.openai.com/api/docs/pricing) on the date below. When OpenAI
 // changes prices, update this table — the UI shows the verification date so a
@@ -33,7 +33,7 @@ export const MODEL_PRICING: Record<string, ModelPrice> = {
 };
 
 /**
- * Price for a model id. Dated snapshots (`gpt-4o-mini-2024-07-18`) resolve to
+ * Price for a model id. Dated snapshots resolve to
  * their base model via longest-prefix match. null = unknown model, which the UI
  * surfaces as "unpriced" rather than pretending the cost is $0.
  */

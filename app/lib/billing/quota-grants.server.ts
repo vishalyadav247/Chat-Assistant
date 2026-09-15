@@ -10,7 +10,7 @@ import {
 export { GRANTABLE_DIMENSIONS, isGrantableDimension };
 
 /**
- * Bonus quota granted to one shop (spec 15 delta, 2026-09-07).
+ * Bonus quota granted to one shop (spec 15).
  *
  * WHY THIS EXISTS. Free plans and — until annual was withdrawn — yearly ones
  * hard-cap at their quota: Shopify permits usage charges on monthly cycles
@@ -21,10 +21,10 @@ export { GRANTABLE_DIMENSIONS, isGrantableDimension };
  * when), expired in batches, and granted twice without the second clobbering
  * the first.
  *
- * ONE RULE, every dimension: a live grant RAISES that shop.s cap for as long as
+ * ONE RULE, every dimension: a live grant RAISES that shop’s cap for as long as
  * it lasts. Nothing is consumed one at a time.
  *
- * This replaced a consumable model on 2026-09-08 because "increase the plan
+ * This replaced a consumable model because "increase the plan
  * limit" is what a grant is FOR, and the consumable version had two problems:
  * the displayed limit shrank as it was spent (used and limit converging looked
  * broken), and it needed a hand-maintained ordering rule — spend the credit
@@ -121,7 +121,7 @@ export async function grantQuota(shopId: string, grant: QuotaGrantInput): Promis
   const id = requireShopId(shopId);
   const dimension = grant.dimension ?? "conversations";
   if (!isGrantableDimension(dimension)) {
-    throw new Error(`Bonus quota is not wired for "" — it would have no effect.`);
+    throw new Error(`Bonus quota is not wired for "${dimension}" — it would have no effect.`);
   }
   const amount = Math.floor(grant.amount);
   if (!Number.isFinite(amount) || amount < 1) {

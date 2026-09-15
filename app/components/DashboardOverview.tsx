@@ -64,10 +64,9 @@ export function DashboardOverview(props: {
               );
             })}
           </s-select>
-          <s-text tone="neutral">
-            Compare to: {formatCompare(m.compare.from, m.compare.to, dt)}
-          </s-text>
         </Toolbar>
+        {/* Own row under the range picker (spec 13 revision 2026-09-14). */}
+        <s-text tone="neutral">Compare to: {formatCompare(m.compare.from, m.compare.to, dt)}</s-text>
 
         {props.allowedRanges.length < ANALYTICS_RANGES.length ? (
           <PlanBanner plan={props.rangeNextPlan} heading="See further back in your history">

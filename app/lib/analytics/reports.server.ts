@@ -1,6 +1,6 @@
 import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
-import { getQuota, isUnlimitedQuota, requirePlan } from "../billing/plans.server";
+import { getQuota, isUnlimitedQuota } from "../billing/plans.server";
 import {
   emptyCounters,
   rollupDay,
@@ -369,25 +369,17 @@ export async function topQuestions(shopId: string): Promise<TopQuestion[]> {
   }));
 }
 
-// ── CSV exports (Plus gate — "exports"; open enforcement passes) ────────────
+// ── CSV exports (every plan: no gate and no setting for export/import) ───────
 
 function csvField(value: string): string {
   return /[",\n\r]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
-}
-
-async function requireExports(shopId: string): Promise<void> {
-  const shop = await db.shop.findUnique({
-    where: { id: requireShopId(shopId) },
-    select: { plan: true },
-  });
-  requirePlan(shop?.plan ?? "free", "exports"); // throws PlanGateError when enforced
 }
 
 const EXPORT_CONVERSATION_CAP = 5000;
 
 /** Conversations CSV: id, startedAt, status, mode, outcome, rating, messages. */
 export async function exportConversationsCsv(shopId: string): Promise<string> {
-  await requireExports(shopId);
+  requireShopId(shopId);
   const conversations = await db.conversation.findMany({
     where: { shopId, isTest: false },
     orderBy: { startedAt: "desc" },
@@ -433,7 +425,6 @@ export async function exportAnalyticsCsv(
 ): Promise<string> {
   // Plan gate: never read further back than analytics_range_days allows.
   range = await clampRange(shopId, range);
-  await requireExports(shopId);
   const days = windowDays(range);
   const map = await countersForDays(shopId, days);
   const columns: (keyof DayCounters)[] = [

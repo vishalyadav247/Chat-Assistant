@@ -1,7 +1,6 @@
 import type { ActionFunctionArgs } from "react-router";
 import { z } from "zod";
-import { runPipeline, type PipelineFrame } from "../lib/pipeline/index.server";
-import { createTrace, type Trace } from "../lib/pipeline/trace.server";
+import { runPipeline } from "../lib/pipeline/index.server";
 import { sseResponse } from "../lib/sse.server";
 import { requireShopAccess } from "../lib/access.server";
 
@@ -13,9 +12,10 @@ import { requireShopAccess } from "../lib/access.server";
 // exclude them. App Bridge patches fetch in the embedded admin, so the
 // session token rides along automatically.
 //
-// This endpoint is ALSO the only one that collects a turn trace: the merchant
-// console needs to see which layer decided the reply and on what evidence
-// (trace.server.ts). The storefront path passes no trace and pays nothing.
+// No decision trace here (QA-U5, 2026-09-14): the console's Turn inspector was
+// removed and its "Answered from" chip reads the stored sourceLayer instead, so
+// the full trace was being built and streamed to a client that ignored it.
+// Real-turn traces live in Admin → Debug (turn-capture.server.ts).
 
 const bodySchema = z.object({
   // Client-generated, persisted per console session; reset issues a new one.
@@ -24,17 +24,6 @@ const bodySchema = z.object({
   message: z.string().min(1).max(2000),
 });
 
-/** Append the collected trace after the pipeline's own frames. It rides behind
- *  "done" on purpose: the console renders the reply the instant it is ready and
- *  fills the inspector a tick later, so tracing never delays a token. */
-async function* withTrace(
-  frames: AsyncIterable<PipelineFrame>,
-  trace: Trace,
-): AsyncIterable<PipelineFrame> {
-  for await (const frame of frames) yield frame;
-  yield { type: "trace", steps: trace.steps(), summary: trace.summary() };
-}
-
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { shopId } = await requireShopAccess(request, { permission: "ai_agent" });
 
@@ -42,17 +31,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (!parsed.success) {
     return new Response("bad request", { status: 400 });
   }
-  const trace = createTrace(true);
-  const frames = runPipeline(
-    {
-      shopId,
-      sessionId: parsed.data.sessionId,
-      conversationId: parsed.data.conversationId,
-      message: parsed.data.message,
-      isTest: true,
-    },
-    trace,
-  );
+  const frames = runPipeline({
+    shopId,
+    sessionId: parsed.data.sessionId,
+    conversationId: parsed.data.conversationId,
+    message: parsed.data.message,
+    isTest: true,
+  });
 
-  return sseResponse(withTrace(frames, trace), request.signal);
+  return sseResponse(frames, request.signal);
 };

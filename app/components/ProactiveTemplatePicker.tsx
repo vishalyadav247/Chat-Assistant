@@ -1,3 +1,4 @@
+import { Link } from "react-router";
 import { CAMPAIGN_TEMPLATES, type CampaignTemplate } from "../lib/campaigns/templates";
 import { PlanBadge } from "./ui/PlanGate";
 
@@ -157,9 +158,9 @@ export function ProactiveTemplatePicker(props: {
                       Create
                     </s-button>
                     {gated ? (
-                      <s-link href="/app/plan-usage">
+                      <Link to="/app/plan-usage">
                         {props.premiumPlan ? `Upgrade to ${props.premiumPlan}` : "Upgrade to unlock"}
-                      </s-link>
+                      </Link>
                     ) : null}
                   </div>
                 </div>

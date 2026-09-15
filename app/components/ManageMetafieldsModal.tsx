@@ -8,14 +8,14 @@ import { BRAND } from "./ui/tokens";
 import { useDateTime } from "../lib/format/context";
 
 // Manage metafields modal (spec 07 → Products tab, reference
-// resources/other/productMetafields.png, 2026-08-19): Product / Variant
+// resources/other/productMetafields.png): Product / Variant
 // metafield tabs (no Order tab — user decision) with "Sync now" on their right
 // (definitions + used-in counts, also refreshed by product sync and
 // metafield_definitions/* webhooks), "Last synced …" on the modal heading row,
 // plan-cap banner, search + All/Enabled/Disabled filter, table
 // Metafield · Used in · Status (switch; unsupported types can't be enabled).
-// Structured (defined) metafields only — user decision 2026-08-19; unsupported
-// types are HIDDEN from the list (footnote count) — user decision; footer link
+// Structured (defined) metafields only; unsupported
+// types are HIDDEN from the list (footnote count); footer link
 // opens a second popup listing supported types. Enabling re-embeds the affected
 // products in a background job (server action `metafield-toggle`).
 
@@ -69,8 +69,8 @@ export function ManageMetafieldsModal(props: {
   const pendingId =
     pendingIntent === "metafield-toggle" ? String(fetcher.formData?.get("id") ?? "") : "";
 
-  // Unsupported types (references, files, JSON…) are hidden — user decision
-  // 2026-08-19 — and counted in a footnote so nothing goes silently missing.
+  // Unsupported types (references, files, JSON…) are hidden, and counted
+  // in a footnote so nothing goes silently missing.
   const supportedRows = useMemo(() => rows.filter((r) => r.supported), [rows]);
   const hiddenCount = rows.filter((r) => r.ownerType === tab && !r.supported).length;
   const visible = useMemo(() => {
@@ -136,8 +136,8 @@ export function ManageMetafieldsModal(props: {
           >
             Sync now
             <s-tooltip>
-              Refresh the metafield list from Shopify. Auto sync follows Products auto sync and
-              Shopify webhooks.
+              Refresh the metafield list from Shopify. It also updates automatically whenever a
+              metafield definition changes in Shopify.
             </s-tooltip>
           </s-button>
         </s-grid>

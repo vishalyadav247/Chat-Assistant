@@ -40,7 +40,7 @@ export function faqItems(
     ],
     [
       "If I cancel the paid plans, will I lose the features or effects that were available in the previous plan?",
-      "You keep all your data, but plan-specific features (extra conversations, exports, branding removal) pause until you resubscribe.",
+      "You keep all your data, but plan-specific features (extra conversations, branding removal) pause until you resubscribe.",
     ],
     [
       "Is it easy to switch between plans?",

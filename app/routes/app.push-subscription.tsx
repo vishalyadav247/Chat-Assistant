@@ -90,7 +90,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       memberId: member.id,
       p256dh: sub.keys.p256dh,
       auth: sub.keys.auth,
-      failedAt: null,
       userAgent: request.headers.get("user-agent")?.slice(0, 300) ?? null,
     },
   });

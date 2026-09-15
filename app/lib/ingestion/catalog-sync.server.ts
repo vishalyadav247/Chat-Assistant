@@ -19,6 +19,7 @@ import {
   type StoredMetafield,
 } from "./metafields.server";
 import { logError, logWarn } from "../log.server";
+import { htmlToText } from "./fetchers.server";
 
 // Catalog sync (spec 02). Full paged sync + webhook-driven single upserts.
 // Re-embeds ONLY when the embedding text (title/type/vendor/tags/description/
@@ -44,7 +45,7 @@ const PRODUCTS_QUERY = `#graphql
         featuredMedia { preview { image { url } } }
         priceRangeV2 { minVariantPrice { amount } }
         totalInventory
-        variants(first: 10) {
+        variants(first: 50) {
           nodes {
             id title price availableForSale
             metafields(first: 30) { nodes { namespace key type value definition { id } } }
@@ -61,7 +62,7 @@ const PRODUCT_METAFIELDS_QUERY = `#graphql
   query CatalogSyncProductMetafields($id: ID!) {
     product(id: $id) {
       metafields(first: 100) { nodes { namespace key type value definition { id } } }
-      variants(first: 10) {
+      variants(first: 50) {
         nodes { title metafields(first: 30) { nodes { namespace key type value definition { id } } } }
       }
     }
@@ -152,8 +153,8 @@ export async function fullCatalogSync(shopDomain: string): Promise<void> {
       getQuota(shop?.plan ?? "free", "products_synced") +
       (await bonusQuota(shopId, "products_synced"));
     const { admin } = await unauthenticated.admin(shopDomain);
-    // Metaobject-reference metafields resolve to text at sync time (spec 07,
-    // 2026-09-07); the cache carries gid → rendered text across pages, so a
+    // Metaobject-reference metafields resolve to text at sync time (spec 07);
+    // the cache carries gid → rendered text across pages, so a
     // metaobject shared by many products is fetched once per run.
     const enabledMetafields = await loadEnabledMetafields(shopId);
     const metaobjectCache = new Map<string, string>();
@@ -222,8 +223,8 @@ export async function fullCatalogSync(shopDomain: string): Promise<void> {
           // published/not comes from publishedAt, NEVER from onlineStoreUrl:
           // Shopify returns onlineStoreUrl null for every product of a
           // password-protected storefront (dev stores!), and deriving the flag
-          // from it marked jgw-check's entire catalogue unpublished on
-          // 2026-09-08 — the AI then had zero candidates. publishedAt is the
+          // from it marked jgw-check's entire catalogue unpublished
+          // — the AI then had zero candidates. publishedAt is the
           // Online Store channel publication date and matches the webhook
           // path's published_at signal exactly.
           publishedOnline: Boolean(node.publishedAt),
@@ -269,7 +270,6 @@ export async function fullCatalogSync(shopDomain: string): Promise<void> {
         status: "idle",
         productSyncAt: new Date(),
         productCount: total,
-        cappedAt: capped ? total : null,
       },
     });
     await recordEvent(shopId, "catalog_synced", { products: total, capped });
@@ -285,24 +285,6 @@ export async function fullCatalogSync(shopDomain: string): Promise<void> {
     });
     throw error;
   }
-}
-
-/**
- * Catalog auto sync gate (Products / Collections tabs toggle, 2026-08-17):
- * plan feature `catalog_auto_sync` AND the merchant's ShopSettings toggle.
- * Governs ONLY the daily full reconcile (user decision 2026-08-17): Shopify
- * webhooks (create/update/delete) always apply immediately, and the manual
- * "Sync now" button always works.
- */
-export async function catalogAutoSyncAllowed(
-  shopId: string,
-  type: "products" | "collections",
-): Promise<boolean> {
-  const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
-  const { hasFeature } = await import("../billing/plans.server");
-  if (!hasFeature(shop?.plan ?? "free", "catalog_auto_sync")) return false;
-  const { loadShopSettings } = await import("../settings/save.server");
-  return (await loadShopSettings(shopId)).catalogAutoSync[type];
 }
 
 export async function upsertProductFromWebhook(shopDomain: string, payload: unknown): Promise<void> {
@@ -346,7 +328,13 @@ export async function upsertProductFromWebhook(shopDomain: string, payload: unkn
     }
   }
 
-  const description = stripHtml(p.body_html ?? "");
+  // Same text pipeline as everything else (hardening spec 23 §2.6): the old
+  // bare tag-strip never decoded entities, so "&amp;"/"&nbsp;" literals landed
+  // in the description after every webhook — junk tokens in the vector and the
+  // tsvector — and, because the full sync stores Shopify's decoded
+  // `description`, the contentHash flipped on every webhook↔sync alternation,
+  // re-embedding the product with no real change.
+  const description = htmlToText(p.body_html ?? "").text.replace(/\s+/g, " ").trim();
   const webhookVariants = (p.variants ?? []) as Array<{
     id?: number;
     title?: string;
@@ -473,10 +461,6 @@ async function upsertProducts(shopId: string, products: SyncedProduct[]): Promis
   await embedProducts(shopId, toEmbed);
 }
 
-function stripHtml(html: string): string {
-  return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-}
-
 // ── Collections ─────────────────────────────────────────────────────────────
 
 const COLLECTIONS_QUERY = `#graphql
@@ -584,6 +568,42 @@ export async function syncCollectionMembershipFromWebhook(
   if (!shopId) return;
   const { admin } = await unauthenticated.admin(shopDomain);
   await syncCollectionMembership(admin, shopId, collectionId);
+}
+
+/**
+ * COLLECTIONS_CREATE / COLLECTIONS_UPDATE, run as a job — the webhook handler
+ * only enqueues, exactly like products. Upserts the row from the payload, then
+ * refreshes membership (the payload carries no products: some may have moved
+ * in or out). Idempotent — a redelivered webhook or a retry rewrites the same row.
+ */
+export async function upsertCollectionFromWebhook(shopDomain: string, payload: unknown): Promise<void> {
+  const shopId = await existingShopId(shopDomain);
+  if (!shopId) return;
+  const p = payload as { admin_graphql_api_id?: string; id?: number; title?: string; body_html?: string };
+  const shopifyCollectionId = p.admin_graphql_api_id ?? `gid://shopify/Collection/${p.id}`;
+  const fields = {
+    title: p.title ?? "",
+    description: (p.body_html ?? "").replace(/<[^>]*>/g, " ").trim(),
+  };
+  await db.collection.upsert({
+    where: { shopId_shopifyCollectionId: { shopId, shopifyCollectionId } },
+    update: fields,
+    create: { shopId, shopifyCollectionId, ...fields },
+  });
+  const { admin } = await unauthenticated.admin(shopDomain);
+  await syncCollectionMembership(admin, shopId, shopifyCollectionId);
+}
+
+/** COLLECTIONS_DELETE, run as a job. */
+export async function deleteCollectionFromWebhook(shopDomain: string, payload: unknown): Promise<void> {
+  const shopId = await existingShopId(shopDomain);
+  if (!shopId) return;
+  const p = payload as { admin_graphql_api_id?: string; id?: number };
+  const shopifyCollectionId = p.admin_graphql_api_id ?? `gid://shopify/Collection/${p.id}`;
+  await db.collection.deleteMany({ where: { shopId, shopifyCollectionId } });
+  // Membership dies with the collection — otherwise a collection-targeted
+  // recommendation keeps resolving through a collection Shopify deleted.
+  await db.collectionProduct.deleteMany({ where: { shopId, collectionId: shopifyCollectionId } });
 }
 
 export async function fullCollectionSync(shopDomain: string): Promise<void> {
@@ -788,13 +808,10 @@ export async function fullDiscountSync(shopDomain: string): Promise<void> {
 export async function upsertDiscountFromWebhook(shopDomain: string, payload: unknown): Promise<void> {
   const shopId = await existingShopId(shopDomain);
   if (!shopId) return;
-  // Real-time discount sync is a Pro+ feature (seam active even in open mode)
-  // AND a merchant toggle (ShopSettings.discountRealtime, Discounts tab).
-  const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
-  const { hasFeature } = await import("../billing/plans.server");
-  if (!hasFeature(shop?.plan ?? "free", "discount_realtime_sync")) return;
-  const { loadShopSettings } = await import("../settings/save.server");
-  if (!(await loadShopSettings(shopId)).discountRealtime) return;
+  // Applied on EVERY plan. This used to be a
+  // Pro+ feature behind a merchant toggle — the webhook still arrived for every
+  // shop and was simply discarded, and with no scheduled discount sync, a new
+  // discount on Free/Basic never reached the agent unless someone clicked Sync.
   const p = payload as { admin_graphql_api_id?: string; title?: string; status?: string };
   if (!p.admin_graphql_api_id) return;
 

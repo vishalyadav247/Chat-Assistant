@@ -4,7 +4,7 @@ import { logError } from "../log.server";
 import { overageRate } from "./plans.server";
 import { isBillingTestMode, USAGE_CAPPED_AMOUNT } from "./shopify-billing.server";
 
-// The spend ceiling on the usage line (spec 15 · added 2026-09-03).
+// The spend ceiling on the usage line (spec 15).
 //
 // Shopify's `cappedAmount` is the most a merchant can be charged for usage in
 // one 30-day BILLING cycle, and it is the merchant's own approved limit —

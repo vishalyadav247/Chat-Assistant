@@ -21,11 +21,11 @@ export interface ChatModelOption {
 }
 
 export const CHAT_MODEL_OPTIONS: ChatModelOption[] = [
-  { id: "gpt-4o-mini", label: "gpt-4o-mini", note: "Current default. Cheapest, and the only model verified 19/19 on the golden set." },
-  { id: "gpt-4.1-nano", label: "gpt-4.1-nano", note: "Cheaper than 4o-mini on input; smallest of the 4.1 family." },
-  { id: "gpt-4.1-mini", label: "gpt-4.1-mini", note: "~2.7x the cost of 4o-mini. Scored 15/16 — misroutes one follow-up (decisions log)." },
-  { id: "gpt-4o", label: "gpt-4o", note: "Stronger, ~17x the output cost of 4o-mini." },
-  { id: "gpt-4.1", label: "gpt-4.1", note: "Strongest of the family, ~13x the output cost of 4o-mini." },
+  { id: "gpt-4.1-mini", label: "gpt-4.1-mini", note: "Default (spec 24). 87% on the real-conversation eval; ~$1 per 1,000 shopper messages." },
+  { id: "gpt-4.1", label: "gpt-4.1", note: "Most accurate: 97% on the real-conversation eval, same speed, ~5x the cost of 4.1-mini." },
+  { id: "gpt-4o-mini", label: "gpt-4o-mini", note: "Cheapest. Not measured with the AI agent — run npm run eval:conversations before using it." },
+  { id: "gpt-4.1-nano", label: "gpt-4.1-nano", note: "Cheaper than 4o-mini on input. Not measured with the AI agent." },
+  { id: "gpt-4o", label: "gpt-4o", note: "Stronger, ~17x the output cost of 4o-mini. Not measured with the AI agent." },
 ];
 
 export const CHAT_MODEL_IDS = CHAT_MODEL_OPTIONS.map((m) => m.id);

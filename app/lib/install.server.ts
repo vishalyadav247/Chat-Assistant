@@ -1,19 +1,19 @@
+import type { Prisma } from "@prisma/client";
 import db from "../db.server";
+import { shopSettingsSchema } from "./settings/schemas";
 import { enqueue } from "./jobs/queue.server";
 import { JOBS } from "./jobs/handlers.server";
 import { resolveShopId } from "./tenancy.server";
 import { logError } from "./log.server";
+import { DEFAULT_GUARDRAILS, DEFAULT_PERSONA } from "./ai-defaults";
 
 // Install/afterAuth bootstrap (specs 02/08): shop row, default persona +
 // guardrails + seeded app recommendations, initial catalog sync. Idempotent —
 // afterAuth also fires on token refresh.
 
-const DEFAULT_GUARDRAILS = {
-  answerOnlyFromKnowledge: true,
-  bannedTopics: ["medical advice", "legal advice", "competitor pricing"],
-  fallbackMessage:
-    "I'm not sure about that one — leave your email and our team will get back to you.",
-};
+/** Default transcript retention for stores installing after 2026-09-14 (QA-P4). */
+export const NEW_INSTALL_RETENTION_DAYS = 90;
+
 
 export async function onShopAuthenticated(shopDomain: string): Promise<void> {
   try {
@@ -29,33 +29,40 @@ export async function onShopAuthenticated(shopDomain: string): Promise<void> {
 
     const persona = await db.persona.findUnique({ where: { shopId } });
     if (!persona) {
+      // Generic defaults (app/lib/ai-defaults.ts) the merchant refines in
+      // Instructions → General. Store info stays empty — the merchant adds it.
       await db.persona.create({
         data: {
           shopId,
-          role: "You are a friendly sales and support assistant for this store.",
-          communicationStyle: "friendly",
-          brandVoice: "Warm, approachable and helpful. Plain, encouraging language.",
-          behaviours:
-            "Greet warmly. Understand the shopper's need before recommending. Suggest 1-3 products with a short reason each. Never pressure.",
-          guidelines: [
-            "Recommend only in-stock, in-budget items from the provided list",
-            "Ask one clarifying question if the request is vague",
-            "Keep replies to 2-3 short sentences",
-            "Always mention the price when recommending",
-          ],
-          avoid: [
-            "Inventing products, prices, or discounts",
-            "Medical, legal, or financial advice",
-            "Discussing competitor stores or prices",
-          ],
-          welcomeMessage: "Hi {{customer_name}} 👋 What can I help you find today?",
+          role: DEFAULT_PERSONA.role,
+          communicationStyle: DEFAULT_PERSONA.communicationStyle,
+          brandVoice: DEFAULT_PERSONA.brandVoice,
+          behaviours: DEFAULT_PERSONA.behaviours,
+          welcomeMessage: DEFAULT_PERSONA.welcomeMessage,
         },
       });
     }
 
     const guardrails = await db.guardrails.findUnique({ where: { shopId } });
     if (!guardrails) {
-      await db.guardrails.create({ data: { shopId, ...DEFAULT_GUARDRAILS } });
+      await db.guardrails.create({
+        data: { shopId, ...DEFAULT_GUARDRAILS, bannedTopics: [...DEFAULT_GUARDRAILS.bannedTopics] },
+      });
+    }
+
+    // Transcript retention defaults to 90 days for NEW installs (QA-P4, owner
+    // decision 2026-09-14). `before === null` means this store had no row until
+    // this authentication — afterAuth also fires on token refresh, so keying on
+    // "no settings row" would silently move existing stores off "Keep forever".
+    // Existing stores keep whatever they have; merchants can change it anytime.
+    if (!before) {
+      const settingsRow = await db.shopSettings.findUnique({ where: { shopId }, select: { id: true } });
+      if (!settingsRow) {
+        const settings = shopSettingsSchema.parse({ retentionDays: NEW_INSTALL_RETENTION_DAYS });
+        await db.shopSettings.create({
+          data: { shopId, settings: settings as unknown as Prisma.InputJsonObject },
+        });
+      }
     }
 
     // Seed app recommendations (spec 08) once.
@@ -87,6 +94,11 @@ export async function onShopAuthenticated(shopDomain: string): Promise<void> {
       await enqueue(JOBS.collectionSync, { shopDomain });
       await enqueue(JOBS.discountSync, { shopDomain });
     }
+    // Spec 22 — its own stamps, so a shop installed before Pages/Blogs existed
+    // gets its first content sync on the next auth instead of waiting for a
+    // daily run its plan may not include.
+    if (!syncState?.pageSyncAt || wasUninstalled) await enqueue(JOBS.pageSync, { shopDomain });
+    if (!syncState?.articleSyncAt || wasUninstalled) await enqueue(JOBS.articleSync, { shopDomain });
   } catch (error) {
     // afterAuth must never break the OAuth flow.
     logError("after_auth_error", error);

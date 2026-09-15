@@ -36,6 +36,7 @@
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { qaFetch, waitForServer } from "./http";
 
 // Load .env manually (tsx does not) BEFORE importing app modules.
 for (const line of readFileSync(join(process.cwd(), ".env"), "utf-8").split(/\r?\n/)) {
@@ -99,7 +100,7 @@ async function probe(
 ): Promise<Probe> {
   const headers: Record<string, string> = { "user-agent": UA, ...(init.headers ?? {}) };
   if (init.cookie) headers.cookie = init.cookie;
-  const res = await fetch(BASE + path, {
+  const res = await qaFetch(BASE + path, {
     method: init.method ?? "GET",
     headers,
     body: init.body,
@@ -255,8 +256,9 @@ async function main(): Promise<void> {
     // ── 0. Preflight ────────────────────────────────────────────────────────
     section("0. Preflight");
     try {
-      const res = await fetch(`${BASE}/web/login`, { headers: { "user-agent": UA } });
-      if (!res.ok) throw new Error(`status ${res.status}`);
+      // Backoff gate (QA-T4): a cold dev server is slow, not down.
+      const up = await waitForServer(`${BASE}/web/login`, { headers: { "user-agent": UA } });
+      if (!up.ok) throw new Error(up.error);
       ok("dev server reachable", true, BASE);
     } catch (error) {
       ok("dev server reachable", false, `run \`npm run dev\` first — HTTP coverage NOT executed (${String(error)})`);
@@ -639,8 +641,10 @@ async function main(): Promise<void> {
 
       const exported = await postForm("/app/analytics", { intent: "export-analytics", range: "30d" }, hostCookie);
       ok("analytics export-analytics (valid, read-only) → 200", exported.status === 200, String(exported.status));
-      const exportedConv = await postForm("/app/analytics", { intent: "export-conversations" }, hostCookie);
-      ok("analytics export-conversations (valid, read-only) → 200", exportedConv.status === 200, String(exportedConv.status));
+      // Moved to the Inbox page 2026-09-10 — it exports conversations, so it
+      // lives next to them rather than with the analytics charts.
+      const exportedConv = await postForm("/app/inbox", { intent: "export-conversations" }, hostCookie);
+      ok("inbox export-conversations (valid, read-only) → 200", exportedConv.status === 200, String(exportedConv.status));
 
       const badSettings = await postForm("/app/settings", { intent: "save-settings", payload: "not json" }, hostCookie);
       ok("settings save with an unparseable payload is refused, not a 500", badSettings.status === 200, String(badSettings.status));

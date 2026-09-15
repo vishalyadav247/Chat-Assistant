@@ -13,7 +13,7 @@
 >   webhook HMAC, app-proxy signature, purge)
 > - `npx tsx scripts/verify-compliance.ts` → **ALL PASS** (redact / data-request / retention /
 >   zero-row purge across **34** shop-scoped tables)
-> - `npm run widget:size` → chat-widget.js **15.30 KB gzip** (budget 30 KB)
+> - `npm run widget:size` → chat-widget.js **27.55 KB gzip** (budget 30 KB; the script now warns above 27 KB — headroom nearly gone). Re-measured 2026-09-14 (QA-P1); the 15.30 KB figure was from 2026-08-21.
 > - `npx tsc --noEmit` → clean · `npm run lint` → clean except `scripts/qa/perf-queries.test.ts`
 >   (owned by the perf QA workstream, 2× `no-inner-declarations`)
 
@@ -22,7 +22,7 @@
 ## SUBMISSION BLOCKERS (fix before you press Submit)
 
 > **Status re-verified against the tree on 2026-09-01.** B2, B3, B4 and B5 are now **CLOSED**
-> — B2 was re-examined on 2026-09-07 and **reversed** (see its row);
+> — B2 was wrongly withdrawn on 2026-09-07 and **fixed for real on 2026-09-14** (see its row);
 > `shopify.app.toml` carries production URLs with `automatically_update_urls_on_dev = false`;
 > `isBillingTestMode()` returns `false` whenever `NODE_ENV === "production"`; and the privacy
 > policy is published. The one that remains (**B1**) is outside the codebase: a Partner
@@ -36,8 +36,8 @@
 
 | # | Blocker | Status | File |
 |---|---|---|---|
-| B1 | **Protected Customer Data level 2 not requested.** `read_customers` / `write_customers` / `read_orders` read customer name/email/phone and order email/phone/shipping address. A public app must request PCD access **and the specific fields** in the Partner Dashboard, implement level 1 + level 2 requirements, and take part in data-protection reviews. Submitting without this is an automatic hold. | **OPEN — Partner Dashboard** | `shopify.app.toml` (justifications now inline), `app/routes/proxy.order-track.tsx`, `app/lib/contacts/contacts.server.ts` |
-| B2 | ~~**`.myshopify.com` shop-domain login form shipped** at `/auth/login` — claimed to violate req **2.3.1** ("must not request the manual entry of a myshopify.com URL").~~ | **WITHDRAWN 2026-09-07 — this was never a blocker.** No such requirement could be found on shopify.dev when it was raised (the 2026-08-21 PROGRESS.md entry says so in as many words) or when it was re-searched on 2026-09-07, and Shopify own app template ships this form with `shopify.login` documented as the supported way to build it. Removing it left the landing page with no way in while the listing is unpublished. Form restored on `/`; `login` re-exported. **If a reviewer does cite 2.3.1, get the exact wording before changing anything.** | `app/routes/_index/route.tsx`, `app/routes/auth.login.tsx`, `app/shopify.server.ts` |
+| B1 | **Protected Customer Data level 2 not requested.** `read_customers` / `write_customers` / `read_orders` read customer name/email/phone and order email/phone/shipping address. A public app must request PCD access **and the specific fields** in the Partner Dashboard, implement level 1 + level 2 requirements, and take part in data-protection reviews. Submitting without this is an automatic hold. | **SUBMITTED 2026-09-11 (owner)** — the Partner Dashboard PCD request is done. Before submission, confirm there that level 1 + 2 and each requested field show as approved, not just requested. | `shopify.app.toml` (justifications now inline), `app/routes/proxy.order-track.tsx`, `app/lib/contacts/contacts.server.ts` |
+| B2 | **`.myshopify.com` shop-domain login form on `/`** — violates req **2.3.1** "Initiate installation from a Shopify-owned surface": *"Your app must not request the manual entry of a myshopify.com URL or a shop's domain during the installation or configuration flow."* | **FIXED 2026-09-14 (QA-C1).** The requirement IS real — found on shopify.dev (App Store requirements, §2.3.1) on 2026-09-14; the 2026-09-07 "withdrawn / no such rule" note was wrong. The form, its `login()` action and error copy are gone from `/`, which now links to the App Store listing; `/auth/login` is redirect-only (library bounce with `?shop=`). Guarded by `routing.test.ts` (no route renders a shop input; `/` has no form). | `app/routes/_index/route.tsx`, `app/routes/auth.login.tsx`, `app/shopify.server.ts` |
 | B3 | **All app URLs must point at the production host with valid TLS** (req **3.1.1**), never a `trycloudflare` dev tunnel, and `automatically_update_urls_on_dev` must be `false`. Note the app-proxy URL is pinned per store at install time. | **CLOSED 2026-09-01** — `application_url`, `[auth].redirect_urls` and `[app_proxy].url` are all `https://chatconvert.progryss.com`; TLS valid to 2026-11-24; flag is `false`. Dev moved to a gitignored `shopify.app.dev.toml`, diffed by `npm run config:diff`. **Takes effect only on `npm run deploy` with the production config selected.** | `shopify.app.toml`, `shopify.app.dev.toml`, `scripts/config-diff.cjs` |
 | B4 | **`billingTestMode` can hand a merchant a paid plan with no Shopify charge in production.** The mock provider makes no Shopify call and persists a fake subscription gid. Operator-only + banner-warned, but it should hard-fail when `NODE_ENV === "production"` — this is the only code path in the repo that bypasses the Billing API (req **1.2.1**). | **CLOSED** — `isBillingTestMode()` returns false when `NODE_ENV === "production"`. | `app/lib/billing/shopify-billing.server.ts:73-80,363-368` |
 | B5 | **Privacy policy must be published**, naming OpenAI as processor, the merchant-configurable transcript retention windows *and* the 7-day post-uninstall retention window, plus a contact. | **CLOSED 2026-09-01** — live at `https://progryss.com/chatconvert-privacy-policy/` (HTTP 200). Verified to name OpenAI as processor, document the 7-day post-uninstall deletion inside Shopify's 30-day `shop/redact` deadline, and carry real contacts with no unfilled placeholders. Remaining: paste the URL into the App Submission form. | `docs/privacy-policy-page.html` → hosted |
@@ -61,7 +61,7 @@
 - **2.3.4 OAuth on reinstall, no install-once flag** — PASS, verified live: `onShopAuthenticated`
   is idempotent, clears `uninstalledAt`, re-seeds defaults, and a **fully purged** shop reinstalls
   cleanly (`install-lifecycle.test.ts` §8, §9).
-- **2.3.1** — **NOT A REAL REQUIREMENT (B2 withdrawn 2026-09-07).** Two shopify.dev searches found no rule forbidding a shop-domain field, and the official template ships one. The landing page (`/`) asks for a store domain and hands it to `login()` → Shopify managed install; **no embedded route asks for it**, and `?shop=` still redirects straight into `/app` with no pre-auth UI (which is what 2.3.x actually covers).
+- **2.3.1 initiate install from a Shopify-owned surface** — PASS (fixed 2026-09-14, B2). No route asks for a store domain: `/` links to the App Store listing, `/auth/login` only finishes a library bounce that already carries `?shop=`, and `?shop=` / `host` still redirect straight into `/app`.
 - **Manual step**: install on a *fresh* dev store, confirm OAuth completes first try with no
   interstitial UI, then re-open from the Apps list.
 
@@ -112,7 +112,12 @@
 
 ## 4. Scopes — GAP (B1: PCD) / PENDING-MANUAL (listing justification text)
 
-- Ten scopes, each now justified inline in `shopify.app.toml`.
+- **Eleven scopes** (2026-09-14, QA-P2), each justified in a comment block above `[access_scopes]` in
+  `shopify.app.toml`. `read_online_store_pages` was **removed**: shopify.dev (Admin GraphQL 2026-07)
+  lists Page, Blog and Article as "Requires read_content OR read_online_store_pages", and
+  `read_content` must stay for the `metafield_definitions/*` webhooks. The empty
+  `[events] api_version = "unstable"` block was removed. `shopify app config validate --json` →
+  valid. Takes effect on the next `npm run deploy:prod`.
 - ⚠️ The previous run's claim *"No `read_orders` / customer scopes"* is **stale** — the app now
   requests `read_orders`, `read_customers`, `write_customers`. That is PCD **level 2** (B1).
 - `read_all_orders` is **not** requested (req 3.2.1 N/A). `write_payment_mandate`,
@@ -122,8 +127,9 @@
 
 ## 5. Performance — PASS (mechanical) / PENDING-MANUAL (Lighthouse run)
 
-- `npm run widget:size` this run: **chat-widget.js 15.30 KB gzip** (budget 30 KB), CSS 5.53 KB,
-  renderer 12.91 KB and transport 1.60 KB lazy-loaded on first launcher click.
+- `npm run widget:size` (2026-09-14, QA-P1): **chat-widget.js 27.55 KB gzip** (budget 30 KB; the
+  script warns above 27 KB), CSS 10.00 KB, renderer 18.84 KB and transport 1.63 KB lazy-loaded on
+  first launcher click. Headroom is nearly gone — new widget code belongs in the lazy renderer.
 - `<script defer>`, no external CDNs, fixed-position launcher (no CLS by construction).
 - **Manual step**: Lighthouse a storefront page before/after enabling the embed; degradation ≤10 pts.
 
@@ -150,15 +156,16 @@
 - **`boundary.error` / `boundary.headers`** — every `app.*.tsx` exports `headers = boundary.headers`.
   All 17 routes with a UI export `ErrorBoundary`. The 4 without one
   (`app.browse-data.tsx`, `app.inbox-events.tsx`, `app.push-subscription.tsx`, `app.web-handoff.tsx`)
-  are resource routes with no default export, so a thrown response bubbles to `app.tsx`'s boundary.
-  **MINOR** — add for template parity.
+  are resource routes with no default export. **No change needed (2026-09-14, QA-P3):** React Router
+  never renders an `ErrorBoundary` for a module without a UI component — a thrown response is
+  returned as-is to the `fetch`/SSE caller — so exporting one would be dead code.
 - **Form submissions** — `useSubmit`/`useFetcher` everywhere. Three raw `fetch()` calls remain and
   are justified (two SSE streams that a fetcher cannot carry, one `DELETE` that could be a fetcher):
   `app/components/TestAiConsole.tsx:154`, `app/lib/ui/inbox-live.ts:25`, `app/lib/ui/push-client.ts:45,71`.
-- **MINOR** — 4 internal `<s-link href="/app/plan-usage">` do a document navigation inside the
-  iframe instead of a client transition: `app/components/AnalyticsTopQuestions.tsx:89`,
-  `app/routes/app.proactive-chat.tsx:334`, `app/routes/app.curated-answers.tsx:489`,
-  `app/components/ProactiveTemplatePicker.tsx:164`.
+- **CLOSED 2026-09-14 (QA-P3)** — the internal `<s-link href="/app/plan-usage">` links
+  (AnalyticsTopQuestions, curated-answers, ProactiveTemplatePicker; proactive-chat's was already
+  gone) are react-router `Link`s, matching ChatboxGeneral / ChatboxAppearance. The only remaining
+  `s-link href="/app"` is inside `<s-app-nav>` (App Bridge nav, correct).
 - **2.2.6 / 2.2.7** — N/A, no admin UI extensions and no Max modal.
 - **Manual step**: click-through sweep of every admin page for broken links / empty states.
 
@@ -227,7 +234,10 @@ Run: `npx tsx scripts/qa/install-lifecycle.test.ts`.
   `{ id, shopId, sessionId }`, so a leaked id is useless both cross-tenant and cross-shopper.
   `api.test-chat.tsx` goes through `requireShopAccess`. `admin.*` is cross-tenant **by design**
   and every loader *and* action is `requireAdminUser` + same-origin gated.
-- **Header findings — outside this workstream's file territory, listed for the owner:**
+- **Header findings — first three CLOSED (re-verified 2026-09-14, QA-P3, `app/entry.server.tsx`):**
+  `/admin` is in the frame-deny condition, `X-Content-Type-Options: nosniff` is set on every
+  document, and `/app/*` documents send `Cache-Control: no-store`. HSTS and the
+  `x-forwarded-for` edge behaviour remain edge-configuration checks. Original findings:
   - `entry.server.tsx` — `/admin/*` documents can have their `frame-ancestors 'none'`
     **clobbered** by `addDocumentResponseHeaders` when an attacker appends `?shop=evil.myshopify.com`
     (`frame-ancestors` overrides the `X-Frame-Options: DENY` that `admin.tsx:24` sets). Fix: add
@@ -268,9 +278,9 @@ inbox_cart_view | auto_detect_language | exports | csv_import | file_upload`.
 | 2 | Billing | **PASS** (B4 closed) / PENDING-MANUAL (test charges) |
 | 3 | Mandatory compliance webhooks | **PASS** (HMAC 401, <20 ms, real workflows — live-verified) |
 | 4 | Scopes | **GAP B1** (PCD level 2 not requested) / PENDING-MANUAL (listing text) |
-| 5 | Performance | PASS (22.06 KB gzip, budget 30) / PENDING-MANUAL (Lighthouse) |
+| 5 | Performance | PASS (27.55 KB gzip, budget 30 — near the limit) / PENDING-MANUAL (Lighthouse) |
 | 6 | Theme extension | PASS |
-| 7 | UX / embedded correctness | PASS / MINOR (4 internal `s-link`, 4 resource-route boundaries) |
+| 7 | UX / embedded correctness | PASS (internal `s-link`s → `Link` 2026-09-14; resource-route boundaries not applicable) |
 | 8 | Listing | PENDING-MANUAL |
 | 9 | Privacy policy | **PASS** (B5 closed — policy live and verified) |
 | 10 | Install / uninstall lifecycle | **PASS** (104/104 live) — 3 defects found and fixed |

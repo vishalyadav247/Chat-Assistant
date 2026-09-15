@@ -4,10 +4,11 @@ import { getLlmProvider } from "../llm/index.server";
 import { logError } from "../log.server";
 import type { ProductCandidate, ProductVariantInfo } from "../search/product-search.server";
 import { requireShopId } from "../tenancy.server";
+import { SHOWABLE_PRODUCT } from "../search/showable";
 import { DETAIL_CONFIRM_SYSTEM, detailConfirmUser } from "./prompts";
 
 /**
- * Product-detail follow-ups (spec 03 delta, 2026-09-07).
+ * Product-detail follow-ups (spec 03).
  *
  * WHY (production behaviour report): the shopper is shown three bracelets,
  * asks "what is this one made of?", and gets a fresh recommendation — three
@@ -69,9 +70,21 @@ export async function shownProducts(
     }
   }
   if (ids.length === 0) return [];
+  // Full showable contract, not just learnEnabled: a product carded Monday and
+  // archived/unpublished Tuesday must not be re-carded (or answered about as if
+  // live) on Wednesday — its link would 404 (hardening spec 23 §2.3).
+  return candidatesByShopifyIds(shopId, ids.slice(0, DETAIL_CANDIDATES), SHOWABLE_PRODUCT);
+}
 
+/** Catalogue rows → detail candidates, in the order of `ids`. */
+async function candidatesByShopifyIds(
+  shopId: string,
+  ids: string[],
+  extraWhere: Prisma.ProductWhereInput,
+): Promise<ProductCandidate[]> {
+  if (ids.length === 0) return [];
   const products = await db.product.findMany({
-    where: { shopId, shopifyProductId: { in: ids.slice(0, DETAIL_CANDIDATES) }, learnEnabled: true },
+    where: { shopId, shopifyProductId: { in: ids }, ...extraWhere },
     select: {
       id: true,
       shopifyProductId: true,
@@ -151,6 +164,51 @@ export async function isDetailFollowUp(
     logError("detail_confirm_error", error, { shopId });
     return false;
   }
+}
+
+/**
+ * Availability words that make "<product name> …?" a question ABOUT that
+ * product (QA-A4). English only, like DISCOUNT_INTENT_RE — a miss keeps the
+ * routed lane exactly as before, so non-English phrasings lose nothing.
+ */
+export const AVAILABILITY_RE =
+  /\b(in stock|out of stock|sold out|available|availability|restock|back in stock|have (?:it|any|this|that)|any left|still have)\b/i;
+
+/**
+ * Products the shopper NAMES in an availability question (QA-A4, tuning event
+ * 2026-09-14). "is the Mulberry Silk Pillowcase in stock?" went to RAG, which
+ * has no stock data, and the reply invented a notify-me option and suggested
+ * pillowcases that do not exist. The catalogue row has the stock, so the named
+ * product goes to the detail lane instead.
+ *
+ * A product is named when its FULL title appears in the message
+ * (case-insensitive) — no fuzzy matching, so an ordinary product request never
+ * gets diverted. Showable products only; longest titles first so "Merino Wool
+ * Gloves" beats a shorter title it contains. Null when the gate does not apply.
+ */
+export async function namedProductsForAvailability(
+  shopId: string,
+  message: string,
+): Promise<ProductCandidate[] | null> {
+  requireShopId(shopId);
+  if (!AVAILABILITY_RE.test(message)) return null;
+  const rows = await db.$queryRaw<{ shopifyProductId: string }[]>`
+    SELECT "shopifyProductId"
+    FROM "products"
+    WHERE "shopId" = ${shopId}
+      AND "learnEnabled" = true
+      AND "status" = 'active'
+      AND "publishedOnline" = true
+      AND length("title") >= 4
+      AND strpos(lower(${message}), lower("title")) > 0
+    ORDER BY length("title") DESC
+    LIMIT ${DETAIL_CANDIDATES}`;
+  if (rows.length === 0) return null;
+  return candidatesByShopifyIds(
+    shopId,
+    rows.map((r) => r.shopifyProductId),
+    SHOWABLE_PRODUCT,
+  );
 }
 
 /** What the model is allowed to say about each shown product. */

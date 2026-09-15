@@ -6,19 +6,17 @@ import db from "../db.server";
 import type { Prisma } from "@prisma/client";
 import {
   getQuota,
-  hasFeature,
   nextPlanNameForQuota,
-  requiredPlanName,
-  requirePlan,
   PlanGateError,
 } from "../lib/billing/plans.server";
 import { bonusQuota } from "../lib/billing/quota-grants.server";
 import { loadShopSettings } from "../lib/settings/save.server";
 import { shopSettingsSchema } from "../lib/settings/schemas";
 import { invalidateShopConfig } from "../lib/config/shop-config.server";
-import { enqueue } from "../lib/jobs/queue.server";
+import { enqueue, enqueueSync } from "../lib/jobs/queue.server";
 import { JOBS } from "../lib/jobs/handlers.server";
 import { KNOWLEDGE_INGEST_JOB } from "../lib/ingestion/knowledge-jobs.server";
+import { rebuildContentBridge } from "../lib/ingestion/content-sync.server";
 import {
   isSupportedMetafieldType,
   listMetafieldDefinitions,
@@ -28,18 +26,14 @@ import {
   type MetafieldDefinitionRow,
 } from "../lib/ingestion/metafields.server";
 import {
-  approveSuggested,
+  convertLegacyPagesSources,
   createSource,
   deleteSource,
-  dismissSuggested,
-  fetchPageCandidates,
+  fetchShopPolicies,
   listSources,
-  listSuggested,
-  parseCsvContent,
   QuotaError,
   resyncSource,
   urlSourceSchema,
-  CSV_ROW_CAP,
 } from "../lib/ingestion/sources.server";
 import {
   deleteCategory,
@@ -61,17 +55,26 @@ import { FaqManager } from "../components/FaqManager";
 import { PageHeader } from "../components/ui/PageHeader";
 import { TrainingProductsTab } from "../components/TrainingProductsTab";
 import { TrainingCollectionsTab } from "../components/TrainingCollectionsTab";
+import { TrainingContentTab } from "../components/TrainingContentTab";
 import { TrainingDiscountsTab } from "../components/TrainingDiscountsTab";
 import { TrainingKnowledgeTab } from "../components/TrainingKnowledgeTab";
 import { requireShopAccess } from "../lib/access.server";
 import { routeError } from "../lib/ui/route-error";
 import { APP_NAME } from "./app";
 
-// Training data (spec 07, design ai-agent.html #viewTraining): five tabs via
-// ?tab= — Products / Collections / Discounts / FAQs / Custom knowledge.
+// Training data (spec 07, design ai-agent.html #viewTraining): seven tabs via
+// ?tab= — Products / Collections / Pages / Blogs (spec 22) / Discounts / FAQs /
+// Custom knowledge.
 // All reads and writes are shop-scoped via resolveShopId(shopDomain).
 
-export type TrainingTab = "products" | "collections" | "discounts" | "faqs" | "knowledge";
+export type TrainingTab =
+  | "products"
+  | "collections"
+  | "pages"
+  | "blogs"
+  | "discounts"
+  | "faqs"
+  | "knowledge";
 
 export interface ProductRow {
   id: string;
@@ -92,6 +95,28 @@ export interface CollectionRow {
   learnEnabled: boolean;
 }
 
+/** Pages tab (spec 22). Full bodies stay server-side — the table needs an excerpt. */
+export interface PageRow {
+  id: string;
+  title: string;
+  handle: string;
+  excerpt: string;
+  isPublished: boolean;
+  updatedAt: string | null;
+  learnEnabled: boolean;
+}
+
+/** Blogs tab (spec 22). */
+export interface ArticleRow extends PageRow {
+  blogTitle: string;
+  author: string;
+  tags: string[];
+}
+
+const EXCERPT_CHARS = 140;
+const excerpt = (text: string) =>
+  text.length > EXCERPT_CHARS ? `${text.slice(0, EXCERPT_CHARS).trimEnd()}…` : text;
+
 export interface DiscountRow {
   id: string;
   title: string;
@@ -108,21 +133,21 @@ export interface DiscountRow {
 
 export interface SourceRow {
   id: string;
-  type: string; // url | manual | csv | file | pages
+  // url | file | pages — plus legacy manual/csv rows (creation retired
+  // with the FAQ consolidation; old rows stay listed and deletable).
+  type: string;
   name: string;
   url: string | null;
-  crawlScope: string;
   reCrawlWeekly: boolean;
   status: string; // pending | active | inactive | error
   chunkCount: number;
   lastSyncedAt: string | null;
   error: string | null;
-  // Flattened metadata for the type-specific edit modals:
-  question: string;
-  synonyms: string[];
-  answer: string;
-  csvText: string;
-  pagesCount: number;
+  /** Secondary line in Manage sources: the URL, the uploaded filename, or the
+   *  policy's storefront URL. */
+  detail: string | null;
+  /** A connected policy that was deleted/emptied in Shopify. */
+  removedInShopify: boolean;
 }
 
 export interface Meter {
@@ -147,7 +172,6 @@ export interface ProductDetail {
 export interface PoliciesPayload {
   candidates: { type: string; title: string; url: string; kind: "policy" | "page" }[];
   selectedTypes: string[];
-  quota: number;
 }
 
 export interface TrainingActionResult {
@@ -165,13 +189,14 @@ export interface TrainingActionResult {
   skipped?: number;
 }
 
-const csvEscape = (value: string) =>
-  /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
-
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { shopId, shopDomain } = await requireShopAccess(request, { permission: "ai_agent" });
+  // One-time, idempotent: a legacy combined "policies & pages" row becomes one
+  // row per policy BEFORE the sources are listed, so Manage sources never shows
+  // it. A no-op query once a shop has none.
+  await convertLegacyPagesSources(shopId);
 
-  const [shop, products, collections, discounts, syncState, faqTree, sources, suggested, shopSettings, metafieldRows] =
+  const [shop, products, collections, discounts, syncState, faqTree, sources, shopSettings, metafieldRows] =
     await Promise.all([
       db.shop.findUnique({
         where: { id: shopId },
@@ -222,12 +247,47 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       db.syncState.findUnique({ where: { shopId } }),
       listFaqTree(shopId),
       listSources(shopId),
-      listSuggested(shopId),
       loadShopSettings(shopId),
       listMetafieldDefinitions(shopId),
     ]);
 
   const plan = shop?.plan ?? "free";
+  // Spec 22 — Pages & Blogs tabs, plus their live bonus grants so the meters
+  // show what the sync actually enforces (plan cap + bonus).
+  const [pages, articles, pageBonus, articleBonus] = await Promise.all([
+    db.storePage.findMany({
+      where: { shopId },
+      orderBy: [{ isPublished: "desc" }, { title: "asc" }],
+      select: {
+        id: true,
+        title: true,
+        handle: true,
+        bodyText: true,
+        isPublished: true,
+        shopifyUpdatedAt: true,
+        learnEnabled: true,
+      },
+    }),
+    db.blogArticle.findMany({
+      where: { shopId },
+      orderBy: [{ isPublished: "desc" }, { shopifyUpdatedAt: "desc" }],
+      select: {
+        id: true,
+        title: true,
+        handle: true,
+        bodyText: true,
+        summary: true,
+        isPublished: true,
+        shopifyUpdatedAt: true,
+        learnEnabled: true,
+        blogTitle: true,
+        author: true,
+        tags: true,
+      },
+    }),
+    bonusQuota(shopId, "pages_synced"),
+    bonusQuota(shopId, "articles_synced"),
+  ]);
   const productBonus = await bonusQuota(shopId, "products_synced");
   // The FAQ bridge source (type=faq, spec 04) is managed from the FAQs tab —
   // hide it from the Custom knowledge table so it can't be deleted by accident.
@@ -235,57 +295,38 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const meta = (s: (typeof sources)[number]) =>
     (s.metadata ?? {}) as {
-      question?: unknown;
-      synonyms?: unknown;
-      answer?: unknown;
-      rows?: unknown;
       pages?: unknown;
       pagesUsed?: unknown;
       error?: unknown;
+      filename?: unknown;
+      removedInShopify?: unknown;
     };
 
-  const sourceRows: SourceRow[] = knowledgeSources.map((s) => {
-    const m = meta(s);
-    const rows = Array.isArray(m.rows)
-      ? (m.rows as { question?: unknown; answer?: unknown }[])
-      : [];
-    return {
-      id: s.id,
-      type: s.type,
-      name: s.name,
-      url: s.url,
-      crawlScope: s.crawlScope ?? "page",
-      reCrawlWeekly: s.reCrawlWeekly,
-      status: s.status,
-      chunkCount: s.chunkCount,
-      lastSyncedAt: s.lastSyncedAt ? s.lastSyncedAt.toISOString() : null,
-      error: typeof m.error === "string" ? m.error : null,
-      question: typeof m.question === "string" ? m.question : "",
-      synonyms: Array.isArray(m.synonyms)
-        ? (m.synonyms as unknown[]).filter((x): x is string => typeof x === "string")
-        : [],
-      answer: typeof m.answer === "string" ? m.answer : "",
-      csvText: rows
-        .map((r) =>
-          [String(r.question ?? ""), String(r.answer ?? "")].map(csvEscape).join(","),
-        )
-        .join("\n"),
-      pagesCount: Array.isArray(m.pages) ? m.pages.length : 0,
-    };
-  });
+  const sourceRows: SourceRow[] = knowledgeSources.map((s) => ({
+    id: s.id,
+    type: s.type,
+    name: s.name,
+    url: s.url,
+    reCrawlWeekly: s.reCrawlWeekly,
+    status: s.status,
+    chunkCount: s.chunkCount,
+    lastSyncedAt: s.lastSyncedAt ? s.lastSyncedAt.toISOString() : null,
+    error: typeof meta(s).error === "string" ? (meta(s).error as string) : null,
+    detail:
+      s.type === "file"
+        ? typeof meta(s).filename === "string" && meta(s).filename !== s.name
+          ? (meta(s).filename as string)
+          : null
+        : s.url && s.url !== s.name
+          ? s.url
+          : null,
+    removedInShopify: meta(s).removedInShopify === true,
+  }));
 
-  const crawlUsed = knowledgeSources
-    .filter((s) => s.type === "url")
-    .reduce((sum, s) => {
-      const used = meta(s).pagesUsed;
-      return sum + (typeof used === "number" ? used : 0);
-    }, 0);
-  const pagesUsed = knowledgeSources
-    .filter((s) => s.type === "pages")
-    .reduce((sum, s) => {
-      const pages = meta(s).pages;
-      return sum + (Array.isArray(pages) ? pages.length : 0);
-    }, 0);
+  // Both limits count SOURCES — each URL source is one page
+  // and each policy is its own source — matching what creation enforces.
+  const crawlUsed = knowledgeSources.filter((s) => s.type === "url").length;
+  const pagesUsed = knowledgeSources.filter((s) => s.type === "policy").length;
 
   return {
     shop: {
@@ -305,6 +346,31 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       lastSyncedAt: syncState?.metafieldSyncAt?.toISOString() ?? null,
     },
     collections: collections as CollectionRow[],
+    pages: pages.map(
+      (p): PageRow => ({
+        id: p.id,
+        title: p.title,
+        handle: p.handle,
+        excerpt: excerpt(p.bodyText),
+        isPublished: p.isPublished,
+        updatedAt: p.shopifyUpdatedAt?.toISOString() ?? null,
+        learnEnabled: p.learnEnabled,
+      }),
+    ),
+    articles: articles.map(
+      (a): ArticleRow => ({
+        id: a.id,
+        title: a.title,
+        handle: a.handle,
+        excerpt: excerpt(a.summary || a.bodyText),
+        isPublished: a.isPublished,
+        updatedAt: a.shopifyUpdatedAt?.toISOString() ?? null,
+        learnEnabled: a.learnEnabled,
+        blogTitle: a.blogTitle,
+        author: a.author,
+        tags: a.tags,
+      }),
+    ),
     discounts: discounts.map((d) => ({
       ...d,
       startsAt: d.startsAt ? d.startsAt.toISOString() : null,
@@ -314,61 +380,36 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       productSyncAt: syncState?.productSyncAt?.toISOString() ?? null,
       collectionSyncAt: syncState?.collectionSyncAt?.toISOString() ?? null,
       discountSyncAt: syncState?.discountSyncAt?.toISOString() ?? null,
+      pageSyncAt: syncState?.pageSyncAt?.toISOString() ?? null,
+      articleSyncAt: syncState?.articleSyncAt?.toISOString() ?? null,
       status: syncState?.status ?? "idle",
     },
     faqTree: faqTree satisfies FaqCategoryData[],
+    // FAQ plan cap (faqs quota) — the FAQs tab meter + Add gate.
+    // Enforced server-side in saveFaq/importFaqCsv; this is the display copy.
+    faqQuota: {
+      used: faqTree.reduce((sum, c) => sum + c.faqs.length, 0),
+      quota: getQuota(plan, "faqs"),
+      nextPlan: nextPlanNameForQuota(plan, "faqs"),
+    },
     knowledge: {
       sources: sourceRows,
-      suggested: suggested.map((s) => ({
-        id: s.id,
-        question: s.question,
-        answer: s.answer,
-        createdAt: s.createdAt.toISOString(),
-      })),
       chunkTotal: knowledgeSources.reduce((sum, s) => sum + s.chunkCount, 0),
-      csvRowCap: CSV_ROW_CAP,
       quotas: {
         crawlPages: { used: crawlUsed, quota: getQuota(plan, "crawl_pages") },
-        manualQas: {
-          used: knowledgeSources.filter((s) => s.type === "manual").length,
-          quota: getQuota(plan, "manual_qas"),
-        },
         fileUploads: {
           used: knowledgeSources.filter((s) => s.type === "file").length,
           quota: getQuota(plan, "file_uploads"),
         },
-        policyPages: { used: pagesUsed, quota: getQuota(plan, "policy_pages") },
       },
-    },
-    // Plan gate (spec 15) — in open enforcement mode hasFeature() passes for
-    // every plan, so the banner stays hidden; the condition ships regardless.
-    discountGate: {
-      showBanner: !hasFeature(plan, "discount_realtime_sync"),
-      realtime: hasFeature(plan, "discount_realtime_sync"),
-      // Tier that unlocks it, straight from the live matrix — the tab used to
-      // say "Pro/Plus" in three places, which an operator edit would falsify.
-      realtimePlan: hasFeature(plan, "discount_realtime_sync")
-        ? null
-        : requiredPlanName("discount_realtime_sync"),
-      realtimeEnabled: shopSettings.discountRealtime,
-    },
-    // Catalog auto sync (Products / Collections tabs, 2026-08-17): same shape —
-    // plan feature availability + the merchant's per-type toggle.
-    catalogGate: {
-      available: hasFeature(plan, "catalog_auto_sync"),
-      availablePlan: hasFeature(plan, "catalog_auto_sync")
-        ? null
-        : requiredPlanName("catalog_auto_sync"),
-      products: shopSettings.catalogAutoSync.products,
-      collections: shopSettings.catalogAutoSync.collections,
+      // No policy limit — just how many are connected.
+      connectedPolicies: pagesUsed,
     },
     // Master training permissions (spec 07) — the Learn card switches.
     learnMaster: shopSettings.learn,
     // Plan signals (spec 15). Names come from the LIVE matrix so a feature the
     // operator moves between tiers relabels everywhere at once.
     planSignals: {
-      csvImport: hasFeature(plan, "csv_import") ? null : requiredPlanName("csv_import"),
-      fileUpload: hasFeature(plan, "file_upload") ? null : requiredPlanName("file_upload"),
       productsSynced: {
         used: products.length,
         // Plan cap PLUS any live bonus grant, matching what catalog-sync.server
@@ -380,11 +421,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         bonus: productBonus,
         nextPlan: nextPlanNameForQuota(plan, "products_synced"),
       },
+      // Same shape and rule as productsSynced (spec 22).
+      pagesSynced: {
+        used: pages.length,
+        quota: getQuota(plan, "pages_synced") + pageBonus,
+        bonus: pageBonus,
+        nextPlan: nextPlanNameForQuota(plan, "pages_synced"),
+      },
+      articlesSynced: {
+        used: articles.length,
+        quota: getQuota(plan, "articles_synced") + articleBonus,
+        bonus: articleBonus,
+        nextPlan: nextPlanNameForQuota(plan, "articles_synced"),
+      },
       metafieldsNext: nextPlanNameForQuota(plan, "metafields_enabled"),
       fileUploadsNext: nextPlanNameForQuota(plan, "file_uploads"),
-      manualQasNext: nextPlanNameForQuota(plan, "manual_qas"),
       crawlPagesNext: nextPlanNameForQuota(plan, "crawl_pages"),
-      policyPagesNext: nextPlanNameForQuota(plan, "policy_pages"),
     },
   };
 };
@@ -393,30 +445,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 const statusEnum = z.enum(["active", "inactive"]);
 
-const manualPayloadSchema = z.object({
-  question: z.string().trim().min(1).max(500),
-  synonyms: z.array(z.string().trim().min(1).max(200)).max(20).default([]),
-  answer: z.string().trim().min(1).max(10_000),
-  status: statusEnum.default("active"),
-  unresolvedId: z.string().optional(),
-});
-
 const urlPayloadSchema = z.object({
   // Same shape check as createSource's urlSourceSchema — editing a source used
   // to accept a schemeless/ftp URL that then failed in the job (QA D10).
   url: urlSourceSchema.shape.url,
-  crawlScope: z.enum(["page", "linked", "sitemap"]).default("page"),
   reCrawlWeekly: z.boolean().default(false),
   status: statusEnum.default("active"),
 });
 
-const csvPayloadSchema = z.object({
-  csvText: z.string().min(1).max(1024 * 1024),
-  name: z.string().trim().max(200).optional(),
-});
-
 const filePayloadSchema = z.object({
   name: z.string().trim().min(1).max(200),
+  /** Required — says what the file is, in Manage sources. */
+  title: z.string().trim().min(1, "Give the file a title").max(200),
   mime: z.string().trim().max(200).default(""),
   dataBase64: z.string().min(1),
 });
@@ -447,6 +487,30 @@ async function productDetailMetafields(
     .sort((a, b) => Number(b.enabled) - Number(a.enabled) || a.label.localeCompare(b.label));
 }
 
+/**
+ * Policy types this shop has connected — its `policy` sources, plus the
+ * policies inside a LEGACY combined `pages` source (store pages there are
+ * dropped: they live on the Pages tab now). Showing the legacy ones as connected
+ * means the first save converts them instead of silently disconnecting them.
+ */
+async function connectedPolicyTypes(shopId: string): Promise<string[]> {
+  const sources = await db.dataSource.findMany({
+    where: { shopId, type: { in: ["policy", "pages"] } },
+    select: { type: true, metadata: true },
+  });
+  const out = new Set<string>();
+  for (const source of sources) {
+    const meta = (source.metadata ?? {}) as { policyType?: unknown; policyTypes?: unknown };
+    if (source.type === "policy" && typeof meta.policyType === "string") out.add(meta.policyType);
+    if (source.type === "pages" && Array.isArray(meta.policyTypes)) {
+      for (const t of meta.policyTypes) {
+        if (typeof t === "string" && !t.startsWith("gid://shopify/Page/")) out.add(t);
+      }
+    }
+  }
+  return [...out];
+}
+
 function friendlyError(error: unknown): string {
   if (error instanceof QuotaError) {
     return `Plan limit reached: ${error.used} of ${error.limit} ${error.dimension.replace(/_/g, " ")} used. Upgrade to add more.`;
@@ -473,11 +537,17 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
     switch (intent) {
       // ── Catalog sync + learn toggles ────────────────────────────────────
       case "sync-products":
-        await enqueue(JOBS.catalogSync, { shopDomain });
+        await enqueueSync(JOBS.catalogSync, shopDomain);
         return { intent, ok: true, message: "Product sync started" };
       case "sync-collections":
-        await enqueue(JOBS.collectionSync, { shopDomain });
+        await enqueueSync(JOBS.collectionSync, shopDomain);
         return { intent, ok: true, message: "Collection sync started" };
+      case "sync-pages":
+        await enqueueSync(JOBS.pageSync, shopDomain);
+        return { intent, ok: true, message: "Page sync started" };
+      case "sync-blogs":
+        await enqueueSync(JOBS.articleSync, shopDomain);
+        return { intent, ok: true, message: "Blog sync started" };
 
       // ── Manage metafields (spec 07) ─────────────────────────────────────
       // Definitions + "used in" counts refresh inline (one Admin call + one
@@ -500,7 +570,7 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
         if (!row) return { intent, ok: false, error: "Metafield not found" };
         if (enabled) {
           if (!isSupportedMetafieldType(row.type)) {
-            return { intent, ok: false, error: "This metafield type isn't supported yet" };
+            return { intent, ok: false, error: "This metafield type isn't supported" };
           }
           // Plan cap on enabled metafields — server-side (open enforcement → unlimited).
           const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
@@ -526,62 +596,19 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
         };
       }
       case "sync-discounts":
-        await enqueue(JOBS.discountSync, { shopDomain });
+        await enqueueSync(JOBS.discountSync, shopDomain);
         return { intent, ok: true, message: "Discount sync started" };
-      case "discount-realtime": {
-        const enabled = str("enabled") === "true";
-        requirePlan(
-          (await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } }))?.plan ??
-            "free",
-          "discount_realtime_sync",
-        );
-        const current = await loadShopSettings(shopId);
-        const validated = shopSettingsSchema.parse({ ...current, discountRealtime: enabled });
-        await db.shopSettings.upsert({
-          where: { shopId },
-          update: { settings: validated as unknown as Prisma.InputJsonObject },
-          create: { shopId, settings: validated as unknown as Prisma.InputJsonObject },
-        });
-        invalidateShopConfig(shopId);
-        return {
-          intent,
-          ok: true,
-          message: enabled ? "Real-time discount sync on" : "Real-time discount sync off",
-        };
-      }
-      case "catalog-autosync": {
-        // Auto sync toggle per data type (daily full re-sync only; webhooks unaffected).
-        const type = str("type");
-        if (type !== "products" && type !== "collections")
-          return { intent, ok: false, error: "Unknown sync type" };
-        const enabled = str("enabled") === "true";
-        requirePlan(
-          (await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } }))?.plan ??
-            "free",
-          "catalog_auto_sync",
-        );
-        const current = await loadShopSettings(shopId);
-        const validated = shopSettingsSchema.parse({
-          ...current,
-          catalogAutoSync: { ...current.catalogAutoSync, [type]: enabled },
-        });
-        await db.shopSettings.upsert({
-          where: { shopId },
-          update: { settings: validated as unknown as Prisma.InputJsonObject },
-          create: { shopId, settings: validated as unknown as Prisma.InputJsonObject },
-        });
-        invalidateShopConfig(shopId);
-        return {
-          intent,
-          ok: true,
-          message: enabled ? `Auto sync for ${type} on` : `Auto sync for ${type} off`,
-        };
-      }
       case "learn-master": {
-        // Master training permission per data type (spec 07, user decision
-        // 2026-08-12): shop-level gate independent of per-row learnEnabled.
+        // Master training permission per data type (spec 07):
+        // shop-level gate independent of per-row learnEnabled.
         const type = str("type");
-        if (type !== "products" && type !== "collections" && type !== "discounts")
+        if (
+          type !== "products" &&
+          type !== "collections" &&
+          type !== "discounts" &&
+          type !== "pages" &&
+          type !== "blogs"
+        )
           return { intent, ok: false, error: "Unknown learn type" };
         const enabled = str("enabled") === "true";
         const current = await loadShopSettings(shopId);
@@ -595,6 +622,10 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
           create: { shopId, settings: validated as unknown as Prisma.InputJsonObject },
         });
         invalidateShopConfig(shopId);
+        // Pages/Blogs reach the agent through their knowledge bridge (spec 22),
+        // so the master switch only takes effect once the bridge is rebuilt —
+        // off empties it, on refills it from the learnEnabled rows.
+        if (type === "pages" || type === "blogs") await rebuildContentBridge(shopId, type);
         return {
           intent,
           ok: true,
@@ -602,7 +633,7 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
         };
       }
       case "discounts-learn": {
-        // Bulk/per-row AI flag (app-only per user decision 2026-08-12 — never
+        // Bulk/per-row AI flag (app-only — never
         // mutates the discount in Shopify). Affects activeDiscountContext.
         const ids = str("ids").split(",").filter(Boolean);
         const enabled = str("enabled") === "true";
@@ -624,7 +655,13 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
           where: { id: str("id"), shopId },
           data: { learnEnabled: str("enabled") === "true" },
         });
-        return { intent, ok: true };
+        // The toast IS the confirmation for row toggles (user, 2026-09-11 —
+        // only the master switch goes through Save/Discard).
+        return {
+          intent,
+          ok: true,
+          message: `Learning ${str("enabled") === "true" ? "enabled" : "disabled"} for this product`,
+        };
       case "products-learn": {
         // Bulk learn toggle from table row selection (spec 07).
         const ids = str("ids").split(",").filter(Boolean);
@@ -645,7 +682,11 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
           where: { id: str("id"), shopId },
           data: { learnEnabled: str("enabled") === "true" },
         });
-        return { intent, ok: true };
+        return {
+          intent,
+          ok: true,
+          message: `Learning ${str("enabled") === "true" ? "enabled" : "disabled"} for this collection`,
+        };
       case "collections-learn": {
         // Bulk learn toggle from table row selection (spec 07).
         const ids = str("ids").split(",").filter(Boolean);
@@ -659,6 +700,39 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
           intent,
           ok: true,
           message: `Learning ${enabled ? "enabled" : "disabled"} for ${ids.length} collection${ids.length === 1 ? "" : "s"}`,
+        };
+      }
+
+      // ── Pages & Blogs (spec 22) ─────────────────────────────────────────
+      // Single-row and bulk share one path: ids is a comma list either way.
+      // The flag alone changes nothing the agent reads — the bridge rebuild
+      // does, so it is enqueued in the same request (never awaited inline:
+      // a toggle click must not wait on embedding).
+      case "page-learn":
+      case "pages-learn":
+      case "article-learn":
+      case "articles-learn": {
+        const kind = intent.startsWith("page") ? "pages" : "blogs";
+        const ids = (str("ids") || str("id")).split(",").filter(Boolean);
+        const enabled = str("enabled") === "true";
+        if (ids.length === 0) return { intent, ok: false, error: "Nothing selected" };
+        const where = { id: { in: ids }, shopId };
+        if (kind === "pages") {
+          await db.storePage.updateMany({ where, data: { learnEnabled: enabled } });
+        } else {
+          await db.blogArticle.updateMany({ where, data: { learnEnabled: enabled } });
+        }
+        await rebuildContentBridge(shopId, kind);
+        const noun = kind === "pages" ? "page" : "article";
+        // Single-row toggles toast too (user, 2026-09-11) — the notification
+        // is their confirmation, since only the master switch has Save/Discard.
+        return {
+          intent,
+          ok: true,
+          message:
+            ids.length === 1 && !intent.endsWith("s-learn")
+              ? `Learning ${enabled ? "enabled" : "disabled"} for this ${noun}`
+              : `Learning ${enabled ? "enabled" : "disabled"} for ${ids.length} ${noun}${ids.length === 1 ? "" : "s"}`,
         };
       }
 
@@ -705,6 +779,7 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
           status: "published" | "draft";
           categoryId: string;
           featured: boolean;
+          position?: number;
           unresolvedId?: string;
         }>("payload");
         if (!payload.question?.trim()) {
@@ -745,7 +820,8 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
         await moveFaq(shopId, str("id"), str("direction") === "up" ? "up" : "down");
         return { intent, ok: true };
       case "faq-place":
-        await placeFaq(shopId, str("id"), str("categoryId"), Number(str("position")) || 0);
+        // 0-based slot in the shop's GLOBAL widget order.
+        await placeFaq(shopId, str("id"), Number(str("position")) || 0);
         return { intent, ok: true };
       case "category-save":
         await saveCategory(shopId, json("payload"));
@@ -804,52 +880,41 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
 
       // ── Custom knowledge sources ────────────────────────────────────────
       case "source-add-url": {
-        const payload = urlPayloadSchema.parse(json("payload"));
-        await createSource(shopId, { type: "url", ...payload });
-        return { intent, ok: true, message: "Source added — crawling in the background" };
-      }
-      case "source-add-manual": {
-        const payload = manualPayloadSchema.parse(json("payload"));
-        await createSource(shopId, {
-          type: "manual",
-          question: payload.question,
-          synonyms: payload.synonyms,
-          answer: payload.answer,
-          status: payload.status,
-        });
-        if (payload.unresolvedId) {
-          await db.unresolvedQuestion.updateMany({
-            where: { id: payload.unresolvedId, shopId },
-            data: { status: "handled" },
+        // Several URLs at once — each becomes its own source row.
+        const payload = z
+          .object({
+            urls: z.array(urlSourceSchema.shape.url).min(1, "Add at least one URL").max(50),
+            reCrawlWeekly: z.boolean().default(false),
+            status: statusEnum.default("active"),
+          })
+          .parse(json("payload"));
+        const existing = new Set(
+          (await db.dataSource.findMany({ where: { shopId, type: "url" }, select: { url: true } })).map(
+            (s) => s.url,
+          ),
+        );
+        const fresh = [...new Set(payload.urls)].filter((url) => !existing.has(url));
+        if (fresh.length === 0) return { intent, ok: false, error: "Those URLs are already added" };
+        // Check the whole batch against the limit BEFORE creating any, so a
+        // batch that does not fit adds nothing rather than a confusing part.
+        const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
+        const limit = getQuota(shop?.plan ?? "free", "crawl_pages");
+        if (existing.size + fresh.length > limit) {
+          throw new QuotaError("crawl_pages", existing.size + fresh.length, limit);
+        }
+        for (const url of fresh) {
+          await createSource(shopId, {
+            type: "url",
+            url,
+            reCrawlWeekly: payload.reCrawlWeekly,
+            status: payload.status,
           });
         }
-        return { intent, ok: true, message: "Q&A added" };
-      }
-      case "source-add-csv": {
-        const payload = csvPayloadSchema.parse(json("payload"));
-        const parsed = parseCsvContent(payload.csvText);
-        if (parsed.rows.length === 0) {
-          return {
-            intent,
-            ok: false,
-            error:
-              parsed.badRows.length > 0
-                ? `No valid rows — first issue: line ${parsed.badRows[0].line} (${parsed.badRows[0].reason})`
-                : "Paste or upload question,answer rows first",
-          };
-        }
-        const name =
-          payload.name?.trim() ||
-          `${parsed.rows[0].question}${parsed.rows.length > 1 ? ` (+${parsed.rows.length - 1} more)` : ""}`;
-        await createSource(shopId, { type: "csv", name: name.slice(0, 200), rows: parsed.rows });
+        const skipped = payload.urls.length - fresh.length;
         return {
           intent,
           ok: true,
-          imported: parsed.rows.length,
-          skipped: parsed.badRows.length,
-          message: `Added ${parsed.rows.length} Q&A row${parsed.rows.length === 1 ? "" : "s"}${
-            parsed.badRows.length > 0 ? ` · ${parsed.badRows.length} row(s) skipped` : ""
-          }`,
+          message: `${fresh.length} URL${fresh.length === 1 ? "" : "s"} added — reading in the background${skipped > 0 ? ` (${skipped} already added)` : ""}`,
         };
       }
       case "source-add-file": {
@@ -858,6 +923,7 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
         const source = await createSource(shopId, {
           type: "file",
           name: payload.name,
+          title: payload.title,
           mime: payload.mime,
           bytes,
         });
@@ -874,51 +940,12 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
         const source = await db.dataSource.findFirst({ where: { id, shopId } });
         if (!source) return { intent, ok: false, error: "Source not found" };
         const oldMeta = { ...((source.metadata ?? {}) as Record<string, unknown>) };
-        if (source.type === "manual") {
-          const payload = manualPayloadSchema.parse(json("payload"));
-          await db.dataSource.updateMany({
-            where: { id, shopId },
-            data: {
-              name: payload.question,
-              status: "pending",
-              metadata: {
-                ...oldMeta,
-                question: payload.question,
-                synonyms: payload.synonyms,
-                answer: payload.answer,
-                desiredStatus: payload.status,
-              },
-            },
-          });
-          await enqueue(KNOWLEDGE_INGEST_JOB, { shopDomain, sourceId: id });
-          return { intent, ok: true, message: "Q&A updated" };
-        }
-        if (source.type === "csv") {
-          const payload = csvPayloadSchema.parse(json("payload"));
-          const parsed = parseCsvContent(payload.csvText);
-          if (parsed.rows.length === 0) {
-            return { intent, ok: false, error: "No valid question,answer rows" };
-          }
-          await db.dataSource.updateMany({
-            where: { id, shopId },
-            data: { status: "pending", metadata: { ...oldMeta, rows: parsed.rows } },
-          });
-          await enqueue(KNOWLEDGE_INGEST_JOB, { shopDomain, sourceId: id });
-          return {
-            intent,
-            ok: true,
-            imported: parsed.rows.length,
-            skipped: parsed.badRows.length,
-            message: "CSV content updated — re-indexing",
-          };
-        }
         if (source.type === "url") {
           const payload = urlPayloadSchema.parse(json("payload"));
           await db.dataSource.updateMany({
             where: { id, shopId },
             data: {
               url: payload.url,
-              crawlScope: payload.crawlScope,
               reCrawlWeekly: payload.reCrawlWeekly,
               name: source.name === source.url ? payload.url : source.name,
               status: "pending",
@@ -958,75 +985,59 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
           ? { intent, ok: true, message: "Source deleted" }
           : { intent, ok: false, error: "Source not found" };
       }
-      case "suggested-approve":
-        await approveSuggested(shopId, str("id"));
-        return { intent, ok: true, message: "Q&A approved and added" };
-      case "suggested-dismiss":
-        await dismissSuggested(shopId, str("id"));
-        return { intent, ok: true, message: "Suggestion dismissed" };
-
       // ── Policies connector ──────────────────────────────────────────────
       case "policies-list": {
-        const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
-        const candidates = await fetchPageCandidates(shopDomain);
-        const existing = await db.dataSource.findFirst({ where: { shopId, type: "pages" } });
-        const existingTypes = (existing?.metadata as { policyTypes?: unknown } | null)
-          ?.policyTypes;
+        // Policies only: store pages moved to the Pages tab.
+        const candidates = await fetchShopPolicies(shopDomain);
         return {
           intent,
           ok: true,
           policies: {
-            candidates: candidates.map((c) => ({
-              type: c.type,
-              title: c.title,
-              url: c.url,
-              kind: c.kind,
-            })),
-            selectedTypes: Array.isArray(existingTypes)
-              ? existingTypes.filter((t): t is string => typeof t === "string")
-              : [],
-            quota: getQuota(shop?.plan ?? "free", "policy_pages"),
+            candidates: candidates.map((c) => ({ type: c.type, title: c.title, url: c.url, kind: c.kind })),
+            selectedTypes: await connectedPolicyTypes(shopId),
           },
         };
       }
       case "policies-save": {
-        const { types } = z
-          .object({ types: z.array(z.string()).max(50) })
-          .parse(json("payload"));
-        const existing = await db.dataSource.findFirst({ where: { shopId, type: "pages" } });
-        if (types.length === 0) {
-          if (existing) await deleteSource(shopId, existing.id);
-          return { intent, ok: true, message: "Pages disconnected" };
+        // The FULL selection, diffed against what is connected: one `policy`
+        // source per policy, so each lists and deletes separately.
+        const { types } = z.object({ types: z.array(z.string()).max(50) }).parse(json("payload"));
+        const wanted = new Set(types);
+        const current = await db.dataSource.findMany({
+          where: { shopId, type: "policy" },
+          select: { id: true, metadata: true },
+        });
+        const typeOf = (m: unknown) => ((m ?? {}) as { policyType?: unknown }).policyType;
+        const have = new Set(current.map((c) => typeOf(c.metadata)).filter((t): t is string => typeof t === "string"));
+        for (const source of current) {
+          const type = typeOf(source.metadata);
+          if (typeof type !== "string" || !wanted.has(type)) await deleteSource(shopId, source.id);
         }
-        const candidates = await fetchPageCandidates(shopDomain);
-        const pages = candidates
-          .filter((c) => types.includes(c.type))
-          .map((c) => ({ title: c.title, url: c.url, body: c.body }));
-        if (pages.length === 0) return { intent, ok: false, error: "No matching pages found" };
-        if (existing) {
-          const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
-          const limit = getQuota(shop?.plan ?? "free", "policy_pages");
-          if (pages.length > limit) throw new QuotaError("policy_pages", pages.length, limit);
-          const oldMeta = { ...((existing.metadata ?? {}) as Record<string, unknown>) };
-          await db.dataSource.updateMany({
-            where: { id: existing.id, shopId },
-            data: {
-              status: "pending",
-              metadata: { ...oldMeta, pages, policyTypes: types },
-            },
-          });
-          await enqueue(KNOWLEDGE_INGEST_JOB, { shopDomain, sourceId: existing.id });
-        } else {
-          const source = await createSource(shopId, { type: "pages", pages });
-          await db.dataSource.updateMany({
-            where: { id: source.id, shopId },
-            data: { metadata: { pages, policyTypes: types } },
-          });
+        const toAdd = types.filter((t) => !have.has(t));
+        if (toAdd.length > 0) {
+          const candidates = await fetchShopPolicies(shopDomain);
+          for (const type of toAdd) {
+            const policy = candidates.find((c) => c.type === type);
+            if (!policy) continue; // gone from Shopify since the list was opened
+            await createSource(shopId, {
+              type: "policy",
+              policyType: policy.type,
+              title: policy.title,
+              url: policy.url,
+              body: policy.body,
+            });
+          }
         }
+        // Converting a LEGACY combined "policies & pages" source: its policies
+        // were pre-selected in the list (connectedPolicyTypes), so saving has
+        // just recreated them individually; its store pages are on the Pages tab.
+        // Removing it here stops the same policy being indexed twice.
+        const legacy = await db.dataSource.findMany({ where: { shopId, type: "pages" }, select: { id: true } });
+        for (const source of legacy) await deleteSource(shopId, source.id);
         return {
           intent,
           ok: true,
-          message: `${pages.length} page${pages.length === 1 ? "" : "s"} connected — indexing`,
+          message: wanted.size === 0 ? "Policies disconnected" : `${wanted.size} polic${wanted.size === 1 ? "y" : "ies"} connected`,
         };
       }
       default:
@@ -1042,6 +1053,9 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
 const TABS: { id: TrainingTab; label: string }[] = [
   { id: "products", label: "Products" },
   { id: "collections", label: "Collections" },
+  // Spec 22 — synced from the Admin API, like the two tabs before them.
+  { id: "pages", label: "Pages" },
+  { id: "blogs", label: "Blogs" },
   { id: "discounts", label: "Discounts" },
   { id: "faqs", label: "FAQs" },
   { id: "knowledge", label: "Custom knowledge" },
@@ -1056,7 +1070,6 @@ export default function TrainingDataPage() {
     ? (rawTab as TrainingTab)
     : "products";
   const prefillFaq = searchParams.get("prefillFaq") ?? "";
-  const prefillQa = searchParams.get("prefillQa") ?? "";
   const unresolvedId = searchParams.get("unresolvedId") ?? "";
 
   const setTab = (next: TrainingTab) => {
@@ -1065,7 +1078,6 @@ export default function TrainingDataPage() {
         const params = new URLSearchParams(prev);
         params.set("tab", next);
         params.delete("prefillFaq");
-        params.delete("prefillQa");
         params.delete("unresolvedId");
         return params;
       },
@@ -1095,9 +1107,6 @@ export default function TrainingDataPage() {
             syncStatus={data.sync.status}
             currency={data.shop.currency}
             masterEnabled={data.learnMaster.products}
-            autoSyncAvailable={data.catalogGate.available}
-            autoSyncPlan={data.catalogGate.availablePlan}
-            autoSyncEnabled={data.catalogGate.products}
             metafields={data.metafields.rows}
             metafieldQuota={data.metafields.quota}
             metafieldNextPlan={data.planSignals.metafieldsNext}
@@ -1113,9 +1122,30 @@ export default function TrainingDataPage() {
             rows={data.collections}
             lastSyncedAt={data.sync.collectionSyncAt}
             masterEnabled={data.learnMaster.collections}
-            autoSyncAvailable={data.catalogGate.available}
-            autoSyncPlan={data.catalogGate.availablePlan}
-            autoSyncEnabled={data.catalogGate.collections}
+          />
+        ) : null}
+        {tab === "pages" ? (
+          <TrainingContentTab
+            kind="pages"
+            rows={data.pages}
+            lastSyncedAt={data.sync.pageSyncAt}
+            masterEnabled={data.learnMaster.pages}
+            syncedUsed={data.planSignals.pagesSynced.used}
+            syncedQuota={data.planSignals.pagesSynced.quota}
+            syncedBonus={data.planSignals.pagesSynced.bonus}
+            syncedNextPlan={data.planSignals.pagesSynced.nextPlan}
+          />
+        ) : null}
+        {tab === "blogs" ? (
+          <TrainingContentTab
+            kind="blogs"
+            rows={data.articles}
+            lastSyncedAt={data.sync.articleSyncAt}
+            masterEnabled={data.learnMaster.blogs}
+            syncedUsed={data.planSignals.articlesSynced.used}
+            syncedQuota={data.planSignals.articlesSynced.quota}
+            syncedBonus={data.planSignals.articlesSynced.bonus}
+            syncedNextPlan={data.planSignals.articlesSynced.nextPlan}
           />
         ) : null}
         {tab === "discounts" ? (
@@ -1123,16 +1153,15 @@ export default function TrainingDataPage() {
             rows={data.discounts}
             lastSyncedAt={data.sync.discountSyncAt}
             masterEnabled={data.learnMaster.discounts}
-            showUpgradeBanner={data.discountGate.showBanner}
-            realtime={data.discountGate.realtime}
-            realtimePlan={data.discountGate.realtimePlan}
-            realtimeEnabled={data.discountGate.realtimeEnabled}
             shopDomain={data.shop.domain}
           />
         ) : null}
         {tab === "faqs" ? (
           <FaqManager
             tree={data.faqTree}
+            quotaUsed={data.faqQuota.used}
+            quotaLimit={data.faqQuota.quota}
+            quotaNextPlan={data.faqQuota.nextPlan}
             prefillQuestion={prefillFaq}
             prefillUnresolvedId={prefillFaq ? unresolvedId : ""}
           />
@@ -1140,13 +1169,10 @@ export default function TrainingDataPage() {
         {tab === "knowledge" ? (
           <TrainingKnowledgeTab
             sources={data.knowledge.sources}
-            suggested={data.knowledge.suggested}
             chunkTotal={data.knowledge.chunkTotal}
             quotas={data.knowledge.quotas}
+            connectedPolicies={data.knowledge.connectedPolicies}
             planSignals={data.planSignals}
-            csvRowCap={data.knowledge.csvRowCap}
-            prefillQuestion={prefillQa}
-            prefillUnresolvedId={prefillQa ? unresolvedId : ""}
           />
         ) : null}
       </s-stack>

@@ -4,7 +4,7 @@
  *   npm run qa:preflight
  *
  * Several suites deliberately mutate GLOBAL state — the golden eval parks the
- * `[qa-fixture]` curated answers, overage.test.ts rewrites `admin:plans`,
+ * QA-fixture curated answers, overage.test.ts rewrites `admin:plans`,
  * model-portability writes AI overrides — and each restores it in a `finally`.
  * A `finally` does not run when the process is killed, so an interrupted run
  * leaves the environment altered and the NEXT run fails for reasons that have
@@ -42,22 +42,89 @@ function report(name: string, clean: boolean, detail: string, fixed?: string): v
 async function main(): Promise<void> {
   const db = (await import("../../app/db.server")).default;
 
-  // ── 1. Curated fixtures parked by an interrupted golden eval ──────────────
-  const parked = await db.curatedAnswer.count({
-    where: { talkingPoints: { contains: "[qa-fixture]" }, status: "draft" },
-  });
-  if (parked > 0 && FIX) {
-    await db.curatedAnswer.updateMany({
-      where: { talkingPoints: { contains: "[qa-fixture]" }, status: "draft" },
-      data: { status: "published" },
-    });
+  // ── 1. Curated fixtures in their INTENDED state (QA-T3) ───────────────────
+  // Identified by question on the dev shop. The old check republished every
+  // tagged draft — including the draft-on-purpose "black friday" fixture,
+  // which is how a reply saying "Draft answer, should not be served" went live.
+  const {
+    DEV_SHOP_DOMAIN,
+    PUBLISHED_FIXTURE_QUESTIONS,
+    DRAFT_FIXTURE_QUESTIONS,
+    LEGACY_FIXTURE_TAG,
+    stripLegacyTag,
+  } = await import("./curated-fixtures");
+  const devShop = await db.shop.findUnique({ where: { domain: DEV_SHOP_DOMAIN }, select: { id: true } });
+  if (devShop) {
+    const shopId = devShop.id;
+    const parkedWhere = { shopId, question: { in: PUBLISHED_FIXTURE_QUESTIONS }, status: "draft" };
+    const leakedDraftWhere = { shopId, question: { in: DRAFT_FIXTURE_QUESTIONS }, status: "published" };
+    const [parked, leakedDrafts] = await Promise.all([
+      db.curatedAnswer.count({ where: parkedWhere }),
+      db.curatedAnswer.count({ where: leakedDraftWhere }),
+    ]);
+    if (FIX) {
+      if (parked > 0) await db.curatedAnswer.updateMany({ where: parkedWhere, data: { status: "published" } });
+      if (leakedDrafts > 0) await db.curatedAnswer.updateMany({ where: leakedDraftWhere, data: { status: "draft" } });
+    }
+    report(
+      "curated fixtures are in their intended draft / published state",
+      parked === 0 && leakedDrafts === 0,
+      `${parked} parked as draft by an interrupted golden run, ${leakedDrafts} draft-on-purpose fixture(s) published`,
+      FIX && (parked > 0 || leakedDrafts > 0) ? `republished ${parked}, unpublished ${leakedDrafts}` : undefined,
+    );
+
+    // ── 1b. No fixture marker / "draft" wording in shopper-visible text ─────
+    // Curated talking points are served verbatim; FAQ answers are shown in the
+    // widget. Anything published must read like a real store answer.
+    const [curatedLeaks, faqLeaks] = await Promise.all([
+      db.curatedAnswer.findMany({
+        where: {
+          shopId,
+          status: "published",
+          OR: [
+            { talkingPoints: { contains: LEGACY_FIXTURE_TAG } },
+            { talkingPoints: { contains: "should not be served", mode: "insensitive" } },
+            { talkingPoints: { contains: "draft answer", mode: "insensitive" } },
+          ],
+        },
+        select: { id: true, question: true, talkingPoints: true },
+      }),
+      db.faq.findMany({
+        where: {
+          shopId,
+          status: "published",
+          OR: [
+            { answerHtml: { contains: LEGACY_FIXTURE_TAG } },
+            { question: { contains: LEGACY_FIXTURE_TAG } },
+            { answerHtml: { contains: "should not be served", mode: "insensitive" } },
+          ],
+        },
+        select: { id: true, question: true },
+      }),
+    ]);
+    const markerRows = curatedLeaks.filter((row) => row.talkingPoints.includes(LEGACY_FIXTURE_TAG));
+    if (FIX) {
+      for (const row of markerRows) {
+        await db.curatedAnswer.update({
+          where: { id: row.id, shopId },
+          data: { talkingPoints: stripLegacyTag(row.talkingPoints) },
+        });
+      }
+    }
+    report(
+      "no QA-fixture marker or draft wording in published shopper-visible text",
+      curatedLeaks.length === 0 && faqLeaks.length === 0,
+      [
+        ...curatedLeaks.map((row) => `curated "${row.question}"`),
+        ...faqLeaks.map((row) => `FAQ "${row.question}"`),
+      ].join(", "),
+      FIX && markerRows.length > 0
+        ? `stripped the marker from ${markerRows.length} curated answer(s); anything else needs a manual edit`
+        : undefined,
+    );
+  } else {
+    console.log(`  NOTE  ${DEV_SHOP_DOMAIN} not seeded — fixture checks skipped`);
   }
-  report(
-    "[qa-fixture] curated answers are published",
-    parked === 0,
-    `${parked} still parked as draft`,
-    parked > 0 && FIX ? `republished ${parked}` : undefined,
-  );
 
   // ── 2. Plan config left mid-test ─────────────────────────────────────────
   // The `enforcement` switch was REMOVED on 2026-09-08, so a stored value is
@@ -125,6 +192,38 @@ async function main(): Promise<void> {
     console.log(
       "        not auto-removed — run the owning suite's cleanup (e.g. scripts/qa/perf-seed.ts --clean)",
     );
+  }
+
+  // ── 5. Live plan matrix vs the shipped defaults (report only) ─────────────
+  // NOT a dirty state: an operator is entitled to grant a tier extra features
+  // or change a quota at /admin/plans, and those edits are the product working.
+  // But every plan-gate assertion means something different once they exist —
+  // storefront.test.ts asserted a flat 403 for `survey` on Free and failed for
+  // a whole run because Free had legitimately been granted it. So it is printed
+  // rather than fixed: read it before believing any gate result.
+  const { DEFAULT_PLANS, PLANS, loadPlanConfig } = await import("../../app/lib/billing/plans.server");
+  await loadPlanConfig();
+  const divergences: string[] = [];
+  for (const id of Object.keys(DEFAULT_PLANS) as (keyof typeof DEFAULT_PLANS)[]) {
+    const live = PLANS[id];
+    const base = DEFAULT_PLANS[id];
+    const added = live.features.filter((f) => !base.features.includes(f));
+    const removed = base.features.filter((f) => !live.features.includes(f));
+    if (added.length > 0) divergences.push(`${id}: +${added.join(", +")}`);
+    if (removed.length > 0) divergences.push(`${id}: -${removed.join(", -")}`);
+    for (const dim of Object.keys(base.quotas) as (keyof typeof base.quotas)[]) {
+      if (live.quotas[dim] !== base.quotas[dim]) {
+        divergences.push(`${id}.${dim}: ${base.quotas[dim]} → ${live.quotas[dim]}`);
+      }
+    }
+  }
+  if (divergences.length === 0) {
+    console.log("  OK    live plan matrix matches the shipped defaults");
+  } else {
+    console.log(`  NOTE  live plan matrix differs from the defaults in ${divergences.length} place(s):`);
+    for (const d of divergences) console.log(`          ${d}`);
+    console.log("        Deliberate operator edits are fine — but a plan-gate result");
+    console.log("        only means what it says once you have read this list.");
   }
 
   console.log(

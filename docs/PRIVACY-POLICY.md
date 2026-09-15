@@ -45,10 +45,9 @@ is listed for:
 | Scope | What we read | Why |
 |---|---|---|
 | `read_products` | Product titles, descriptions, images, prices, variants, inventory status | Catalog mirror that grounds every AI recommendation |
-| `read_content` | Metafield definitions | Keeps the merchant's metafield catalog current |
+| `read_content` | Metafield definitions; store pages and blog articles | Keeps the merchant's metafield catalog current; pages and articles the merchant selects become a knowledge source for support answers |
 | `read_discounts` | Discount codes and rules | So the assistant can reference live offers |
 | `read_legal_policies` | The store's own published policies | Knowledge source for policy questions |
-| `read_online_store_pages` | Store pages | Knowledge source for support answers |
 | `read_themes` | **Only** `config/settings_data.json` | Detects whether the chat widget is enabled on the theme. We do not read theme code |
 | `write_app_proxy` | — | Transport for the storefront widget |
 | `write_files` | Merchant-uploaded logo/icon | Widget branding |
@@ -139,7 +138,7 @@ marketing, or use one merchant's data to serve another merchant.
 
 | Sub-processor | What is sent | Purpose |
 |---|---|---|
-| **OpenAI** | Chat messages, conversation history, and the merchant's own catalog/knowledge excerpts used to ground an answer | Generating replies and embeddings. Default models: `gpt-4o-mini` and `text-embedding-3-small`. Sent via the OpenAI **API**, where content is **not used to train their models** |
+| **OpenAI** | Chat messages and conversation history (contact details a shopper submits through the leave-message form are replaced by a placeholder and never sent); the merchant's own catalog, discount and knowledge excerpts used to ground an answer; and limited shopper context — the shopper's first name and location if known, whether they have ordered from the store before, the product page they are viewing, and their cart's item titles and total. Email addresses, phone numbers and postal addresses are **never** sent | Generating replies and embeddings. Default models: `gpt-4.1-mini` and `text-embedding-3-small`, chosen by ChatConvert. Sent via the OpenAI **API**, where content is **not used to train their models** |
 | **Shopify** | — | Source of store data and host of the merchant's store |
 | **⟪Resend, or your SMTP provider⟫** | Recipient address and notification content | Handover and system notification email |
 | **⟪HOSTING PROVIDER⟫** | All application data at rest | Application hosting and the PostgreSQL database |

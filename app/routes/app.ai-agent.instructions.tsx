@@ -3,7 +3,7 @@ import { useLoaderData, useNavigate, useRouteError, useSearchParams } from "reac
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { z } from "zod";
 import db from "../db.server";
-import { hasFeature, requiredPlanName, PlanGateError } from "../lib/billing/plans.server";
+import { getQuota, nextPlanNameForQuota } from "../lib/billing/plans.server";
 import {
   handoverConfigSchema,
   shopSettingsSchema,
@@ -11,22 +11,18 @@ import {
 } from "../lib/settings/schemas";
 import {
   deleteCrossSellPair,
-  deleteCustomRecommendation,
   deleteRecommendation,
   saveCrossSellPair,
-  saveCustomRecommendation,
   saveGeneralInstructions,
   saveHandoverConfig,
   saveRecommendation,
   saveRecommendationRules,
-  setCustomRecommendationStatus,
   setRecommendationStatus,
 } from "../lib/instructions/save.server";
 import { InstructionsGeneralTab } from "../components/InstructionsGeneralTab";
 import { InstructionsRecommendationsTab } from "../components/InstructionsRecommendationsTab";
 import { InstructionsHandoverTab } from "../components/InstructionsHandoverTab";
 import { RecommendationDetail } from "../components/RecommendationDetail";
-import { RecommendationDetailCustom } from "../components/RecommendationDetailCustom";
 import { PageHeader } from "../components/ui/PageHeader";
 import { requireShopAccess } from "../lib/access.server";
 import { routeError } from "../lib/ui/route-error";
@@ -34,9 +30,11 @@ import { APP_NAME } from "./app";
 
 // Instructions (spec 08, design ai-agent.html #viewInstructions): three tabs
 // via ?tab= — General Instructions / Product recommendations / Human handover.
-// Recommendation detail views (#viewRec / #viewCustomRec) render in-route via
-// ?rec= / ?custom= search params. All reads/writes shop-scoped via
-// resolveShopId(shopDomain).
+// One merged "App recommendations" section: the
+// former Custom recommendations section folded in — a rule holds products AND
+// collections, and its trigger phrases fire semantically (instant answer) or
+// as contained keywords (buy-lane pool). Detail view (#viewRec) renders
+// in-route via the ?rec= search param. All reads/writes shop-scoped.
 
 export type InstructionsTab = "general" | "recommendations" | "handover";
 
@@ -49,21 +47,17 @@ export interface GeneralData {
   autoDetectLanguage: boolean;
   bannedTopics: string[];
   fallbackMessage: string;
+  /** Store info text (ShopSettings.storeInfo.about) — the store_info knowledge bridge. */
+  storeInfoAbout: string;
+  /** Store scope + off-topic message (persona columns; QA-A3). */
+  scope: string;
+  offTopicMessage: string;
 }
 
 export interface RecommendationRowData {
   id: string;
   title: string;
   triggerQuestions: string[];
-  productIds: string[];
-  status: string;
-  updatedAt: string;
-}
-
-export interface CustomRecommendationRowData {
-  id: string;
-  name: string;
-  searchTerms: string[];
   productIds: string[];
   collectionIds: string[];
   status: string;
@@ -74,6 +68,7 @@ export interface CrossSellPairRowData {
   id: string;
   productId: string;
   companionIds: string[];
+  updatedAt: string;
 }
 
 export interface ProductMeta {
@@ -91,12 +86,14 @@ export interface InstructionsActionResult {
   intent: string;
   id?: string;
   error?: string;
+  /** store-info-prefill: the draft built from Shopify, for the merchant to review. */
+  draft?: string;
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { shopId } = await requireShopAccess(request, { permission: "ai_agent" });
 
-  const [shop, persona, guardrails, handoverRow, settingsRow, recommendations, customRecs, pairs] =
+  const [shop, persona, guardrails, handoverRow, settingsRow, recommendations, pairs] =
     await Promise.all([
       db.shop.findUnique({ where: { id: shopId }, select: { plan: true } }),
       db.persona.findUnique({ where: { shopId } }),
@@ -106,20 +103,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       db.recommendation.findMany({
         where: { shopId },
         orderBy: { updatedAt: "desc" },
-        select: { id: true, title: true, triggerQuestions: true, productIds: true, status: true, updatedAt: true },
-      }),
-      db.customRecommendation.findMany({
-        where: { shopId },
-        orderBy: { updatedAt: "desc" },
         select: {
-          id: true, name: true, searchTerms: true, productIds: true, collectionIds: true,
+          id: true, title: true, triggerQuestions: true, productIds: true, collectionIds: true,
           status: true, updatedAt: true,
         },
       }),
       db.crossSellPair.findMany({
         where: { shopId },
         orderBy: { updatedAt: "desc" },
-        select: { id: true, productId: true, companionIds: true },
+        select: { id: true, productId: true, companionIds: true, updatedAt: true },
       }),
     ]);
 
@@ -129,13 +121,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   // can render titles/thumbnails without refetching.
   const productGids = new Set<string>();
   for (const rec of recommendations) rec.productIds.forEach((id) => productGids.add(id));
-  for (const rec of customRecs) rec.productIds.forEach((id) => productGids.add(id));
   for (const pair of pairs) {
     productGids.add(pair.productId);
     pair.companionIds.forEach((id) => productGids.add(id));
   }
   const collectionGids = new Set<string>();
-  for (const rec of customRecs) rec.collectionIds.forEach((id) => collectionGids.add(id));
+  for (const rec of recommendations) rec.collectionIds.forEach((id) => collectionGids.add(id));
 
   const [productRows, collectionRows] = await Promise.all([
     productGids.size
@@ -167,29 +158,30 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     autoDetectLanguage: persona?.autoDetectLanguage ?? false,
     bannedTopics: guardrails?.bannedTopics ?? [],
     fallbackMessage: guardrails?.fallbackMessage ?? "",
+    storeInfoAbout: shopSettingsSchema.parse(settingsRow?.settings ?? {}).storeInfo.about,
+    scope: persona?.scope ?? "",
+    offTopicMessage: persona?.offTopicMessage ?? "",
   };
 
   return {
     general,
     recommendations: recommendations.map((r) => ({ ...r, updatedAt: r.updatedAt.toISOString() })),
-    customRecs: customRecs.map((r) => ({ ...r, updatedAt: r.updatedAt.toISOString() })),
-    pairs,
+    pairs: pairs.map((p) => ({ ...p, updatedAt: p.updatedAt.toISOString() })),
     productMeta,
     collectionMeta,
     handover: handoverConfigSchema.parse(handoverRow?.config ?? {}) as HandoverConfigData,
     rules: shopSettingsSchema.parse(settingsRow?.settings ?? {}).recommendationRules,
-    // Plan signals (spec 15): the tier that unlocks each gated control, or
-    // null when this shop already has it. Names come from the live matrix.
-    planSignals: {
-      customRecs: hasFeature(plan, "custom_recommendations")
-        ? null
-        : requiredPlanName("custom_recommendations"),
-    },
+    // Both features are on every plan. Recommendation rules are still counted
+    // per tier (recommendation_rules); cross-sell pairs have no limit since
+    // 2026-09-11.
+    recommendationQuota: getQuota(plan, "recommendation_rules"),
+    // Upgrade hints for the PlanMeter rows (same pattern as the FAQ tab).
+    recommendationNextPlan: nextPlanNameForQuota(plan, "recommendation_rules"),
   };
 };
 
 export const action = async ({ request }: ActionFunctionArgs): Promise<InstructionsActionResult> => {
-  const { shopId } = await requireShopAccess(request, { permission: "ai_agent" });
+  const { shopId, shopDomain } = await requireShopAccess(request, { permission: "ai_agent" });
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
 
@@ -202,6 +194,10 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<Instructi
 
   try {
     switch (intent) {
+      case "store-info-prefill": {
+        const { buildStoreInfoDraft } = await import("../lib/instructions/store-info.server");
+        return { ok: true, intent, draft: await buildStoreInfoDraft(shopDomain) };
+      }
       case "save-general": {
         await saveGeneralInstructions(shopId, payload);
         return { ok: true, intent };
@@ -231,23 +227,6 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<Instructi
         await deleteRecommendation(shopId, String((payload as { id?: string })?.id ?? ""));
         return { ok: true, intent };
       }
-      case "save-custom": {
-        const id = await saveCustomRecommendation(shopId, payload);
-        return { ok: true, intent, id };
-      }
-      case "toggle-custom": {
-        const p = payload as { id?: string; status?: string };
-        await setCustomRecommendationStatus(
-          shopId,
-          String(p?.id ?? ""),
-          p?.status === "active" ? "active" : "inactive",
-        );
-        return { ok: true, intent };
-      }
-      case "delete-custom": {
-        await deleteCustomRecommendation(shopId, String((payload as { id?: string })?.id ?? ""));
-        return { ok: true, intent };
-      }
       case "save-pair": {
         await saveCrossSellPair(shopId, payload);
         return { ok: true, intent };
@@ -260,9 +239,6 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<Instructi
         return { ok: false, intent, error: `Unknown intent: ${intent || "(none)"}` };
     }
   } catch (error) {
-    if (error instanceof PlanGateError) {
-      return { ok: false, intent, error: "Auto-detect language requires the Plus plan." };
-    }
     if (error instanceof z.ZodError) {
       // Friendly "field: message" instead of the raw issues JSON (QA D5) —
       // same mapping as training.tsx's friendlyError.
@@ -296,7 +272,6 @@ export default function InstructionsPage() {
     ? (rawTab as InstructionsTab)
     : "general";
   const recParam = searchParams.get("rec");
-  const customParam = searchParams.get("custom");
 
   const setTab = (next: InstructionsTab) => {
     setSearchParams(
@@ -304,7 +279,6 @@ export default function InstructionsPage() {
         const params = new URLSearchParams(prev);
         params.set("tab", next);
         params.delete("rec");
-        params.delete("custom");
         return params;
       },
       { preventScrollReset: true },
@@ -316,28 +290,16 @@ export default function InstructionsPage() {
       const params = new URLSearchParams(prev);
       params.set("tab", "recommendations");
       params.delete("rec");
-      params.delete("custom");
       return params;
     });
   };
 
-  // Detail views replace the tabbed page (design #viewRec / #viewCustomRec).
+  // Detail view replaces the tabbed page (design #viewRec).
   if (recParam) {
     const existing = data.recommendations.find((r) => r.id === recParam) ?? null;
     return (
       <RecommendationDetail
         key={recParam}
-        recommendation={existing}
-        productMeta={data.productMeta}
-        onClose={closeDetail}
-      />
-    );
-  }
-  if (customParam) {
-    const existing = data.customRecs.find((r) => r.id === customParam) ?? null;
-    return (
-      <RecommendationDetailCustom
-        key={customParam}
         recommendation={existing}
         productMeta={data.productMeta}
         collectionMeta={data.collectionMeta}
@@ -367,24 +329,16 @@ export default function InstructionsPage() {
         {tab === "recommendations" ? (
           <InstructionsRecommendationsTab
             recommendations={data.recommendations}
-            customRecs={data.customRecs}
             pairs={data.pairs}
             productMeta={data.productMeta}
             rules={data.rules}
-            customRecsPlan={data.planSignals.customRecs}
+            recommendationQuota={data.recommendationQuota}
+            recommendationNextPlan={data.recommendationNextPlan}
             onOpenRec={(id) =>
               setSearchParams((prev) => {
                 const params = new URLSearchParams(prev);
                 params.set("tab", "recommendations");
                 params.set("rec", id);
-                return params;
-              })
-            }
-            onOpenCustom={(id) =>
-              setSearchParams((prev) => {
-                const params = new URLSearchParams(prev);
-                params.set("tab", "recommendations");
-                params.set("custom", id);
                 return params;
               })
             }

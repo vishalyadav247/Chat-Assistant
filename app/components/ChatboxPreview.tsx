@@ -165,7 +165,7 @@ export function ChatboxPreview(props: {
       featuredFaqs,
       // The storefront sets this from a PUBLISHED count; the preview only has
       // the featured list, which is the right signal here. Omitting it hid the
-      // FAQ block in the preview entirely when the gate landed (2026-09-09).
+      // FAQ block in the preview entirely when the gate landed.
       faqAvailable: featuredFaqs.length > 0,
       welcomeMessage: settings.welcomeMessage,
       currency: props.currency,

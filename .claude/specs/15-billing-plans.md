@@ -5,6 +5,8 @@
 
 ## Plan matrix (single source of truth — `app/lib/billing/plans.server.ts`)
 
+Re-baselined 2026-09-11 to the matrix the operator had set in `/admin/plans` (user: "current is the default state"). `/admin/plans` can still override any value.
+
 | | Free | Basic | Pro (Most popular) | Plus |
 |---|---|---|---|---|
 | Monthly | $0 | $19.99 | $49.99 | $99.99 |
@@ -12,18 +14,24 @@
 | AI conversations / mo | 75 | 200 | 500 | 1,000 |
 | Overage | — (AI stops) | $0.4/conv | $0.4/conv | $0.4/conv |
 | Products synced | 200 | 500 | 1,000 | 5,000 |
-| Curated answers | 5 | 20 | 50 | 100 |
-| Manual Q&As | 10 | 20 | 20 | 50 |
-| Policy pages | 5 | 10 | 10 | 20 |
-| Website crawl | 1 page | +linked (10) | +linked (10) | full site (20) |
-| CSV import (50 rows) + file upload (5) | — | — | — | ✅ |
+| Pages synced | 10 | 25 | 50 | 100 |
+| Blog articles synced | 10 | 50 | 150 | 250 |
+| Metafields enabled for AI | 5 | 15 | 15 | 50 |
+| FAQs (manual + CSV import) | 10 | 50 | 150 | 250 |
+| URL sources (one page each) | 5 | 15 | 15 | 50 |
+| File uploads | 2 | 5 | 5 | 25 |
+| Curated answers | 5 | 15 | 25 | 50 |
+| App recommendation rules | 5 | 10 | 25 | 50 |
+| Team seats | 1 | 5 | 5 | 10 |
+| Active proactive campaigns | 1 | 3 | 10 | unlimited |
+| Analytics history (days) | 7 | 90 | 90 | 365 |
+| Browser push notifications | ✅ | ✅ | ✅ | ✅ |
 | Remove branding | — | ✅ | ✅ | ✅ |
 | Unanswered-questions analytics | — | ✅ | ✅ | ✅ |
-| Discount real-time sync | — | — | ✅ | ✅ |
 | Premium proactive templates | — | — | ✅ | ✅ |
 | Inbox cart view | — | — | ✅ | ✅ |
-| Multi-language + auto-detect | ✅ | ✅ | ✅ | ✅ | (not gated — every plan)
-| Analytics/conversation exports | — | — | — | ✅ |
+| Order tracking in chat (`order_tracking`, gated 2026-09-11) | — | ✅ | ✅ | ✅ |
+| Not gated — every plan | multi-language, exports, post-chat survey, cross-sell pairs, policies | | | |
 
 (Design hard-codes Plus quotas in AI-agent meters and says "Downgrade to X" on every CTA — both are design bugs; UI must derive from this matrix and label Upgrade/Downgrade/Current correctly.)
 
@@ -31,10 +39,10 @@
 operator can change from `/admin/plans`, so the UI must recompute, never quote:
 - the overage rate in the FAQ comes from `overageRate(plan)` via the loader
   (`PlanFaq` prop `overagePerConversation`; `null` ⇒ "AI pauses at the cap" copy);
-- the "(50 rows)" CSV figure is **not** modelled as a quota dimension
-  (`QUOTA_DIMENSIONS` has no csv-rows key), so the Plus bullet says
-  "CSV import + PDF upload (N files)" using `quotas.file_uploads` rather than
-  stating a row limit the code does not enforce.
+- the FAQ CSV importer's 50-rows-per-file cap is **not** modelled as a quota
+  dimension (`QUOTA_DIMENSIONS` has no csv-rows key) — the plan-tiered FAQ cap
+  is the `faqs` quota (total FAQs per shop), and the Plus file bullet says
+  "PDF / document upload (N files)" using `quotas.file_uploads`.
 
 ## Billing integration (Shopify Billing API)
 
@@ -153,6 +161,8 @@ test charges and push it past quota before trusting the first real invoice.
 ## Gate enforcement
 
 `requirePlan(shopId, feature)` helper — server-side check on every gated mutation/config read; UI reads the same matrix for locks/meters. Gates listed above; quota creates (curated, sources, products cap) enforced at write time.
+
+**`order_tracking`** is applied once, in `getShopConfig` (`widget.orderTracking = stored switch AND plan`), so the storefront widget config, the pipeline's `track_order` action and the tracking screen all read the effective value; `/proxy/order-track` refuses (403 `unavailable`) when it is off. The stored switch is never rewritten — after an upgrade it returns as the merchant left it. UI: Chatbox → General switch disabled + `PlanBadge` + upgrade link, preview shows the effective state; Settings → Chatbox tracking section shows a `PlanBanner` (settings stay editable).
 
 **Annual billing: REMOVED (2026-09-07).** There is no yearly interval, no Monthly/Yearly toggle, no yearly price in the matrix, and no operator switch — the app offers monthly subscriptions only. Why: Shopify allows usage charges on monthly cycles only, so a yearly subscriber could never be billed for extra conversations. They hard-capped at their quota, and on the top tier there was not even an upgrade left to sell — the merchant paying the most, up front, got the worst outcome. Monthly-only makes the overage path work for every paid tier. `Shop.billingInterval` survives as a column and `overageBillable()` still refuses `"yearly"`, purely as a safety net for rows written before the removal.
 

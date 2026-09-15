@@ -33,6 +33,7 @@
     "config:which": "node scripts/deploy-shopify.cjs --which",
     "deploy:prod": "node scripts/deploy-shopify.cjs",
     "eval:quality": "tsx scripts/qa/agent-quality.test.ts",
+    "eval:conversations": "tsx scripts/qa/conversations.test.ts",
     "qa:preflight": "tsx scripts/qa/preflight.ts"
   },
   "prisma": {

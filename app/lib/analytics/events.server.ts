@@ -12,6 +12,9 @@ export type AnalyticsEventType =
   | "catalog_synced"
   | "collection_synced"
   | "discount_synced"
+  // 22 pages & blogs
+  | "pages_synced"
+  | "articles_synced"
   // 03 pipeline (one per turn, payload carries intent/outcome/sourceLayer)
   | "turn_completed"
   | "turn_blocked"

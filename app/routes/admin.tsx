@@ -2,12 +2,13 @@ import type { HeadersFunction, LinksFunction, LoaderFunctionArgs } from "react-r
 import { Outlet } from "react-router";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { NavigateBridge, SurfaceProvider } from "../lib/ui/surface";
-// One stylesheet, and it is the console's own. Until 2026-09-03 this layout
+// One stylesheet, and it is the console's own. This layout once
 // also pulled the merchant web app's shell and auth sheets so the two surfaces
-// looked identical (user, 2026-08-20); the glass redesign replaced every class
+// looked identical; the glass redesign replaced every class
 // they provided, so loading them now would ship dead CSS to every page.
 import adminStylesHref from "../components/admin/admin.css?url";
 import { themeFromCookie } from "../components/admin/theme";
+import { isOwnerAdmin, readAdminSession } from "../lib/admin/admin-auth.server";
 
 // Layout for the ADMIN surface (spec 19) — the company operating the
 // app, not merchants. Never embedded, no App Bridge. Cross-tenant BY DESIGN.
@@ -16,9 +17,16 @@ import { themeFromCookie } from "../components/admin/theme";
 
 // Read once here, for every /admin page: the shell needs the colour theme in
 // the FIRST paint, and only the server can do that without a blocking script.
-export const loader = ({ request }: LoaderFunctionArgs) => ({
-  theme: themeFromCookie(request.headers.get("cookie")),
-});
+//
+// `isOwner` only decides whether the nav SHOWS Debug; the Debug routes enforce
+// it themselves (requireOwnerAdmin) — hiding a link is not access control.
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const session = await readAdminSession(request).catch(() => null);
+  return {
+    theme: themeFromCookie(request.headers.get("cookie")),
+    isOwner: session ? isOwnerAdmin(session) : false,
+  };
+};
 
 export const links: LinksFunction = () => [{ rel: "stylesheet", href: adminStylesHref }];
 

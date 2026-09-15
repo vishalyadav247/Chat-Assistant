@@ -5,6 +5,14 @@ description: Conventions for the AI agent pipeline — prompts, grounding, thres
 
 # AI pipeline conventions
 
+> **Since 2026-09-15 the default engine is the tool-using AI agent (spec 24,
+> `app/lib/pipeline/agent.server.ts`, explained in `docs/AI-AGENT.md`).** The router + lanes
+> described below run only with `AI_AGENT_MODE=pipeline` (rollback). For the agent: fix
+> misbehaviour through tools, data and the category-neutral `AGENT_SYSTEM` — never per-phrase
+> prompt rules — and measure every prompt/tool/model change with `npm run eval:conversations`
+> (real multi-turn conversations, pass rates over runs). The golden set pins the pipeline engine.
+> Grounding, shop-scoping, key handling and the privacy rules below still apply to both engines.
+
 Spec: `.claude/specs/03-ai-pipeline.md`. Reference implementation: `.claude/resources/demo/chatconvert_ui.py` (validated); prompts: `.claude/resources/demo/prompts.json` (ported verbatim to `app/lib/pipeline/prompts.ts`, which is the live tuning surface). **The design source is not retained** — it shipped; the running app is the reference. (In git history before commit 36b7161 if ever needed.)
 
 ## Iron rules

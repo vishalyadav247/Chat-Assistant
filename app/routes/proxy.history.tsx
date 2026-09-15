@@ -4,8 +4,8 @@ import { resolveShopId } from "../lib/tenancy.server";
 import { authenticate } from "../shopify.server";
 
 // GET /apps/ccwidget/history?conversationId=&sessionId= — full thread restore
-// for the widget after a storefront page navigation (spec 05 delta closed
-// 2026-08-10). Shop identity from the verified proxy signature; the
+// for the widget after a storefront page navigation (spec 05).
+// Shop identity from the verified proxy signature; the
 // conversation must belong to the caller's own widget session.
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {

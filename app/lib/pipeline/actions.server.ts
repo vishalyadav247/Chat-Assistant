@@ -3,7 +3,7 @@ import type { WidgetSettingsData } from "../settings/schemas";
 
 // In-widget actions the agent may offer.
 //
-// WHY (production transcript, ankastra.myshopify.com, 2026-09-04):
+// WHY:
 //
 //     shopper: how can i track my previous orders
 //     agent:   … Just click on the "Track" navigation …
@@ -80,7 +80,7 @@ export function actionInstruction(actions: ChatAction[]): string {
   const list = actions.map((a) => `${a.key} — ${CATALOG[a.key].hint}`).join("; ");
   // The first-line rule has to lead. Buried at the end of a prompt that already
   // says "answer in 1-3 sentences", the model went straight into prose and the
-  // line never appeared (verified against the live catalogue 2026-09-04).
+  // line never appeared (verified against the live catalogue).
   return [
     "BEFORE anything else, write one line of exactly `ACTION: <key>` (example: `ACTION: track_order`), or `ACTION: none` when none applies. Write this line on EVERY reply, then your answer on the next line.",
     `The keys are: ${list}.`,

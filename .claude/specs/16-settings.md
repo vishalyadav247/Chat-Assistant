@@ -23,7 +23,7 @@
 - **Chat availability** → Manage (sub-view below)
 - **Satisfaction survey** → Manage (sub-view below)
 - **Open cart drawer after add to cart** toggle (ON default) → widget behavior (05).
-- **Order tracking**: radios Default tracking (widget shows the order-number form only — in-widget status card, no tracking-number tab) / Custom tracking + URL field (e.g. `www.delhivery.com/track-v2/package/`, supports a `{number}` placeholder) shown only when custom / **Integrate with tracking app** (delta 2026-08-14, per Chatty's `ordertracking3.png`): provider list (17Track live; TrackingMore/Track123 "Coming soon") + API key + Connect. Connect validates the key via 17Track `/getquota` BEFORE persisting (`connect-tracking` intent, `seventeen-track.server.ts`); Disconnect clears it. The key is server-only — widget config strips it, and the regular chatbox Save never touches it (SaveBar slice excludes apiKey). Integration mode → widget tracking-number tab shows real-time shipment status in-chat via `proxy.order-track`, and order lookups are enriched with the provider's live status.
+- **Order tracking**: radios Default tracking (widget shows the order-number form only — in-widget status card, no tracking-number tab) / Custom tracking + URL field (e.g. `www.delhivery.com/track-v2/package/`, supports a `{number}` placeholder) shown only when custom / **Integrate with tracking app** (delta 2026-08-14, per Chatty's `ordertracking3.png`): provider 17Track + API key + Connect. Connect validates the key via 17Track `/getquota` BEFORE persisting (`connect-tracking` intent, `seventeen-track.server.ts`); Disconnect clears it. The key is server-only — widget config strips it, and the regular chatbox Save never touches it (SaveBar slice excludes apiKey). Integration mode → widget tracking-number tab shows real-time shipment status in-chat via `proxy.order-track`, and order lookups are enriched with the provider's live status.
 
 ## Sub-view: Chat availability
 
@@ -45,7 +45,7 @@
 ## Tab: Privacy & Data Requests (UI here; workflows in 17)
 
 - **Customer data requests**: explainer (Shopify sends requests; ChatConvert compiles chat data for that email; **30-day SLA**), request list (date, customer, status, Download export) + empty state.
-- **Data retention**: "Keep transcripts for" select Forever/90/60/30/7 days + Save; deletion runs daily; independent of Shopify webhooks.
+- **Data retention**: "Keep transcripts for" select Forever/90/60/30/7 days + Save (new installs start at 90 days, QA-P4); deletion runs daily; independent of Shopify webhooks.
 - **How redaction works** info card (customers/redact deletes that customer's conversations; shop/redact ~48h after uninstall purges all; only stored customer info = optional email).
 
 ## Implementation deltas (2026-08-06 build)

@@ -36,7 +36,7 @@ import { logError } from "./log.server";
 // an Admin call on that cadence would burn the rate-limit bucket for a setup
 // checklist row. It keeps a short cache, which the fresh reads refill.
 //
-// read_themes was added to shopify.app.toml on 2026-08-26 — deliberately BEFORE
+// read_themes was added to shopify.app.toml deliberately BEFORE
 // launch, while no merchant had yet installed, because a scope added afterwards
 // forces every existing merchant through re-auth. A shop that authorised before
 // that still lacks the grant: there the query returns no data and this resolves

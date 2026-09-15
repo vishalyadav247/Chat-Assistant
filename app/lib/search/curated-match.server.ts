@@ -41,47 +41,68 @@ export async function curatedMatch(
   message?: string,
 ): Promise<CuratedMatch | null> {
   requireShopId(shopId);
-  const vec = toSqlVector(queryEmbedding);
   const phrase = message ? normalizeForPhrase(message) : "";
 
-  const rows = await db.$queryRaw<Array<CuratedMatch & { synonym_hit: boolean }>>(Prisma.sql`
+  // Lane 2 first — an exact synonym phrase is a merchant instruction and wins
+  // outright, so it serves at full confidence rather than being sent round the
+  // borderline-confirm branch. Matching runs in JS with the SAME unicode
+  // normalization on BOTH sides (hardening spec 23 §2.4/§3.10): the old SQL
+  // `[[:alnum:]]` class was locale-dependent and could disagree with the JS
+  // side on accented text, and the query required `embedding IS NOT NULL` —
+  // an embedding this lane never uses — so a freshly published answer whose
+  // embed job was still pending was invisible to the merchant's own phrasing.
+  // Both sides are space-padded and punctuation-stripped, so the needle checks
+  // whole words: "sale" cannot fire on "wholesale", and "free shipping" still
+  // matches "...free shipping?..." across punctuation.
+  if (phrase.trim().length > 0) {
+    const synRows = await db.curatedAnswer.findMany({
+      where: { shopId, status: "published", NOT: { synonyms: { isEmpty: true } } },
+      select: { id: true, question: true, talkingPoints: true, productIds: true, priority: true, synonyms: true },
+    });
+    const hit = synRows.find((row) =>
+      row.synonyms.some((syn) => {
+        if (syn.trim().length < MIN_SYNONYM_CHARS) return false;
+        const needle = normalizeForPhrase(syn).trim();
+        return needle.length > 0 && phrase.includes(` ${needle} `);
+      }),
+    );
+    if (hit) {
+      return {
+        id: hit.id,
+        question: hit.question,
+        talkingPoints: hit.talkingPoints,
+        productIds: hit.productIds,
+        priority: hit.priority,
+        score: 1,
+        synonymHit: true,
+      };
+    }
+  }
+
+  // Lane 1: vector similarity against the answer's question (embedded rows
+  // only — by definition of the lane).
+  const vec = toSqlVector(queryEmbedding);
+  const rows = await db.$queryRaw<Array<CuratedMatch>>(Prisma.sql`
     SELECT "id", "question", "talkingPoints", "productIds", "priority",
-           (1 - ("embedding" <=> ${vec}::vector))::float8 AS score,
-           (
-             ${phrase} <> ''
-             AND EXISTS (
-               SELECT 1 FROM unnest("synonyms") AS syn
-               WHERE length(trim(syn)) >= ${MIN_SYNONYM_CHARS}
-                 -- Both sides are space-padded and punctuation-stripped, so the
-                 -- wildcards match on word boundaries: "sale" cannot fire on
-                 -- "wholesale", and "free shipping" still matches "...free
-                 -- shipping?..." across punctuation.
-                 AND ${phrase} LIKE
-                     '% ' || trim(regexp_replace(lower(syn), '[^[:alnum:]]+', ' ', 'g')) || ' %'
-             )
-           ) AS synonym_hit
+           (1 - ("embedding" <=> ${vec}::vector))::float8 AS score
     FROM "curated_answers"
     WHERE "shopId" = ${shopId}
       AND "status" = 'published'
       AND "embedding" IS NOT NULL
-    ORDER BY synonym_hit DESC,
-             "embedding" <=> ${vec}::vector,
+    ORDER BY "embedding" <=> ${vec}::vector,
              CASE "priority" WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END
     LIMIT 1
   `);
 
   const top = rows[0];
   if (!top) return null;
-  const vectorScore = Number(top.score);
   return {
     id: top.id,
     question: top.question,
     talkingPoints: top.talkingPoints,
     productIds: top.productIds,
     priority: top.priority,
-    // An explicit synonym match is a merchant instruction, so it serves at full
-    // confidence rather than being sent round the borderline-confirm branch.
-    score: top.synonym_hit ? 1 : vectorScore,
-    synonymHit: top.synonym_hit,
+    score: Number(top.score),
+    synonymHit: false,
   };
 }

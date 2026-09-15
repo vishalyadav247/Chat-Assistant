@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 // The admin console's own component vocabulary (spec 19, redesigned
-// 2026-09-03: "make it robust and authentic, glassmorphism, mobile first").
+// for a "robust and authentic, glassmorphism, mobile first" brief).
 //
 // Deliberately NOT Polaris: `<s-page>` / `<s-section>` render into shadow DOM,
 // so the frosted surfaces, gradient rims and dark theme below cannot reach
@@ -148,7 +148,8 @@ export type IconName =
   | "monitor"
   | "menu"
   | "close"
-  | "logout";
+  | "logout"
+  | "bug";
 
 const PATHS: Record<IconName, ReactNode> = {
   home: <path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z" />,
@@ -180,6 +181,12 @@ const PATHS: Record<IconName, ReactNode> = {
   menu: <path d="M4 7h16M4 12h16M4 17h16" />,
   close: <path d="m6 6 12 12M18 6 6 18" />,
   logout: <path d="M15 12H4m0 0 3.5-3.5M4 12l3.5 3.5M10 4h8a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-8" />,
+  bug: (
+    <>
+      <circle cx="12" cy="13" r="5" />
+      <path d="M12 8V6m-3 .5L7.5 5m9 1.5L18 5M7 13H4m16 0h-3M7.8 17 6 19m12-2 1.8 2" />
+    </>
+  ),
 };
 
 export function Icon(props: { name: IconName; className?: string }) {

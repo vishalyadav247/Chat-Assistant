@@ -10,6 +10,9 @@ import { gzipSync } from "node:zlib";
 const ASSETS_DIR = join(process.cwd(), "extensions", "chat-widget", "assets");
 const INITIAL_ASSET = "chat-widget.js";
 const BUDGET_BYTES = 30 * 1024;
+// Headroom alarm (QA-P1): the initial payload grew 15 → 28 KB in a month; warn
+// loudly well before the hard budget so a feature can move code to the lazy renderer.
+const WARN_BYTES = 27 * 1024;
 
 function kb(bytes: number): string {
   return (bytes / 1024).toFixed(2) + " KB";
@@ -39,5 +42,10 @@ if (initialGzip < 0) {
 if (initialGzip > BUDGET_BYTES) {
   console.error(`FAIL: ${INITIAL_ASSET} gzips to ${kb(initialGzip)} — over the ${kb(BUDGET_BYTES)} budget.`);
   process.exit(1);
+}
+if (initialGzip > WARN_BYTES) {
+  console.warn(
+    `WARN: ${INITIAL_ASSET} gzips to ${kb(initialGzip)} — only ${kb(BUDGET_BYTES - initialGzip)} left under the ${kb(BUDGET_BYTES)} budget. Move new code to widget-renderer.js (lazy).`,
+  );
 }
 console.log(`OK: ${INITIAL_ASSET} gzips to ${kb(initialGzip)} (budget ${kb(BUDGET_BYTES)}).`);

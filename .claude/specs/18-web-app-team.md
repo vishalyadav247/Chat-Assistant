@@ -33,7 +33,7 @@ request → requireShopAccess(request, { permission? })        (app/lib/access.s
 
 - `TeamMember` — `shopId`, `email`, `name`, `role` owner|admin|agent, `status` invited|active|disabled, `passwordHash?` (scrypt, Node crypto), `notifyPrefs` JSON `{push:{handover,humanReply,newConversation}, emailHandover, sound}`, `failedLogins`, `lockedUntil`, invited/joined/lastLogin timestamps. `@@unique([shopId,email])`. Backfilled from the old `ShopSettings.settings.team.members` JSON (ids preserved → `Conversation.assigneeId` keeps working); the JSON key is gone from the schema.
 - `TeamSession` — `tokenHash @unique` (sha256 of the raw token), `shopId`, `memberId`, `kind` session|handoff|invite|reset, `expiresAt`, `lastSeenAt`, `userAgent`. Sessions: 30-day sliding; handoff 2 min; invite 7 days; reset 1 h.
-- `PushSubscription` — `endpoint @unique`, `p256dh`, `auth`, `shopId`, `memberId`, `lastUsedAt`, `failedAt`.
+- `PushSubscription` — `endpoint @unique`, `p256dh`, `auth`, `shopId`, `memberId`, `userAgent`. Dead endpoints (404/410) are deleted on send; other failures are logged.
 - Owner assignee stays the literal `assigneeId = "owner"`; `assigneeKeyFor(member)` maps the owner row to it.
 - Plan matrix: new quota `team_seats` (members excl. owner) — provisional Free 1 / Basic 3 / Pro 5 / Plus 10; enforced at invite via `getQuota` (no-op while `ENFORCEMENT = "open"`).
 

@@ -34,7 +34,7 @@ export function currentPeriodStart(now = new Date()): Date {
  * Requires a plan overage rate AND a subscription carrying a usage line item.
  *
  * The billingInterval check is a LEGACY SAFETY NET, not live logic. Annual
- * billing was withdrawn entirely on 2026-09-07 and nothing can create a yearly
+ * billing was withdrawn and nothing can create a yearly
  * subscription any more, but a row written before that may still say "yearly" —
  * and Shopify rejects usage lines on ANNUAL subscriptions (QA D1), so billing
  * one would fail. Keep it: deleting it would start charging those shops for
@@ -202,8 +202,8 @@ export interface UsageStatus {
 /**
  * Everything Plan & Usage needs to tell the merchant the truth about metering:
  * how close they are, whether they are being charged, and whether the AI has
- * stopped. Before 2026-09-03 `overageCount` was written and never read, so a
- * merchant could be billed with nothing on screen to explain it.
+ * stopped — without it, a merchant could be billed with nothing on screen
+ * to explain it.
  */
 export async function usageStatus(shopId: string): Promise<UsageStatus> {
   const id = requireShopId(shopId);

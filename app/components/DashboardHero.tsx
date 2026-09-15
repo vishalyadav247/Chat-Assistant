@@ -3,8 +3,8 @@ import { BRAND, RADIUS, SHADOW, SPACE } from "./ui/tokens";
 // Dashboard hero banner (spec 13, design dashboard.html .hero): brand
 // gradient card with decorative circles, time-of-day greeting, pulsing
 // "Assistant online" pill, dynamic subline, three actions. The gradient is a
-// sanctioned hero/marketing surface (polaris-admin-ui skill, decision
-// 2026-08-10) — its buttons are custom-styled because s-button cannot render
+// sanctioned hero/marketing surface (polaris-admin-ui skill) — its buttons
+// are custom-styled because s-button cannot render
 // white-on-gradient; focus outlines are preserved.
 
 const HERO_CSS = `
@@ -52,7 +52,7 @@ export function AssistantPill(props: { online: boolean }) {
           animation: props.online ? "cc-pulse 2s ease-in-out infinite" : undefined,
         }}
       />
-      {props.online ? "Assistant online" : "Assistant off"}
+      {props.online ? "Assistant on" : "Assistant off"}
     </span>
   );
 }
@@ -111,9 +111,7 @@ export function DashboardHero(props: {
   pendingQuestions: number;
   atcThisMonth: number;
   aiEnabled: boolean;
-  syncing: boolean;
   onAnswerQuestions: () => void;
-  onSyncCatalog: () => void;
   onPreviewWidget: () => void;
 }) {
   const { pendingQuestions: pending, atcThisMonth: atc } = props;
@@ -192,9 +190,8 @@ export function DashboardHero(props: {
             ? `Answer ${pending} question${pending === 1 ? "" : "s"}`
             : "Review questions"}
         </HeroButton>
-        <HeroButton kind="ghost" disabled={props.syncing} onClick={props.onSyncCatalog}>
-          {props.syncing ? "Syncing…" : "Sync catalog"}
-        </HeroButton>
+        {/* No "Sync catalog" here (owner, 2026-09-15): it duplicated step 1's
+            Sync now / Re-sync now in the setup card right below. */}
         <HeroButton kind="ghost" onClick={props.onPreviewWidget}>
           Preview widget
         </HeroButton>

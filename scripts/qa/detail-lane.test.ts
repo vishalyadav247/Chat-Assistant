@@ -241,17 +241,27 @@ async function main(): Promise<void> {
     );
     ok(
       "the check runs only when cards were already shown",
-      /if \(shown\.length > 0\) \{/.test(pipeline),
+      // Spec 23 §4.2 added a second condition to the same guard: chat-routed
+      // small talk ("thanks!") skips the confirm too. No cards ⇒ still no call.
+      /if \(shown\.length > 0 && !plainSmallTalk\) \{/.test(pipeline),
       "a first-turn shopper must not pay for a confirm call",
     );
     ok(
       "the buy lane still runs when the answer is no",
-      /if \(isDetail\) \{[\s\S]{0,400}?\n\s{4}\}\n\s{4}yield\* buyLane\(/.test(pipeline),
+      // Shape-independent: the detail block must RETURN — so it owns the turn
+      // only on a hit — and buyLane must still be reached somewhere below. The
+      // old regex required the two to sit textually adjacent, which stopped
+      // being true on 2026-09-08 when the confirm moved ahead of lane
+      // selection so non-buy lanes could reach it too. Adjacency was never the
+      // property worth asserting; "a `no` falls through to a lane" is.
+      /if \(isDetail\) \{[\s\S]{0,400}?return;\s*\}/.test(pipeline) &&
+        /yield\* buyLane\(/.test(pipeline),
       "the detail lane is additive — it must never swallow a real product request",
     );
     ok(
       "the catalogue permission still gates it",
-      /config\.settings\.learn\.products\s*\n?\s*\?\s*await shownProducts/.test(pipeline),
+      // Was a ternary, is now an if-block guarding the same call (2026-09-08).
+      /if \(config\.settings\.learn\.products\) \{[\s\S]{0,200}?shownProducts\(/.test(pipeline),
       "Learn products off means the catalogue is off-limits, detail included",
     );
 

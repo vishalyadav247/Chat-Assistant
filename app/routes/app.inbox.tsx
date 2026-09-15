@@ -19,8 +19,10 @@ import {
 } from "../lib/inbox/inbox.server";
 import type { InboxFilterKey } from "../lib/inbox/inbox.server";
 import { recentOrdersForContact } from "../lib/inbox/recent-orders.server";
+import { exportConversationsCsv } from "../lib/analytics/reports.server";
 import { InboxDetails } from "../components/InboxDetails";
 import { BRAND } from "../components/ui/tokens";
+import { ConfirmDeleteModal } from "../components/ui/ConfirmDeleteModal";
 import { assigneeOptions, isValidAssignee, parseNotifyPrefs } from "../lib/team/team.server";
 import { loadShopSettings } from "../lib/settings/save.server";
 import { loadWidgetSettings } from "../lib/widget/settings-save.server";
@@ -153,6 +155,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { shopId } = access;
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
+
+  // Exporting conversations
+  // belongs with the conversations, not with the charts. Handled BEFORE the
+  // conversationId guard below — an export is shop-wide and carries none.
+  if (intent === "export-conversations") {
+    const csv = await exportConversationsCsv(shopId);
+    const stamp = new Date().toISOString().slice(0, 10);
+    return { ok: true, intent, filename: `conversations-${stamp}.csv`, csv };
+  }
+
   const conversationId = String(formData.get("conversationId") ?? "");
   if (!conversationId) return { ok: false, intent };
 
@@ -207,6 +219,7 @@ export default function InboxPage() {
   const isMobile = useIsMobile();
   const opFetcher = useFetcher<typeof action>();
   const sendFetcher = useFetcher<typeof action>();
+  const exportFetcher = useFetcher<typeof action>();
 
   // Deep links (dashboard live feed → ?c=...) land on the tab the chat itself
   // belongs to, so the rail reflects what's on screen instead of "All".
@@ -352,6 +365,10 @@ export default function InboxPage() {
     return () => clearInterval(timer);
   }, [revalidator]);
 
+  // Delete asks first in the shared ConfirmDeleteModal (rendered once here for
+  // the thread menu, the details panel and the phone layout alike).
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+
   // Toasts + post-delete cleanup.
   const processed = useRef<unknown>(null);
   useEffect(() => {
@@ -359,6 +376,7 @@ export default function InboxPage() {
       return;
     processed.current = opFetcher.data;
     const { ok, intent } = opFetcher.data;
+    if (intent === "delete") setConfirmDeleteOpen(false);
     if (intent === "delete" && ok) {
       shopify.toast.show("Conversation deleted");
       setSearchParams(
@@ -436,11 +454,52 @@ export default function InboxPage() {
 
   const busy = sendFetcher.state !== "idle" || opFetcher.state !== "idle";
 
+  // CSV round-trip → client-side Blob download. Inside the embedded iframe only
+  // App-Bridge-authenticated fetches carry the session token, so the CSV rides
+  // back in the action payload rather than being streamed as a file response.
+  const processedExport = useRef<unknown>(null);
+  useEffect(() => {
+    const result = exportFetcher.data;
+    if (exportFetcher.state !== "idle" || !result || processedExport.current === result) return;
+    processedExport.current = result;
+    if (result.intent !== "export-conversations") return;
+    // The action's return type is a union across every inbox intent, so the CSV
+    // fields are only present on this branch — read them defensively rather than
+    // asserting, and never download an empty file.
+    const csv = "csv" in result && typeof result.csv === "string" ? result.csv : null;
+    if (csv === null) return;
+    const filename =
+      "filename" in result && typeof result.filename === "string" && result.filename
+        ? result.filename
+        : "conversations.csv";
+    const blob = new Blob([String.fromCharCode(0xfeff) + csv], {
+      type: "text/csv;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    shopify.toast.show("Export downloaded");
+  }, [exportFetcher.state, exportFetcher.data, shopify]);
+
   return (
     // Mobile drops the page heading — the shell top bar + filter chips give
     // the context, and the workspace gets the reclaimed height (spec 20).
     <s-page heading={isMobile ? undefined : APP_NAME} inlineSize="large">
       <OpenInWebButton slot="secondary-actions" />
+      <s-button
+        slot="secondary-actions"
+        disabled={exportFetcher.state !== "idle"}
+        onClick={() =>
+          exportFetcher.submit({ intent: "export-conversations" }, { method: "post" })
+        }
+      >
+        Export conversations
+      </s-button>
       <style dangerouslySetInnerHTML={{ __html: WORKSPACE_CSS }} />
       {/* Mobile (spec 19): one pane at a time, keyed off ?c= — no ?c= shows the
           list, an explicit selection shows the thread full-screen. */}
@@ -491,7 +550,7 @@ export default function InboxPage() {
             );
           }}
           onBlock={() => op("block")}
-          onDelete={() => op("delete")}
+          onDelete={() => setConfirmDeleteOpen(true)}
         />
         <InboxDetails
           active={active}
@@ -508,7 +567,7 @@ export default function InboxPage() {
             )
           }
           onBlock={() => op("block")}
-          onDelete={() => op("delete")}
+          onDelete={() => setConfirmDeleteOpen(true)}
         />
         {/* Phones only (CSS-gated): the filter tabs as a bar under the list,
             in place of the trigger + overlay. Hidden in thread view. */}
@@ -566,12 +625,22 @@ export default function InboxPage() {
                   )
                 }
                 onBlock={() => op("block")}
-                onDelete={() => op("delete")}
+                onDelete={() => setConfirmDeleteOpen(true)}
               />
             </div>
           </div>
         ) : null}
       </div>
+
+      <ConfirmDeleteModal
+        open={confirmDeleteOpen && active !== null}
+        // Same name the thread header shows (InboxThread).
+        title={`Delete the conversation with ${displayName(active?.contact?.name || active?.contact?.email || null)}?`}
+        body="The conversation and all its messages are deleted for everyone on your team. This can't be undone."
+        loading={opFetcher.state !== "idle" && opFetcher.formData?.get("intent") === "delete"}
+        onCancel={() => setConfirmDeleteOpen(false)}
+        onConfirm={() => op("delete")}
+      />
     </s-page>
   );
 }
@@ -707,6 +776,7 @@ const WORKSPACE_CSS = `
 .cin-tag{display:inline-flex;align-items:center;font-size:10px;font-weight:700;border-radius:6px;padding:1px 6px;}
 .cin-tag.chan{color:#6b6b73;background:#fbfbfc;box-shadow:inset 0 0 0 1px #e9e9ec;}
 .cin-tag.hand{color:#8a5a00;background:#fdecc8;}
+.cin-tag.human{color:#1a7f37;background:#dcfce7;}
 .cin-tag.proc{color:#1d4ed8;background:#e0edff;}
 
 .cin-threadcol{background:#f3f1fb;}

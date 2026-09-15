@@ -52,7 +52,7 @@ const SHOP_CONFIG_WRITERS: { file: string; what: string; mustInvalidate: boolean
   { file: "app/lib/billing/shopify-billing.server.ts", what: "shops.plan / planStatus", mustInvalidate: true },
   { file: "app/routes/app.ai-agent.training.tsx", what: "shopSettings", mustInvalidate: true },
   { file: "app/routes/app.ai-agent.tsx", what: "shops.aiEnabled", mustInvalidate: true },
-  { file: "app/routes/webhooks.app-subscriptions.tsx", what: "shops.plan / planStatus", mustInvalidate: true },
+  { file: "app/lib/billing/subscription-reconcile.server.ts", what: "shops.plan / planStatus (app_subscriptions/update job, QA-C5)", mustInvalidate: true },
   { file: "app/routes/webhooks.app.uninstalled.tsx", what: "shops billing reset", mustInvalidate: true },
   { file: "app/routes/app._index.tsx", what: "shops.name / timezone / currency (identity backfill)", mustInvalidate: true },
   { file: "app/lib/jobs/handlers.server.ts", what: "GDPR cleanupShop: deletes persona/guardrails/handover/widget/shop settings + resets shops.plan", mustInvalidate: true },

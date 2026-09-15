@@ -71,6 +71,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     removeBrandingPlan: hasFeature(plan, "remove_branding")
       ? null
       : requiredPlanName("remove_branding"),
+    orderTrackingAllowed: hasFeature(plan, "order_tracking"),
+    orderTrackingPlan: hasFeature(plan, "order_tracking") ? null : requiredPlanName("order_tracking"),
     availability: { status: availability.status, message: availability.message },
     featuredFaqs: faqs.map((f) => ({
       id: f.id,
@@ -219,7 +221,14 @@ export default function ChatboxPage() {
           }}
         >
           <div>
-            {tab === "general" ? <ChatboxGeneral value={draft} onChange={setDraft} /> : null}
+            {tab === "general" ? (
+              <ChatboxGeneral
+                value={draft}
+                orderTrackingAllowed={data.orderTrackingAllowed}
+                orderTrackingPlan={data.orderTrackingPlan}
+                onChange={setDraft}
+              />
+            ) : null}
             {tab === "chatpage" ? (
               <ChatboxChatPage
                 value={draft}
@@ -242,7 +251,9 @@ export default function ChatboxPage() {
             <s-stack gap="small">
               <s-heading>Preview</s-heading>
               <ChatboxPreview
-                settings={draft}
+                // Effective value, as the storefront gets it from shop-config:
+                // a plan without order_tracking shows no tracking block.
+                settings={{ ...draft, orderTracking: draft.orderTracking && data.orderTrackingAllowed }}
                 tab={tab}
                 availability={data.availability}
                 featuredFaqs={data.featuredFaqs}

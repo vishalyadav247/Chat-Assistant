@@ -99,6 +99,7 @@ Budget: a normal turn ≈ 2 LLM chat calls + 1–2 embedding calls + a few DB/Sh
 | 19 | `19-admin-panel.md` | Admin panel (operator dashboard): global AI model settings + editable plan matrix + enforcement switch, DB admin accounts |
 | 20 | `20-mobile-responsive.md` | Mobile responsiveness: 768px breakpoint, web-shell drawer nav, inbox pane switching, touch reordering (desktop unchanged) |
 | 21 | `21-logging-observability.md` | Operator error/warning log (`app_logs`) + `/admin/logs`: cross-tenant triage window, 14-day retention, PII-safe write seam |
+| 22 | `22-pages-blogs-sync.md` | Pages & Blogs Training tabs: Admin-API mirror of store pages + blog articles, per-row/master AI learn, pages_synced / articles_synced plan limits, RAG bridge; Website URL reduced to single page |
 
 ## Suggested build order (after Phase 0 foundation)
 

@@ -25,6 +25,7 @@ import { getWidgetCssText, getWidgetRendererJs } from "../lib/widget/renderer-as
 import type { BrowseItemMeta } from "../components/BrowseProductsModal";
 import { ProactiveCampaignEditor, type CampaignDraft } from "../components/ProactiveCampaignEditor";
 import { campaignCtr, ProactiveCampaignTable } from "../components/ProactiveCampaignTable";
+import { ConfirmDeleteModal } from "../components/ui/ConfirmDeleteModal";
 import { ProactiveTemplatePicker } from "../components/ProactiveTemplatePicker";
 import { SaveBar } from "../components/SaveBar";
 import { PlanBanner, PlanMeter } from "../components/ui/PlanGate";
@@ -352,25 +353,17 @@ export default function ProactiveChatPage() {
                   nextPlan={data.activeQuota.nextPlan}
                 />
               </s-box>
-              {pendingDelete ? (
-                <s-banner tone="critical" heading={`Delete “${pendingDelete.name}”?`}>
-                  <s-paragraph>This can&apos;t be undone.</s-paragraph>
-                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                    <s-button
-                      variant="primary"
-                      tone="critical"
-                      disabled={busy}
-                      loading={busy}
-                      onClick={() =>
-                        fetcher.submit({ intent: "delete", id: pendingDelete.id }, { method: "post" })
-                      }
-                    >
-                      Delete
-                    </s-button>
-                    <s-button onClick={() => setPendingDelete(null)}>Keep it</s-button>
-                  </div>
-                </s-banner>
-              ) : null}
+              <ConfirmDeleteModal
+                open={pendingDelete !== null}
+                title={`Delete “${pendingDelete?.name ?? "this campaign"}”?`}
+                body="Shoppers stop seeing it immediately. This can't be undone."
+                loading={busy}
+                onCancel={() => setPendingDelete(null)}
+                onConfirm={() =>
+                  pendingDelete &&
+                  fetcher.submit({ intent: "delete", id: pendingDelete.id }, { method: "post" })
+                }
+              />
               <ProactiveCampaignTable
                 rows={data.campaigns}
                 currency={data.currency}

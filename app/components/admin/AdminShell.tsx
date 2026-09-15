@@ -5,10 +5,10 @@ import { useNavDrawer } from "../web/use-nav-drawer";
 import { AdminSegmented, Icon, type IconName, type ThemePref } from "./AdminUi";
 import { THEME_COOKIE, isThemePref } from "./theme";
 
-// Chrome for the authed /admin pages (spec 19, redesigned 2026-09-03).
+// Chrome for the authed /admin pages (spec 19).
 //
 // This used to reuse the merchant web app's shell verbatim (`ccws-*` in
-// web-shell.css) under a 2026-08-20 "the console must not look like a third
+// web-shell.css) under a "the console must not look like a third
 // product" rule. The user has since asked for a distinct, glass, mobile-first
 // console — which cannot happen while a merchant surface shares the file — so
 // the chrome now has its OWN classes (`cca-*` in admin.css) and web-shell.css
@@ -17,10 +17,12 @@ import { THEME_COOKIE, isThemePref } from "./theme";
 //
 // NOT a security boundary — every loader/action calls requireAdminUser.
 
-const NAV: { href: string; label: string; icon: IconName; end?: boolean }[] = [
+const NAV: { href: string; label: string; icon: IconName; end?: boolean; ownerOnly?: boolean }[] = [
   { href: "/admin", label: "Overview", icon: "home", end: true },
   { href: "/admin/usage", label: "Usage", icon: "chart" },
   { href: "/admin/logs", label: "Logs", icon: "alert" },
+  // Owner-only (QA-C3): filtered out of the rendered nav for other admins.
+  { href: "/admin/debug", label: "Debug", icon: "bug", ownerOnly: true },
   { href: "/admin/ai", label: "AI model", icon: "wand" },
   { href: "/admin/plans", label: "Plans", icon: "card" },
   { href: "/admin/promo-codes", label: "Coupons", icon: "tag" },
@@ -40,14 +42,15 @@ function initials(value: string): string {
 
 export function AdminShell(props: { adminEmail: string; children: ReactNode }) {
   const location = useLocation();
-  // Sign-out asks first (user, 2026-08-20) — the form submits only on confirm.
+  // Sign-out asks first — the form submits only on confirm.
   const [confirmSignOut, setConfirmSignOut] = useState(false);
   const signOutForm = useRef<HTMLFormElement>(null);
   const { open: drawerOpen, setOpen: setDrawerOpen, navRef, railRef, menuBtnRef } = useNavDrawer();
 
   // The layout loader read the cookie server-side, so the first paint is
   // already in the right theme — no flash, no blocking inline script.
-  const layout = useRouteLoaderData("routes/admin") as { theme?: string } | undefined;
+  const layout = useRouteLoaderData("routes/admin") as { theme?: string; isOwner?: boolean } | undefined;
+  const nav = NAV.filter((item) => !item.ownerOnly || layout?.isOwner);
   const [theme, setTheme] = useState<ThemePref>(
     isThemePref(layout?.theme) ? layout.theme : "system",
   );
@@ -122,7 +125,7 @@ export function AdminShell(props: { adminEmail: string; children: ReactNode }) {
           </div>
 
           <nav className="cca-nav" ref={navRef}>
-            {NAV.map((item) => {
+            {nav.map((item) => {
               const active = item.end
                 ? location.pathname === item.href
                 : location.pathname.startsWith(item.href);

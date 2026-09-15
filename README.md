@@ -276,7 +276,8 @@ There is no unit test suite — verification is these scripts plus the acceptanc
 |---|---|
 | `DATABASE_URL` | `postgresql://chatconvert:chatconvert@localhost:5433/chatconvert` |
 | `OPENAI_API_KEY` | LLM + embeddings. Seeding works without it; the pipeline doesn't |
-| `LLM_PROVIDER` / `CHAT_MODEL` / `EMBEDDING_MODEL` | Defaults: `openai` / `gpt-4o-mini` / `text-embedding-3-small` |
+| `LLM_PROVIDER` / `CHAT_MODEL` / `EMBEDDING_MODEL` | Defaults: `openai` / `gpt-4.1-mini` / `text-embedding-3-small` |
+| `AI_AGENT_MODE` | `tools` (default, the AI agent — docs/AI-AGENT.md) or `pipeline` (rollback to the router + lanes) |
 | `BILLING_TEST_MODE=1` | Mock the Shopify Billing API for offline testing |
 | `BILLING_FORCE_TEST_CHARGES=1` | Force `test: true` charges (app review / partner test stores) |
 | `EMBED_STATUS_ENABLED=1` | Theme embed detection — needs the `read_themes` scope, not requested yet |

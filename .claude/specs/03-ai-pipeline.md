@@ -64,7 +64,7 @@ Implement the validated demo pipeline on production infrastructure. The LLM is t
               fallbackMessage, no LLM
    order    → live Shopify tool (LATER: requires read_orders + PCD approval; v1 returns handover-style "connect you with support")
    chat     → no retrieval; one short persona reply (temp 0.5, max_tokens 60)
-6. GENERATION (streamed): system = persona template (prompts.persona_template with role/brandVoice/guidelines/avoid)
+6. GENERATION (streamed): system = persona template (`buildPersonaPrompt`: role / brandVoice / behaviours — the Instructions → General box; lane rules win over it)
    + lane rule (prompts.product_recommend | question_answer | chat_reply)
    + summary system msg + recent history + user msg with retrieved JSON/context
 7. POST: product cards assembled from DB rows (title, price, imageUrl, handle → /products/{handle}) — never from model text;

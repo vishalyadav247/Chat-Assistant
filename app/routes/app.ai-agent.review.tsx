@@ -143,16 +143,6 @@ export default function ReviewQueuePage() {
                       <s-button
                         variant="tertiary"
                         onClick={() =>
-                          navigate(
-                            `/app/ai-agent/training?tab=knowledge&prefillQa=${encodeURIComponent(row.question)}&unresolvedId=${row.id}`,
-                          )
-                        }
-                      >
-                        Add as Q&A
-                      </s-button>
-                      <s-button
-                        variant="tertiary"
-                        onClick={() =>
                           navigate(`/app/curated-answers?prefill=${encodeURIComponent(row.question)}&unresolvedId=${row.id}`)
                         }
                       >

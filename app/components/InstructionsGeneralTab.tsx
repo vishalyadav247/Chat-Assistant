@@ -3,6 +3,10 @@ import { useFetcher } from "react-router";
 import { useAppBridge } from "../lib/ui/surface";
 import type { GeneralData, InstructionsActionResult } from "../routes/app.ai-agent.instructions";
 import { SaveBar } from "./SaveBar";
+import { STORE_INFO_MAX } from "../lib/settings/schemas";
+
+const SCOPE_MAX = 300;
+const OFF_TOPIC_MAX = 300;
 
 // Instructions → General tab (spec 08, design #viewInstructions persona panel):
 // Role / Communication style / Behaviours / Default language / Auto-detect
@@ -55,6 +59,9 @@ interface FormState {
   autoDetectLanguage: boolean;
   bannedTopicsText: string; // textarea, one per line
   fallbackMessage: string;
+  storeInfoAbout: string;
+  scope: string;
+  offTopicMessage: string;
 }
 
 function toForm(data: GeneralData): FormState {
@@ -67,6 +74,9 @@ function toForm(data: GeneralData): FormState {
     autoDetectLanguage: data.autoDetectLanguage,
     bannedTopicsText: data.bannedTopics.join("\n"),
     fallbackMessage: data.fallbackMessage,
+    storeInfoAbout: data.storeInfoAbout,
+    scope: data.scope,
+    offTopicMessage: data.offTopicMessage,
   };
 }
 
@@ -94,6 +104,39 @@ export function InstructionsGeneralTab(props: { initial: GeneralData }) {
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }));
 
+  // "Fill from Shopify": a draft from the store's Shopify details. It only
+  // fills the field (the save bar appears) — the merchant reviews, then saves.
+  const prefillFetcher = useFetcher<InstructionsActionResult>();
+  const prefilling = prefillFetcher.state !== "idle";
+  useEffect(() => {
+    const result = prefillFetcher.data;
+    if (prefillFetcher.state !== "idle" || !result || result.intent !== "store-info-prefill") return;
+    if (result.ok && result.draft) {
+      const draft = result.draft;
+      setForm((prev) => ({
+        ...prev,
+        // Never overwrite what the merchant already wrote — add the draft below it.
+        storeInfoAbout: (prev.storeInfoAbout.trim()
+          ? `${prev.storeInfoAbout.trim()}\n\n${draft}`
+          : draft
+        ).slice(0, STORE_INFO_MAX),
+      }));
+      shopify.toast.show("Added your Shopify store details — review, then save");
+    } else if (result.ok) {
+      shopify.toast.show("Shopify has no store details to add yet");
+    } else {
+      shopify.toast.show(result.error ?? "Couldn't read your Shopify store details", { isError: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefillFetcher.state, prefillFetcher.data]);
+
+  // Arriving from the dashboard step (#store-info): bring the section into view.
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.location.hash === "#store-info") {
+      document.getElementById("store-info")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, []);
+
   const save = () => {
     const payload = {
       role: form.role.slice(0, 250),
@@ -107,6 +150,9 @@ export function InstructionsGeneralTab(props: { initial: GeneralData }) {
         .map((line) => line.trim().slice(0, 100))
         .filter(Boolean),
       fallbackMessage: form.fallbackMessage.slice(0, 500),
+      storeInfoAbout: form.storeInfoAbout.slice(0, STORE_INFO_MAX),
+      scope: form.scope.slice(0, SCOPE_MAX),
+      offTopicMessage: form.offTopicMessage.slice(0, OFF_TOPIC_MAX),
     };
     fetcher.submit(
       { intent: "save-general", payload: JSON.stringify(payload) },
@@ -120,6 +166,42 @@ export function InstructionsGeneralTab(props: { initial: GeneralData }) {
     <s-stack gap="base">
       <SaveBar dirty={dirty} saving={saving} onSave={save} onDiscard={discard} />
 
+      {/* Store info (2026-09-14): what the AI knows about the store itself.
+          Saved to ShopSettings.storeInfo.about and embedded as the store_info
+          knowledge source, so "where are you based?" is answered from it. The
+          dashboard "Add store info" step links here (#store-info). */}
+      <s-section id="store-info" heading="Store info">
+          <s-stack gap="small-200">
+            <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="center">
+              <s-paragraph color="subdued">
+                Tell your assistant about your store — what you sell, where you&apos;re based,
+                opening hours, and how shoppers can reach you. It answers questions about your
+                store from this.
+              </s-paragraph>
+              <s-button
+                icon="store-import"
+                loading={prefilling}
+                disabled={prefilling}
+                onClick={() => prefillFetcher.submit({ intent: "store-info-prefill" }, { method: "post" })}
+              >
+                Fill from Shopify
+              </s-button>
+            </s-grid>
+            <s-text-area
+              label="Store info"
+              labelAccessibilityVisibility="exclusive"
+              rows={6}
+              maxLength={STORE_INFO_MAX}
+              value={form.storeInfoAbout}
+              placeholder={
+                "e.g., [Store name] is a small family-run business selling [what you sell].\nBased in: [city, country]. Opening hours: [days and times].\nShipping: [where you ship and how long it takes].\nContact: [email / phone]"
+              }
+              onInput={(e) => set("storeInfoAbout", e.currentTarget.value)}
+            />
+            <Counter value={form.storeInfoAbout} max={STORE_INFO_MAX} />
+          </s-stack>
+        </s-section>
+
       <s-section heading="Role">
         <s-stack gap="small-200">
           <s-paragraph color="subdued">
@@ -131,7 +213,7 @@ export function InstructionsGeneralTab(props: { initial: GeneralData }) {
             rows={3}
             maxLength={250}
             value={form.role}
-            placeholder="e.g., You are a friendly customer support assistant for an online accessories store. Your goal is to help customers find products, answer questions and provide excellent service."
+            placeholder="e.g., You are a friendly shopping assistant for this store. You help shoppers find the right products and answer their questions about products, orders and store policies."
             onInput={(e) => set("role", e.currentTarget.value)}
           />
           <Counter value={form.role} max={250} />
@@ -216,7 +298,7 @@ export function InstructionsGeneralTab(props: { initial: GeneralData }) {
               </s-option>
             ))}
           </s-select>
-          {/* Available on every plan (un-gated 2026-09-03). */}
+          {/* Available on every plan. */}
           <s-switch
             label="Auto-detect shopper's language"
             details="When enabled, the assistant answers in the language of the shopper's latest message and switches with them mid-chat. When off, it always answers in the default language above."
@@ -230,7 +312,7 @@ export function InstructionsGeneralTab(props: { initial: GeneralData }) {
         <s-stack gap="small-200">
           <s-paragraph color="subdued">
             One topic or phrase per line. If a shopper&apos;s message is about one of these, the
-            assistant declines and shows the fallback message.
+            assistant politely declines.
           </s-paragraph>
           <s-text-area
             label="Banned topics"
@@ -244,6 +326,40 @@ export function InstructionsGeneralTab(props: { initial: GeneralData }) {
         </s-stack>
       </s-section>
 
+      {/* Store scope + off-topic message (QA-A3 / owner decision D-4,
+          2026-09-14). The pipeline supported both but no screen set them. With a
+          scope set, requests outside it — including creative or general tasks
+          like "write me a poem" — are declined with the off-topic message. */}
+      <s-section heading="Store scope">
+        <s-stack gap="small-200">
+          <s-paragraph color="subdued">
+            What your store is about. When set, requests outside it — like writing a poem or
+            general questions — are politely declined with the message below. Leave empty to
+            not restrict topics.
+          </s-paragraph>
+          <s-text-area
+            label="Store scope"
+            labelAccessibilityVisibility="exclusive"
+            rows={2}
+            maxLength={SCOPE_MAX}
+            value={form.scope}
+            placeholder="e.g., outdoor clothing and camping gear"
+            onInput={(e) => set("scope", e.currentTarget.value)}
+          />
+          <Counter value={form.scope} max={SCOPE_MAX} />
+          <s-text-area
+            label="Off-topic message"
+            rows={2}
+            maxLength={OFF_TOPIC_MAX}
+            value={form.offTopicMessage}
+            placeholder="I can only help with our store and its products — is there something I can help you find?"
+            details="Shown when a request is outside your store scope. Leave blank to use the built-in default."
+            onInput={(e) => set("offTopicMessage", e.currentTarget.value)}
+          />
+          <Counter value={form.offTopicMessage} max={OFF_TOPIC_MAX} />
+        </s-stack>
+      </s-section>
+
       <s-section heading="Fallback message">
         <s-stack gap="small-200">
           <s-paragraph color="subdued">Shown when the assistant can&apos;t confidently help.</s-paragraph>
@@ -254,7 +370,7 @@ export function InstructionsGeneralTab(props: { initial: GeneralData }) {
             maxLength={500}
             value={form.fallbackMessage}
             placeholder="I'm not sure about that one — leave your email and our team will get back to you."
-            details="Leave blank to use the built-in default. The assistant captures the shopper's email as a lead after showing this."
+            details="Leave blank to use the built-in default, shown in your store's language. The assistant captures the shopper's email as a lead after showing this."
             onInput={(e) => set("fallbackMessage", e.currentTarget.value)}
           />
           <Counter value={form.fallbackMessage} max={500} />

@@ -5,7 +5,7 @@ import { logError } from "../log.server";
 
 // What the agent is allowed to know about the person it is talking to.
 //
-// WHY (production transcript, ankastra.myshopify.com, 2026-09-04):
+// WHY:
 //
 //     shopper: do you know how i am
 //     agent:   I don't know you personally…

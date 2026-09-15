@@ -311,7 +311,7 @@ async function main() {
       "app/lib/billing/shopify-billing.server.ts",
       "app/lib/jobs/handlers.server.ts",
       "app/routes/webhooks.app.uninstalled.tsx",
-      "app/routes/webhooks.app-subscriptions.tsx",
+      "app/lib/billing/subscription-reconcile.server.ts",
       "app/routes/webhooks.compliance.tsx",
     ];
     for (const file of RESET_SITES) {

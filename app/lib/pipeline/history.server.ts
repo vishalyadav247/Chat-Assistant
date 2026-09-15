@@ -26,7 +26,12 @@ export interface HistoryBundle {
 export async function loadHistory(
   shopId: string,
   conversationId: string,
-  opts: { excludeMessageId?: string } = {},
+  opts: {
+    excludeMessageId?: string;
+    /** Agent mode (spec 24): append the products each assistant reply showed,
+     *  with their ids, so "this" / "the blue one" resolve to a real product. */
+    annotateCards?: boolean;
+  } = {},
 ): Promise<HistoryBundle> {
   requireShopId(shopId);
   const convo = await db.conversation.findFirst({
@@ -35,21 +40,37 @@ export async function loadHistory(
   });
   if (!convo) return { routerHistory: [], generationHistory: [] };
 
+  const historyWhere = {
+    conversationId,
+    shopId,
+    role: { in: ["in", "out"] },
+    ...(opts.excludeMessageId ? { id: { not: opts.excludeMessageId } } : {}),
+  };
   const fetched = await db.message.findMany({
-    where: {
-      conversationId,
-      shopId,
-      role: { in: ["in", "out"] },
-      ...(opts.excludeMessageId ? { id: { not: opts.excludeMessageId } } : {}),
-    },
+    where: historyWhere,
     orderBy: { createdAt: "desc" },
     take: ROUTER_WINDOW + 40, // window + summarization lookback
-    select: { role: true, content: true },
+    select: { role: true, content: true, productCards: true, intent: true, sourceLayer: true },
   });
-  const rows = fetched.reverse();
+  // The leave-message form's submission is stored as a shopper message holding
+  // the email, phone and order number for the team. It must never reach the
+  // model — not as history and not through the summary (which is also carried
+  // into the contact's later conversations).
+  const rows = fetched.reverse().map((r) =>
+    r.role === "in" && r.sourceLayer === "handover"
+      ? { ...r, content: "[The shopper left their contact details for the store team.]" }
+      : r,
+  );
 
   const recent = rows.slice(-ROUTER_WINDOW);
-  const olderCount = Math.max(0, rows.length - ROUTER_WINDOW);
+  // olderCount must be the TRUE count of messages older than the window, not
+  // the capped fetch length: a thread past ~50 messages saturates the fetch,
+  // olderCount would freeze at 40, and the refresh condition below would never
+  // fire again — silently losing everything that ages out of the window. Only
+  // pay the count query once the fetch is actually saturated.
+  const totalCount =
+    fetched.length < ROUTER_WINDOW + 40 ? rows.length : await db.message.count({ where: historyWhere });
+  const olderCount = Math.max(0, totalCount - ROUTER_WINDOW);
 
   let summary = convo.summary;
   if (
@@ -59,25 +80,61 @@ export async function loadHistory(
     // The previous summary goes back in: the lookback below is only 50 rows,
     // so on a long thread the opening messages are already gone and a
     // from-scratch refresh would drop what they said with them.
-    summary = await summarize(rows.slice(0, rows.length - ROUTER_WINDOW), shopId, convo.summary ?? "");
-    await db.conversation.update({
-      where: { id: convo.id },
-      data: { summary, summaryMessageCount: olderCount },
-    });
+    const refreshed = await summarize(rows.slice(0, rows.length - ROUTER_WINDOW), shopId, convo.summary ?? "");
+    if (refreshed) {
+      // Only persist a real summary — the fold returns "" on LLM failure, and
+      // storing that would wipe the prior summary AND mark these messages as
+      // summarized, losing them for good.
+      summary = refreshed;
+      await db.conversation.updateMany({
+        where: { id: convo.id, shopId },
+        data: { summary, summaryMessageCount: olderCount },
+      });
+    } else if (convo.summary) {
+      summary = convo.summary;
+    }
   }
 
   const summaryMsg: ChatMessage[] = summary
     ? [{ role: "system", content: `Earlier conversation summary: ${summary}` }]
     : [];
-  const toChat = (r: { role: string; content: string }): ChatMessage => ({
-    role: r.role === "in" ? "user" : "assistant",
-    content: r.content,
-  });
+  // Agent mode: what a reply showed and looked up rides as a separate system
+  // note after it, not inside the assistant text — a model imitates its own
+  // earlier replies, and bracketed ids in them would surface in new replies.
+  const toChat = (r: { role: string; content: string; productCards?: unknown; intent?: unknown }): ChatMessage[] => {
+    const message: ChatMessage = { role: r.role === "in" ? "user" : "assistant", content: r.content };
+    if (!opts.annotateCards || r.role === "in") return [message];
+    const note = `${cardsNote(r.productCards)}${factsNote(r.intent)}`.trim();
+    return note ? [message, { role: "system", content: note }] : [message];
+  };
 
   return {
-    routerHistory: [...summaryMsg, ...recent.map(toChat)],
-    generationHistory: [...summaryMsg, ...recent.slice(-GENERATION_WINDOW).map(toChat)],
+    routerHistory: [...summaryMsg, ...recent.flatMap(toChat)],
+    generationHistory: [...summaryMsg, ...recent.slice(-GENERATION_WINDOW).flatMap(toChat)],
   };
+}
+
+/** "[Products shown with this reply: Title (id 123), …]" — or "" when the reply had none. */
+function cardsNote(productCards: unknown): string {
+  if (!Array.isArray(productCards) || productCards.length === 0) return "";
+  const items = productCards
+    .map((c) => {
+      const card = c as { shopifyProductId?: unknown; title?: unknown };
+      if (typeof card?.title !== "string" || typeof card?.shopifyProductId !== "string") return null;
+      return `${card.title} (id ${card.shopifyProductId.split("/").pop()})`;
+    })
+    .filter(Boolean);
+  return items.length > 0 ? `Products shown with the previous reply: ${items.join("; ")}.` : "";
+}
+
+/** "[Looked up for this reply: …]" — the compact tool facts an agent reply was
+ *  based on (spec 24), so a later "price of this" is answered from the lookup,
+ *  not from the model's memory. */
+function factsNote(intent: unknown): string {
+  const facts = (intent as { facts?: unknown } | null)?.facts;
+  if (!Array.isArray(facts)) return "";
+  const lines = facts.filter((f): f is string => typeof f === "string" && f.length > 0);
+  return lines.length > 0 ? ` Facts looked up for the previous reply: ${lines.join(" | ")}.` : "";
 }
 
 async function summarize(

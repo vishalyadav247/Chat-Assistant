@@ -3,19 +3,19 @@ import type { Prisma } from "@prisma/client";
 import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
 import { invalidateShopConfig } from "../config/shop-config.server";
-import { handoverConfigSchema, shopSettingsSchema, type HandoverConfigData } from "../settings/schemas";
-import { requirePlan, type GatedFeature } from "../billing/plans.server";
-
-/** Plan gate for savers that don't already receive the shop's plan (spec 15).
- *  One indexed lookup; throws PlanGateError, which the instructions route maps
- *  to an upgrade banner. */
-async function requireShopFeature(shopId: string, feature: GatedFeature): Promise<void> {
-  const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
-  requirePlan(shop?.plan ?? "free", feature);
-}
+import {
+  handoverConfigSchema,
+  shopSettingsSchema,
+  STORE_INFO_MAX,
+  type HandoverConfigData,
+} from "../settings/schemas";
+import { loadShopSettings } from "../settings/save.server";
+import { syncStoreInfoKnowledge } from "../ingestion/knowledge-ingest.server";
+import { logError } from "../log.server";
+import { getQuota } from "../billing/plans.server";
 
 // Instructions save workflow (spec 08): General tab → Persona + Guardrails,
-// Product recommendations tab → Recommendation / CustomRecommendation /
+// Product recommendations tab → Recommendation (merged model) and
 // CrossSellPair rows, Human handover tab → HandoverConfig.config (zod shape
 // from app/lib/settings/schemas.ts — the canonical, frozen config shape).
 //
@@ -48,23 +48,25 @@ const generalSchema = z.object({
   autoDetectLanguage: z.boolean(),
   bannedTopics: z.array(z.string().min(1).max(100)).max(50),
   fallbackMessage: z.string().max(500),
+  /** Store info (Instructions → General). Optional: a caller that does not send
+   *  it leaves the saved text untouched. */
+  storeInfoAbout: z.string().max(STORE_INFO_MAX).optional(),
+  /** Store scope + off-topic message (QA-A3). Optional like storeInfoAbout. */
+  scope: z.string().max(300).optional(),
+  offTopicMessage: z.string().max(300).optional(),
 });
 export type GeneralInstructionsData = z.infer<typeof generalSchema>;
 
+// Merged rule: the former CustomRecommendation shape
+// folded in — one rule carries products AND collections, and its trigger
+// phrases fire both semantically (instant answer) and as contained keywords
+// (buy-lane pool constraint).
 const recommendationSchema = z.object({
   id: z.string().max(40).optional(),
   title: z.string().min(1).max(100),
   triggerQuestions: z.array(z.string().min(1).max(150)).min(1).max(20),
-  productIds: z.array(productGid).max(50),
-  status: z.enum(["active", "inactive"]),
-});
-
-const customRecommendationSchema = z.object({
-  id: z.string().max(40).optional(),
-  name: z.string().min(1).max(100),
-  searchTerms: z.array(z.string().min(1).max(100)).min(1).max(30),
   productIds: z.array(productGid).max(100),
-  collectionIds: z.array(collectionGid).max(30),
+  collectionIds: z.array(collectionGid).max(30).default([]),
   status: z.enum(["active", "inactive"]),
 });
 
@@ -82,7 +84,7 @@ export async function saveGeneralInstructions(
   requireShopId(shopId);
   const data = generalSchema.parse(raw);
 
-  // Auto-detect language is available on every plan (un-gated 2026-09-03) —
+  // Auto-detect language is available on every plan —
   // no feature check here anymore.
   const personaData = {
     role: data.role.trim(),
@@ -91,6 +93,8 @@ export async function saveGeneralInstructions(
     behaviours: data.behaviours.trim(),
     defaultLanguage: data.defaultLanguage,
     autoDetectLanguage: data.autoDetectLanguage,
+    ...(data.scope !== undefined ? { scope: data.scope.trim() } : {}),
+    ...(data.offTopicMessage !== undefined ? { offTopicMessage: data.offTopicMessage.trim() } : {}),
   };
   const bannedTopics = [...new Set(data.bannedTopics.map((t) => t.trim()).filter(Boolean))];
   const guardrailsData = {
@@ -110,6 +114,30 @@ export async function saveGeneralInstructions(
       create: { shopId, ...guardrailsData },
     }),
   ]);
+
+  if (data.storeInfoAbout !== undefined) {
+    const about = data.storeInfoAbout.trim();
+    const current = await loadShopSettings(shopId);
+    if (about !== current.storeInfo.about) {
+      const next = shopSettingsSchema.parse({
+        ...current,
+        storeInfo: { ...current.storeInfo, about },
+      });
+      await db.shopSettings.upsert({
+        where: { shopId },
+        update: { settings: next as unknown as Prisma.InputJsonObject },
+        create: { shopId, settings: next as unknown as Prisma.InputJsonObject },
+      });
+      // Rebuild the store_info knowledge bridge so the AI answers from the new
+      // text on the next turn. Fail-soft like the FAQ bridge: the text is
+      // saved either way, and an embedding outage must not fail the save.
+      try {
+        await syncStoreInfoKnowledge(shopId);
+      } catch (error) {
+        logError("store_info_knowledge_sync_error", error, { shopId });
+      }
+    }
+  }
   invalidateShopConfig(shopId);
 }
 
@@ -118,10 +146,20 @@ export async function saveGeneralInstructions(
 export async function saveRecommendation(shopId: string, raw: unknown): Promise<string> {
   requireShopId(shopId);
   const data = recommendationSchema.parse(raw);
+  if (data.productIds.length === 0 && data.collectionIds.length === 0) {
+    throw new Error("Add at least one product or collection");
+  }
+  // Either/or, never both: a rule recommends from
+  // hand-picked products OR from collections — mixing the two made it unclear
+  // which picks "win". The runtime pool stays tolerant of legacy mixed rows.
+  if (data.productIds.length > 0 && data.collectionIds.length > 0) {
+    throw new Error("A recommendation can use products or collections, not both");
+  }
   const fields = {
     title: data.title.trim(),
     triggerQuestions: [...new Set(data.triggerQuestions.map((q) => q.trim()).filter(Boolean))],
     productIds: [...new Set(data.productIds)],
+    collectionIds: [...new Set(data.collectionIds)],
     status: data.status,
   };
   if (data.id) {
@@ -131,6 +169,16 @@ export async function saveRecommendation(shopId: string, raw: unknown): Promise<
     });
     if (result.count === 0) throw new Error("Recommendation not found");
     return data.id;
+  }
+  // recommendation_rules quota: the
+  // COUNT of rules is tiered — editing an existing rule is never blocked.
+  const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
+  const quota = getQuota(shop?.plan ?? "free", "recommendation_rules");
+  const count = await db.recommendation.count({ where: { shopId } });
+  if (count >= quota) {
+    throw new Error(
+      `Your plan allows ${quota} recommendation${quota === 1 ? "" : "s"} — remove one or upgrade to add more`,
+    );
   }
   const created = await db.recommendation.create({ data: { shopId, ...fields } });
   return created.id;
@@ -153,54 +201,14 @@ export async function deleteRecommendation(shopId: string, id: string): Promise<
   await db.recommendation.deleteMany({ where: { id, shopId } });
 }
 
-// ── Custom recommendations (config only — runtime lands with a pipeline
-//    enhancement; spec 08 delta noted in the feature report) ────────────────
-
-export async function saveCustomRecommendation(shopId: string, raw: unknown): Promise<string> {
-  requireShopId(shopId);
-  await requireShopFeature(shopId, "custom_recommendations");
-  const data = customRecommendationSchema.parse(raw);
-  if (data.productIds.length === 0 && data.collectionIds.length === 0) {
-    throw new Error("Add at least one product or collection");
-  }
-  const fields = {
-    name: data.name.trim(),
-    searchTerms: [...new Set(data.searchTerms.map((t) => t.trim()).filter(Boolean))],
-    productIds: [...new Set(data.productIds)],
-    collectionIds: [...new Set(data.collectionIds)],
-    status: data.status,
-  };
-  if (data.id) {
-    const result = await db.customRecommendation.updateMany({
-      where: { id: data.id, shopId },
-      data: fields,
-    });
-    if (result.count === 0) throw new Error("Custom recommendation not found");
-    return data.id;
-  }
-  const created = await db.customRecommendation.create({ data: { shopId, ...fields } });
-  return created.id;
-}
-
-export async function setCustomRecommendationStatus(
-  shopId: string,
-  id: string,
-  status: "active" | "inactive",
-): Promise<void> {
-  requireShopId(shopId);
-  await db.customRecommendation.updateMany({ where: { id, shopId }, data: { status } });
-}
-
-export async function deleteCustomRecommendation(shopId: string, id: string): Promise<void> {
-  requireShopId(shopId);
-  await db.customRecommendation.deleteMany({ where: { id, shopId } });
-}
-
-// ── Cross-sell pairs (config only — runtime deferred) ───────────────────────
+// ── Cross-sell pairs ────────────────────────────────────────────────────────
+// Available on EVERY plan with NO limit (2026-09-11, user decision). A pair
+// costs nothing per chat turn and is already bounded: one pair per anchor
+// product (@@unique shopId+productId), ≤20 companions each (crossSellSchema),
+// and anchors are synced products, which products_synced caps per plan.
 
 export async function saveCrossSellPair(shopId: string, raw: unknown): Promise<void> {
   requireShopId(shopId);
-  await requireShopFeature(shopId, "custom_recommendations");
   const data = crossSellSchema.parse(raw);
   const companionIds = [...new Set(data.companionIds.filter((id) => id !== data.productId))];
   if (companionIds.length === 0) throw new Error("Pick at least one companion product");

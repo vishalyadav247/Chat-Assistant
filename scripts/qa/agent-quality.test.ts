@@ -123,6 +123,13 @@ async function main(): Promise<number> {
   if (!shop) throw new Error(`no shop ${SHOP_DOMAIN} — seed or sync it first`);
   const products = await prisma.product.count({ where: { shopId: shop.id } });
   console.log(`shop ${SHOP_DOMAIN} · plan ${shop.plan} · ${products} products\n`);
+  // With the AI switched off every turn short-circuits to `ai_unavailable`
+  // before the model runs, so each case would "fail" for a reason that says
+  // nothing about recommendation quality — 26 misleading failures on 2026-09-11.
+  if (!shop.aiEnabled) {
+    console.log(`NOTE: the AI is switched OFF for ${SHOP_DOMAIN} (shops.aiEnabled = false) — nothing to measure. Aborting.`);
+    return -1;
+  }
 
   let failures = 0;
   const byArea = new Map<string, { pass: number; fail: number }>();
@@ -194,10 +201,17 @@ if (!process.env.OPENAI_API_KEY) {
 
 main()
   .then((failures) => {
-    process.exitCode = failures === 0 ? 0 : 1;
+    // -1 = nothing measured (AI switched off) — neither a pass nor a failure.
+    process.exitCode = failures === -1 ? 2 : failures === 0 ? 0 : 1;
   })
   .catch((error) => {
     console.error("agent-quality crashed:", error);
     process.exitCode = 1;
   })
-  .finally(() => prisma.$disconnect());
+  .finally(async () => {
+    await prisma.$disconnect();
+    // Same reason as scripts/eval-golden.ts: runPipeline uses the
+    // app/db.server singleton, and leaving it connected hangs the exit.
+    const appDb = (await import("../../app/db.server")).default;
+    await appDb.$disconnect().catch(() => undefined);
+  });

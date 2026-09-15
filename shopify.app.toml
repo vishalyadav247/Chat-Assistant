@@ -52,8 +52,22 @@ api_version = "2026-07"
   uri = "/webhooks/app-subscriptions"
   topics = [ "app_subscriptions/update" ]
 
+# Scope justifications (QA-P2, re-verified 2026-09-14 — copy into the listing / PCD forms):
+#   read_content         metafield_definitions/* webhooks (require it) + store pages & blog
+#                        articles the merchant picks as knowledge (Page/Blog/Article accept it)
+#   read_customers       Contacts: link a chat contact to an existing Shopify customer
+#   write_customers      Contacts: "Convert to customer" (customerCreate)
+#   read_discounts       Discount sync so the AI can mention active offers
+#   read_legal_policies  Store policies (refund/shipping/privacy) as a knowledge source
+#   read_metaobjects     Metaobject-reference metafields resolved into product text
+#   read_orders          Order tracking in the widget (verified by order number + email/phone)
+#                        and the Inbox recent-orders panel
+#   read_products        Catalogue sync — the product recommendations themselves
+#   read_themes          Dashboard: detect whether the app embed is enabled in the live theme
+#   write_app_proxy      Storefront widget endpoints under /apps/ccwidget
+#   write_files          Merchant image uploads (logo, chatbox/avatar images) via stagedUploadsCreate/fileCreate
 [access_scopes]
-scopes = "read_content,read_customers,write_customers,read_discounts,read_legal_policies,read_metaobjects,read_online_store_pages,read_orders,read_products,read_themes,write_app_proxy,write_files"
+scopes ="read_content,read_customers,write_customers,read_discounts,read_legal_policies,read_metaobjects,read_orders,read_products,read_themes,write_app_proxy,write_files"
 
 [auth]
 redirect_urls = [
@@ -65,6 +79,3 @@ url = "https://chatconvert.progryss.com/proxy"
 subpath = "ccwidget"
 prefix = "apps"
 
-[events]
-api_version = "unstable"
-subscription = []

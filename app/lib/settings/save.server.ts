@@ -45,6 +45,8 @@ const generalPayload = z.object({
 
 const chatboxPayload = z.object({
   cartDrawer: z.boolean(),
+  /** Human-support waiting message — "" = pipeline default. */
+  humanModeMessage: maxText(300, "Waiting message"),
   orderTracking: z.object({
     mode: z.enum(["default", "custom", "integration"]),
     customUrl: maxText(500, "Custom tracking URL"),
@@ -212,7 +214,7 @@ export async function applySettingsIntent(args: {
       next = { ...current, storeInfo: { ...current.storeInfo, logoUrl: url } };
       extra.logoUrl = url;
     } else if (intent === "remove-logo") {
-      // ✕ on the store logo (2026-08-17): back to the initials avatar. The
+      // ✕ on the store logo: back to the initials avatar. The
       // CDN file itself is left in place (harmless; Files cleanup is out of scope).
       next = { ...current, storeInfo: { ...current.storeInfo, logoUrl: null } };
       extra.logoUrl = "";
@@ -241,6 +243,7 @@ export async function applySettingsIntent(args: {
           next = {
             ...current,
             cartDrawer: p.cartDrawer,
+            humanModeMessage: p.humanModeMessage.trim(),
             // The provider key changes only via connect-tracking (the payload
             // omits it, and the schema would otherwise default it to "").
             orderTracking: { ...p.orderTracking, apiKey: current.orderTracking.apiKey },

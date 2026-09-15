@@ -1,4 +1,4 @@
-// Model picks (buy lane, 2026-09-01). The reply model sees up to 8 grounded
+// Model picks (buy lane). The reply model sees up to 8 grounded
 // candidates, each with an id, and starts its answer with ONE line —
 // `PICKS: 3, 1` or `PICKS: none` — naming the ones that genuinely fit. Code
 // turns that line into cards (ids validated against the allow-list; titles and
@@ -67,7 +67,7 @@ const MAX_FIRST_LINE = 80;
  * token is the control line itself (~10 tokens); a reply that opens with prose
  * is flushed as soon as its first line ends or MAX_FIRST_LINE is reached.
  *
- * Generic since 2026-09-04: the buy lane's `PICKS:` line and the support
+ * Generic: the buy lane's `PICKS:` line and the support
  * lanes' `ACTION:` line (actions.server.ts) are the same trick, and one
  * carefully-tested buffering loop is worth more than two.
  */

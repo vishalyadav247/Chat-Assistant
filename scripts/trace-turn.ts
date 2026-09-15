@@ -18,6 +18,12 @@ try {
   // no .env file — fall back to the ambient environment
 }
 
+// --agent pipeline|tools picks the engine (default: the app default, the AI agent).
+{
+  const i = process.argv.indexOf("--agent");
+  if (i > 0) process.env.AI_AGENT_MODE = process.argv[i + 1];
+}
+
 const DEFAULT_SHOP = "dev-shop.myshopify.com";
 
 const GLYPH: Record<string, string> = {

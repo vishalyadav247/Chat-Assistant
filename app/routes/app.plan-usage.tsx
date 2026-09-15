@@ -88,30 +88,31 @@ const QUOTA_BULLET: Record<QuotaDimension, (def: PlanDefinition) => string | nul
     isUnlimitedQuota(d.quotas.products_synced)
       ? "Unlimited products synced"
       : `Up to ${n(d.quotas.products_synced)} products synced`,
-  // The same idea to a merchant — kept on one line rather than split in two.
-  curated_answers: (d) => {
-    const curated = `${amount(d.quotas.curated_answers)} curated answers`;
-    return d.quotas.manual_qas
-      ? `${curated} · ${amount(d.quotas.manual_qas)} manual Q&As`
-      : curated;
-  },
-  manual_qas: () => null, // merged into the curated_answers line above
-  policy_pages: (d) => `${amount(d.quotas.policy_pages)} policy pages`,
+  pages_synced: (d) =>
+    isUnlimitedQuota(d.quotas.pages_synced)
+      ? "Unlimited store pages synced"
+      : `Up to ${n(d.quotas.pages_synced)} store pages synced`,
+  articles_synced: (d) =>
+    isUnlimitedQuota(d.quotas.articles_synced)
+      ? "Unlimited blog articles synced"
+      : `Up to ${n(d.quotas.articles_synced)} blog articles synced`,
+  curated_answers: (d) => `${amount(d.quotas.curated_answers)} curated answers`,
+  faqs: (d) => `${amount(d.quotas.faqs)} FAQs (CSV import included)`,
+  // One URL source = one web page (spec 22) — there is no crawl.
   crawl_pages: (d) =>
     isUnlimitedQuota(d.quotas.crawl_pages)
-      ? "Full-site website crawl"
+      ? "Unlimited URL sources"
       : d.quotas.crawl_pages <= 1
-        ? "Website crawl: 1 page"
-        : `Website crawl: ${n(d.quotas.crawl_pages)} pages`,
-  // Covers the csv_import / file_upload FEATURES too — the count says more than
-  // a bare "CSV import" line, so those two features render nothing (see below).
-  file_uploads: (d) => `CSV import + PDF upload (${amount(d.quotas.file_uploads)} files)`,
+        ? "1 URL source"
+        : `${n(d.quotas.crawl_pages)} URL sources`,
+  file_uploads: (d) => `PDF / document upload (${amount(d.quotas.file_uploads)} files)`,
   metafields_enabled: () => null,
   team_seats: (d) =>
     d.quotas.team_seats <= 1
       ? "1 team seat (owner only)"
       : `${amount(d.quotas.team_seats)} team seats`,
   active_campaigns: (d) => `${amount(d.quotas.active_campaigns)} active proactive campaigns`,
+  recommendation_rules: (d) => `${amount(d.quotas.recommendation_rules)} recommendation rules`,
   analytics_range_days: (d) =>
     isUnlimitedQuota(d.quotas.analytics_range_days)
       ? "Full analytics history"
@@ -126,16 +127,10 @@ const QUOTA_BULLET: Record<QuotaDimension, (def: PlanDefinition) => string | nul
 const FEATURE_BULLET: Record<GatedFeature, string | null> = {
   remove_branding: null,
   unanswered_analytics: null,
-  discount_realtime_sync: null,
-  catalog_auto_sync: null,
   premium_campaign_templates: null,
   inbox_cart_view: null,
-  exports: null,
-  csv_import: null, // stated by the file_uploads quota line
-  file_upload: null, // stated by the file_uploads quota line
-  survey: null,
   push_notifications: "Browser push notifications",
-  custom_recommendations: "Custom recommendations + cross-sell pairs",
+  order_tracking: "Order tracking in chat",
 };
 
 /** GENERATED from the live plan matrix, never hand-written per plan id.
@@ -227,7 +222,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     quota: status.quota,
     // Everything the merchant needs to understand metering: how close they are,
     // whether they are being charged, and whether the AI has stopped because
-    // their approved spend limit is full (spec 15, 2026-09-03).
+    // their approved spend limit is full (spec 15).
     usageStatus: status,
     // Computed here: nextUsageCap lives in a .server module and the banner is
     // client code.
@@ -467,7 +462,7 @@ export default function PlanUsagePage() {
           </s-banner>
         ) : null}
 
-        {/* Metering is money, so it says so out loud (spec 15, 2026-09-03).
+        {/* Metering is money, so it says so out loud (spec 15).
             Three states, in the order they can happen: approaching the
             allowance, being charged past it, and stopped because the approved
             spend limit is full. */}

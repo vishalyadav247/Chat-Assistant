@@ -1,9 +1,11 @@
 /* app_subscriptions/update webhook — status handling (test cases A-13..A-16).
  * Run: npx tsx scripts/qa/subscription-webhook.test.ts
  *
- * Drives the real route action with genuinely HMAC-signed requests, so
- * authenticate.webhook() actually runs. Covers the branches that decide whether
- * a merchant keeps a paid tier:
+ * The route only verifies + enqueues (QA-C5), so deliveries call the job body,
+ * reconcileSubscription(), directly — enqueueing for real would hand the job to
+ * whatever worker is running (e.g. the dev server) mid-test. The route itself
+ * is still exercised: a forged HMAC is refused, and its source may not call the
+ * Admin API. Covers the branches that decide whether a merchant keeps a paid tier:
  *   ACTIVE                       → plan granted from the VERIFIED subscription name
  *   ACTIVE for a stale sub id    → ignored (never downgrade a paying shop)
  *   CANCELLED for a replaced sub → ignored (a plan switch cancels the old one)
@@ -82,6 +84,7 @@ function payloadFor(status: string, subscriptionId: string, name = "ChatConvert 
 async function main(): Promise<void> {
   const db = (await import("../../app/db.server")).default;
   const { action } = await import("../../app/routes/webhooks.app-subscriptions");
+  const { reconcileSubscription } = await import("../../app/lib/billing/subscription-reconcile.server");
   const { savePlanConfig } = await import("../../app/lib/admin/admin-settings.server");
   const plans = await import("../../app/lib/billing/plans.server");
 
@@ -103,8 +106,8 @@ async function main(): Promise<void> {
       where: { id: shopId },
       select: { plan: true, planStatus: true, subscriptionId: true },
     });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const deliver = (payload: unknown) => action({ request: webhookRequest(payload) } as any);
+  const deliver = (payload: unknown) => reconcileSubscription(SHOP_DOMAIN, payload);
+  void webhookRequest; // signed-request builder kept for manual route probes
 
   try {
     await savePlanConfig({});
@@ -205,6 +208,16 @@ async function main(): Promise<void> {
     state = await readShop();
     ok("forged HMAC is rejected", rejected);
     ok("forged HMAC caused no plan change", state.plan === "pro", state.plan);
+
+    // ── QA-C5: the route is enqueue-only ───────────────────────────────────
+    const routeSrc = readFileSync(join(process.cwd(), "app/routes/webhooks.app-subscriptions.tsx"), "utf-8");
+    ok(
+      "webhook route enqueues and never calls the Admin API / billing provider",
+      routeSrc.includes("enqueue(JOBS.subscriptionReconcile") &&
+        !routeSrc.includes("getBillingProvider") &&
+        !routeSrc.includes(".graphql(") &&
+        !routeSrc.includes("db."),
+    );
   } finally {
     await db.analyticsEvent.deleteMany({ where: { shopId } });
     await db.shop.deleteMany({ where: { id: shopId } });

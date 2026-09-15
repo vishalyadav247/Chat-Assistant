@@ -5,9 +5,9 @@
 //   - standard chat models (gpt-4o*, gpt-4.1*): `temperature` + `max_tokens`
 //   - reasoning models (o1/o3/o4*, gpt-5*): sampling params are REJECTED, and
 //     `max_tokens` must be sent as `max_completion_tokens`
-// (verified against OpenAI + Azure documentation, 2026-08-20).
+// (verified against OpenAI + Azure documentation).
 //
-// GUARANTEE (user requirement 2026-08-20): for the gpt-4 family samplingParams
+// GUARANTEE: for the gpt-4 family samplingParams
 // returns EXACTLY what the app sent before this layer existed — same keys, same
 // values — so behaviour on gpt-4o-mini and friends is unchanged.
 // `scripts/model-compat-check.ts` asserts that.
@@ -20,7 +20,7 @@ const REASONING_MODEL = /^(o\d|gpt-5)/i;
 const NO_JSON_MODE = /^o1-(preview|mini)/i;
 
 /**
- * Extra completion budget granted to reasoning models (QA 2026-08-21).
+ * Extra completion budget granted to reasoning models.
  *
  * `max_completion_tokens` bounds hidden reasoning tokens AND visible output.
  * The router asks for ~160 tokens of strict JSON; a reasoning model can burn

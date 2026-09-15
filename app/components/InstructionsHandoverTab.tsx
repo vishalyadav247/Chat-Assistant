@@ -355,41 +355,17 @@ export function InstructionsHandoverTab(props: { initial: HandoverConfigData }) 
 
       <s-section heading="Where does the customer go?">
         <s-stack gap="base">
-          <s-choice-list
-            label="Handover destination"
-            labelAccessibilityVisibility="exclusive"
-            name="handover-destination"
-            values={[config.destination]}
-            onInput={(e) => {
-              const destination = (e.currentTarget.values[0] ??
-                "inbox") as HandoverConfigData["destination"];
-              setConfig((prev) => ({ ...prev, destination }));
-            }}
+          {/* Accordion layout: each option's settings
+              render DIRECTLY under its own radio, and only the selected
+              option's settings show. */}
+          <DestinationChoice
+            name="handover-destination-inbox"
+            value="inbox"
+            checked={config.destination === "inbox"}
+            onSelect={() => setConfig((prev) => ({ ...prev, destination: "inbox" }))}
+            title="Transfer to a human in the ChatConvert inbox"
+            details="Recommended — an agent joins the chat directly; the customer stays in the same window, no friction."
           >
-            <s-choice value="inbox">
-              Transfer to a human in the ChatConvert inbox
-              <s-text slot="details">
-                Recommended — an agent joins the chat directly; the customer stays in the same
-                window, no friction.
-              </s-text>
-            </s-choice>
-            <s-choice value="collect_email">
-              Collect info &amp; follow up by email
-              <s-text slot="details">
-                No live agents needed — the AI collects customer details and sends a summary to your
-                team email.
-              </s-text>
-            </s-choice>
-            <s-choice value="contact_methods">
-              Show contact methods
-              <s-text slot="details">
-                The AI shows the contact methods configured in your Chatbox settings (phone,
-                WhatsApp, email) and lets the customer pick how to reach out.
-              </s-text>
-            </s-choice>
-          </s-choice-list>
-
-          {config.destination === "inbox" ? (
             <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
               <s-stack gap="base">
                 <s-stack gap="small-200">
@@ -419,33 +395,29 @@ export function InstructionsHandoverTab(props: { initial: HandoverConfigData }) 
 
                 <s-divider />
 
-                <s-choice-list
-                  label="When your team is offline, show customers"
-                  name="inbox-offline-mode"
-                  values={[inbox.offlineMode]}
-                  onInput={(e) => {
-                    const offlineMode = (e.currentTarget.values[0] ??
-                      "leave_message") as HandoverConfigData["inbox"]["offlineMode"];
-                    setInbox({ ...inbox, offlineMode });
-                  }}
+                <s-text type="strong">When your team is offline, show customers</s-text>
+                <DestinationChoice
+                  name="inbox-offline-leave-message"
+                  value="leave_message"
+                  checked={inbox.offlineMode === "leave_message"}
+                  onSelect={() => setInbox({ ...inbox, offlineMode: "leave_message" })}
+                  title="Leave a message — we'll follow up"
                 >
-                  <s-choice value="leave_message">Leave a message — we&apos;ll follow up</s-choice>
-                  <s-choice value="contact_methods">
-                    Show contact methods
-                    <s-text slot="details">
-                      The contact methods configured in your Chatbox settings, so the customer can
-                      reach out until your team is back.
-                    </s-text>
-                  </s-choice>
-                </s-choice-list>
-                {inbox.offlineMode === "leave_message" ? (
                   <s-box padding="base" borderWidth="base" borderRadius="base" background="base">
                     <LeaveMessageForm
                       value={inbox.leaveMessage}
                       onChange={(leaveMessage) => setInbox({ ...inbox, leaveMessage })}
                     />
                   </s-box>
-                ) : null}
+                </DestinationChoice>
+                <DestinationChoice
+                  name="inbox-offline-contact-methods"
+                  value="contact_methods"
+                  checked={inbox.offlineMode === "contact_methods"}
+                  onSelect={() => setInbox({ ...inbox, offlineMode: "contact_methods" })}
+                  title="Show contact methods"
+                  details="The contact methods configured in your Chatbox settings, so the customer can reach out until your team is back."
+                />
 
                 <s-divider />
 
@@ -482,18 +454,32 @@ export function InstructionsHandoverTab(props: { initial: HandoverConfigData }) 
                 </s-choice-list>
               </s-stack>
             </s-box>
-          ) : null}
+          </DestinationChoice>
 
-          {config.destination === "collect_email" ? (
+          <DestinationChoice
+            name="handover-destination-collect-email"
+            value="collect_email"
+            checked={config.destination === "collect_email"}
+            onSelect={() => setConfig((prev) => ({ ...prev, destination: "collect_email" }))}
+            title="Collect info & follow up by email"
+            details="No live agents needed — the AI collects customer details and sends a summary to your team email."
+          >
             <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
               <LeaveMessageForm
                 value={config.collectEmail}
                 onChange={(collectEmail) => setConfig((prev) => ({ ...prev, collectEmail }))}
               />
             </s-box>
-          ) : null}
+          </DestinationChoice>
 
-          {config.destination === "contact_methods" ? (
+          <DestinationChoice
+            name="handover-destination-contact-methods"
+            value="contact_methods"
+            checked={config.destination === "contact_methods"}
+            onSelect={() => setConfig((prev) => ({ ...prev, destination: "contact_methods" }))}
+            title="Show contact methods"
+            details="The AI shows the contact methods configured in your Chatbox settings (phone, WhatsApp, email) and lets the customer pick how to reach out."
+          >
             <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
               <s-stack gap="small-200">
                 <s-text-area
@@ -513,9 +499,48 @@ export function InstructionsHandoverTab(props: { initial: HandoverConfigData }) 
                 <Counter value={config.contactMethods.message} max={300} />
               </s-stack>
             </s-box>
-          ) : null}
+          </DestinationChoice>
         </s-stack>
       </s-section>
+
+      {/* The human-support waiting message is deliberately NOT on this tab
+          (user, 2026-09-11): handover = the AI transfers mid-chat; human mode
+          = the AI agent is deactivated. Its editor lives in Settings →
+          Chatbox (shopSettingsSchema.humanModeMessage); the AI Agent page's
+          off-banner links there. */}
+    </s-stack>
+  );
+}
+
+/** One destination option: a single-choice radio row with the option's own
+ *  settings rendered DIRECTLY beneath it while selected (accordion).
+ *  Selection state is fully controlled via `checked`,
+ *  so each option living in its own s-choice-list still behaves as one
+ *  radio group: picking any option re-renders the others unchecked. */
+function DestinationChoice(props: {
+  name: string;
+  value: string;
+  checked: boolean;
+  onSelect: () => void;
+  title: string;
+  details?: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <s-stack gap="small-200">
+      <s-choice-list
+        label={props.title}
+        labelAccessibilityVisibility="exclusive"
+        name={props.name}
+        values={props.checked ? [props.value] : []}
+        onInput={() => props.onSelect()}
+      >
+        <s-choice value={props.value}>
+          {props.title}
+          {props.details ? <s-text slot="details">{props.details}</s-text> : null}
+        </s-choice>
+      </s-choice-list>
+      {props.checked && props.children ? props.children : null}
     </s-stack>
   );
 }

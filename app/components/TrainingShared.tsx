@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { useFetcher, useNavigate, useRevalidator } from "react-router";
+import { useFetcher, useRevalidator } from "react-router";
 import { useAppBridge } from "../lib/ui/surface";
 import type { TrainingActionResult } from "../routes/app.ai-agent.training";
-import { PlanBadge } from "./ui/PlanGate";
 import { TabPills } from "./ui/TabPills";
 import { useDateTime } from "../lib/format/context";
 
@@ -84,7 +83,143 @@ export function useSyncWatcher(lastSyncedAt: string | null, doneMessage: string)
   return { syncing, start };
 }
 
+/**
+ * Live status for the Knowledge tab's data sources — every type (url, file,
+ * pages, faq, legacy manual/csv).
+ *
+ * Adding or re-syncing a source only sets the row to "pending" and enqueues a
+ * pg-boss job; the job flips it to active/error when it finishes. Nothing
+ * pushed that back to the browser, so the table sat on "Pending" until the
+ * merchant reloaded.
+ *
+ * Unlike useSyncWatcher this needs no baseline and no start() call: the row
+ * status IS the signal. That also means it catches an ingest this tab did not
+ * start — the weekly re-crawl cron, another browser tab, a teammate.
+ *
+ * The interval widens with elapsed time because a sitemap crawl of 20 pages
+ * plus embedding runs for minutes, and a fixed 2.5s poll would fire hundreds of
+ * loader revalidations across it. Paused while the tab is hidden.
+ */
+export function usePendingSources(
+  sources: Array<{ id: string; name: string; status: string }>,
+): { pendingCount: number } {
+  const shopify = useAppBridge();
+  const revalidator = useRevalidator();
+  // Latest-ref so the polling chain is not torn down and restarted every time
+  // revalidator.state flips — that would reset the backoff on every tick.
+  const revalidatorRef = useRef(revalidator);
+  revalidatorRef.current = revalidator;
+
+  const startedAt = useRef(0);
+  const gaveUp = useRef(false);
+  const lastStatus = useRef<Map<string, string>>(new Map());
+
+  const pendingCount = sources.reduce((n, s) => (s.status === "pending" ? n + 1 : n), 0);
+  const watching = pendingCount > 0;
+  // The real dependency of the toast effect: `sources` is a fresh array on
+  // every render, so depending on it would re-run the effect constantly.
+  const statusKey = sources.map((s) => `${s.id}:${s.status}`).join("|");
+
+  useEffect(() => {
+    if (!watching) {
+      startedAt.current = 0;
+      gaveUp.current = false;
+      return;
+    }
+    if (!startedAt.current) startedAt.current = Date.now();
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = () => {
+      const elapsed = Date.now() - startedAt.current;
+      if (elapsed > 15 * 60_000) {
+        // Backstop so a dead job doesn't poll forever (jobs retry on their own).
+        if (!gaveUp.current) {
+          gaveUp.current = true;
+          shopify.toast.show("Still processing — check back shortly", { isError: true });
+        }
+        return;
+      }
+      const visible = typeof document === "undefined" || !document.hidden;
+      if (visible && revalidatorRef.current.state === "idle") {
+        revalidatorRef.current.revalidate();
+      }
+      timer = setTimeout(tick, elapsed < 30_000 ? 2500 : elapsed < 120_000 ? 5000 : 10_000);
+    };
+    timer = setTimeout(tick, 2500);
+    return () => clearTimeout(timer);
+  }, [watching, shopify]);
+
+  useEffect(() => {
+    for (const source of sources) {
+      if (lastStatus.current.get(source.id) === "pending" && source.status !== "pending") {
+        if (source.status === "error") {
+          shopify.toast.show(`${source.name} could not be synced`, { isError: true });
+        } else {
+          shopify.toast.show(`${source.name} is ready`);
+        }
+      }
+    }
+    lastStatus.current = new Map(sources.map((s) => [s.id, s.status]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusKey, shopify]);
+
+  return { pendingCount };
+}
+
 /** Learn card: title + count chip + description + optional master switch. */
+/**
+ * FAQ-style filter dropdown for a DataTable toolbar (user, 2026-09-11 —
+ * the pattern that replaced SubTabs pills on the training tabs): a compact
+ * fixed-width select whose first option is "<Label>: All" ("" value).
+ */
+export function FilterSelect(props: {
+  label: string;
+  /** "" = All. */
+  value: string;
+  options: { value: string; label: string }[];
+  onChange: (value: string) => void;
+  width?: number;
+}) {
+  return (
+    <div style={{ width: props.width ?? 160 }}>
+      <s-select
+        label={props.label}
+        labelAccessibilityVisibility="exclusive"
+        value={props.value || "all"}
+        onInput={(e) => {
+          const v = e.currentTarget.value;
+          props.onChange(v === "all" ? "" : v);
+        }}
+      >
+        <s-option value="all">{props.label}: All</s-option>
+        {props.options.map((o) => (
+          <s-option key={o.value} value={o.value}>
+            {o.label}
+          </s-option>
+        ))}
+      </s-select>
+    </div>
+  );
+}
+
+/**
+ * Draft state for a tab's MASTER learn switch (user decision 2026-09-11):
+ * the top-level switch is a major setting, so it arms the contextual
+ * Save/Discard bar instead of applying on click — while the per-row toggles
+ * stay immediate (their toast is the confirmation). The draft re-syncs from
+ * the saved value after the loader revalidates a successful save.
+ */
+export function useMasterLearnDraft(saved: boolean, save: (enabled: boolean) => void) {
+  const [draft, setDraft] = useState(saved);
+  useEffect(() => setDraft(saved), [saved]);
+  return {
+    draft,
+    setDraft,
+    dirty: draft !== saved,
+    onSave: () => save(draft),
+    onDiscard: () => setDraft(saved),
+  };
+}
+
 export function LearnCard(props: {
   title: string;
   chip: string;
@@ -118,78 +253,38 @@ export function LearnCard(props: {
 }
 
 /**
- * Auto-sync toggle for the Products / Collections "Manage data" rows
- * (2026-08-17, mirrors the Discounts real-time switch): controls the DAILY
- * full re-sync only (webhooks always apply); switch + plan lock, with the
- * last-updated line directly underneath.
+ * How a Training tab's data stays current, plus its last-synced line
+ * There is no Auto sync or real-time switch and no
+ * plan gate any more: keeping synced data correct is the app's job, not a
+ * merchant setting.
+ *
+ *  - products / discounts: Shopify webhooks, processed on every plan.
+ *  - collections: webhooks for the collection itself; smart-collection
+ *    MEMBERSHIP (driven by product tags) has no webhook, so the weekly
+ *    background sync refreshes it.
+ *  - pages / blogs: Shopify has no webhooks at all, so the weekly background
+ *    sync is what updates them.
+ * The manual Sync button beside this is always available.
  */
-export function AutoSyncControl(props: {
-  type: "products" | "collections";
-  available: boolean;
-  /** Tier that unlocks auto sync (live matrix), null when available. */
-  availablePlan: string | null;
-  enabled: boolean;
-  busy: boolean;
-  lastSyncedAt: string | null;
-  running: boolean;
-  onChange: (enabled: boolean) => void;
-}) {
-  return (
-    <SyncControlLayout
-      toggle={
-        <s-switch
-          label="Auto sync"
-          checked={props.available && props.enabled}
-          disabled={!props.available || props.busy}
-          onInput={(e) => props.onChange(e.currentTarget.checked)}
-        />
-      }
-      info={
-        props.available
-          ? `Re-syncs all ${props.type} from Shopify once a day.`
-          : `Available on ${props.availablePlan ?? "higher"} plans — re-syncs all ${props.type} once a day. Individual changes still update instantly.`
-      }
-      locked={!props.available}
-      lockedPlan={props.availablePlan}
-      lastSyncedAt={props.lastSyncedAt}
-      running={props.running}
-    />
-  );
-}
+const SYNC_INFO: Record<SyncType, string> = {
+  products: "Updates automatically whenever a product changes in Shopify.",
+  collections:
+    "Updates automatically when a collection changes in Shopify. Smart-collection membership refreshes weekly.",
+  discounts: "Updates automatically whenever a discount changes in Shopify.",
+  pages: "Shopify doesn't notify apps about page edits, so pages refresh automatically once a week. Click Sync to update now.",
+  blogs: "Shopify doesn't notify apps about blog edits, so articles refresh automatically once a week. Click Sync to update now.",
+};
 
-/**
- * Shared layout for the sync switches (Products / Collections auto sync,
- * Discounts real-time sync): row 1 = [switch] [what it does] [Pro + Upgrade
- * when locked]; row 2 = last updated (+ "Sync running" badge).
- */
-export function SyncControlLayout(props: {
-  toggle: React.ReactNode;
-  info: string;
-  locked?: boolean;
-  /** Tier that unlocks the control, from the live matrix. */
-  lockedPlan?: string | null;
-  lastSyncedAt: string | null;
-  running?: boolean;
-}) {
+export type SyncType = "products" | "collections" | "discounts" | "pages" | "blogs";
+
+export function SyncStatus(props: { type: SyncType; lastSyncedAt: string | null; running?: boolean }) {
   const dt = useDateTime();
-  const navigate = useNavigate();
   return (
     <s-stack gap="none">
-      <s-stack direction="inline" gap="small-200" alignItems="center">
-        {props.toggle}
-        <s-text color="subdued">{props.info}</s-text>
-        {props.locked ? (
-          <>
-            <PlanBadge plan={props.lockedPlan ?? null} />
-            <s-button variant="tertiary" onClick={() => navigate("/app/plan-usage")}>
-              {props.lockedPlan ? `Upgrade to ${props.lockedPlan}` : "Upgrade"}
-            </s-button>
-          </>
-        ) : null}
-      </s-stack>
+      <s-text color="subdued">{SYNC_INFO[props.type]}</s-text>
       <s-stack direction="inline" gap="small-200" alignItems="center">
         <s-icon type="clock" tone="neutral" size="small" />
-        <s-text color="subdued">Last updated {props.lastSyncedAt ? dt.dateTime(props.lastSyncedAt) : "N/A"}</s-text>
+        <s-text color="subdued">Last synced {props.lastSyncedAt ? dt.dateTime(props.lastSyncedAt) : "never"}</s-text>
         {props.running ? <s-badge tone="info">Sync running</s-badge> : null}
       </s-stack>
     </s-stack>
