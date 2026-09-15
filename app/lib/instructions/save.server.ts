@@ -115,22 +115,39 @@ export async function saveGeneralInstructions(
     }),
   ]);
 
-  if (data.storeInfoAbout !== undefined) {
-    const about = data.storeInfoAbout.trim();
-    const current = await loadShopSettings(shopId);
-    if (about !== current.storeInfo.about) {
-      const next = shopSettingsSchema.parse({
-        ...current,
-        storeInfo: { ...current.storeInfo, about },
-      });
-      await db.shopSettings.upsert({
-        where: { shopId },
-        update: { settings: next as unknown as Prisma.InputJsonObject },
-        create: { shopId, settings: next as unknown as Prisma.InputJsonObject },
-      });
-      // Rebuild the store_info knowledge bridge so the AI answers from the new
-      // text on the next turn. Fail-soft like the FAQ bridge: the text is
-      // saved either way, and an embedding outage must not fail the save.
+  // Spec 26: saving General is the merchant's review of AI-written instructions;
+  // a field they changed stops being AI-owned (Regenerate never overwrites it).
+  const current = await loadShopSettings(shopId);
+  const { reviewedAiSetup } = await import("./ai-setup.server");
+  const aiSetup = reviewedAiSetup(current.aiSetup, {
+    role: personaData.role,
+    brandVoice: personaData.brandVoice,
+    behaviours: personaData.behaviours,
+    ...(data.scope !== undefined ? { scope: data.scope.trim() } : {}),
+    ...(data.offTopicMessage !== undefined ? { offTopicMessage: data.offTopicMessage.trim() } : {}),
+    fallbackMessage: guardrailsData.fallbackMessage,
+    bannedTopics: bannedTopics.join("\n"),
+    language: `${data.defaultLanguage}|${data.autoDetectLanguage}`,
+    ...(data.storeInfoAbout !== undefined ? { storeInfo: data.storeInfoAbout.trim() } : {}),
+  });
+
+  const aboutChanged = data.storeInfoAbout !== undefined && data.storeInfoAbout.trim() !== current.storeInfo.about;
+  if (aboutChanged || aiSetup !== current.aiSetup) {
+    const about = data.storeInfoAbout !== undefined ? data.storeInfoAbout.trim() : current.storeInfo.about;
+    const next = shopSettingsSchema.parse({
+      ...current,
+      storeInfo: { ...current.storeInfo, about },
+      aiSetup,
+    });
+    await db.shopSettings.upsert({
+      where: { shopId },
+      update: { settings: next as unknown as Prisma.InputJsonObject },
+      create: { shopId, settings: next as unknown as Prisma.InputJsonObject },
+    });
+    // Rebuild the store_info knowledge bridge so the AI answers from the new
+    // text on the next turn. Fail-soft like the FAQ bridge: the text is saved
+    // either way, and an embedding outage must not fail the save.
+    if (aboutChanged) {
       try {
         await syncStoreInfoKnowledge(shopId);
       } catch (error) {

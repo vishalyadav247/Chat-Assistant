@@ -1146,7 +1146,13 @@ async function main(): Promise<void> {
       });
       ok("widget-config reports aiAvailable=false at the conversation cap", quotaCfg.json?.aiAvailable === false, `aiAvailable=${quotaCfg.json?.aiAvailable}`);
       ok("chat refuses at the conversation cap (no LLM call)", String(quotaChat.frames.at(-1)?.outcome) === "ai_unavailable", `outcome=${quotaChat.frames.at(-1)?.outcome}`);
-      ok("the cap reply is merchant-safe copy, not an error", /leave your email/i.test(String(quotaChat.frames.find((f) => f.type === "message")?.text ?? "")), String(quotaChat.frames.find((f) => f.type === "message")?.text).slice(0, 80));
+      // QA2-A4: the cap path attaches no form, so the copy must not promise an email follow-up.
+      const capText = String(quotaChat.frames.find((f) => f.type === "message")?.text ?? "");
+      ok(
+        "the cap reply is merchant-safe copy, not an error (and promises no email follow-up)",
+        capText.trim().length > 0 && !/error|exception|stack|undefined|quota|cap\b/i.test(capText) && !/leave your email/i.test(capText),
+        capText.slice(0, 80),
+      );
     }
 
     // Per-session chat rate limit (10/min). Run it on a shop with the AI

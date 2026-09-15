@@ -9,7 +9,7 @@ import { useAppBridge } from "../lib/ui/surface";
 import { requireAdminUser } from "../lib/admin/admin-auth.server";
 import { runtimeConfig, saveRuntimeConfig } from "../lib/admin/runtime-config.server";
 import { sameOrigin } from "../lib/team/same-origin.server";
-import { PLANS, PLAN_IDS } from "../lib/billing/plans.server";
+import { currentPlans, PLAN_IDS } from "../lib/billing/plans.server";
 import { isPaidPlan } from "../lib/billing/shopify-billing.server";
 import {
   describePromo,
@@ -68,7 +68,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     couponsEnabled: runtimeConfig().promoCodesEnabled,
     paidPlans: PLAN_IDS.filter(isPaidPlan).map((id) => ({
       id,
-      name: PLANS[id].name,
+      name: currentPlans()[id].name,
     })),
     codes: rows.map((r) => ({
       id: r.id,

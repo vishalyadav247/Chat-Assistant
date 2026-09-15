@@ -79,7 +79,7 @@ export function startQueueOnBoot(): void {
 export async function enqueue(
   name: string,
   data: object,
-  options?: { group?: { id: string }; singletonKey?: string; singletonSeconds?: number },
+  options?: { group?: { id: string }; singletonKey?: string; singletonSeconds?: number; startAfter?: number },
 ): Promise<boolean> {
   const { boss, started } = getQueue();
   await started;

@@ -52,6 +52,14 @@ export interface GeneralData {
   /** Store scope + off-topic message (persona columns; QA-A3). */
   scope: string;
   offTopicMessage: string;
+  /** Spec 26: instructions written from the store's data. */
+  aiSetup: {
+    status: string;
+    generatedAt: string;
+    reviewedAt: string;
+    conflicts: string[];
+    faqDrafts: number;
+  };
 }
 
 export interface RecommendationRowData {
@@ -86,8 +94,6 @@ export interface InstructionsActionResult {
   intent: string;
   id?: string;
   error?: string;
-  /** store-info-prefill: the draft built from Shopify, for the merchant to review. */
-  draft?: string;
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -149,6 +155,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     collectionMeta[c.shopifyCollectionId] = { title: c.title, productCount: c.productCount };
   }
 
+  const settings = shopSettingsSchema.parse(settingsRow?.settings ?? {});
   const general: GeneralData = {
     role: persona?.role ?? "",
     communicationStyle: persona?.communicationStyle ?? "friendly",
@@ -158,9 +165,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     autoDetectLanguage: persona?.autoDetectLanguage ?? false,
     bannedTopics: guardrails?.bannedTopics ?? [],
     fallbackMessage: guardrails?.fallbackMessage ?? "",
-    storeInfoAbout: shopSettingsSchema.parse(settingsRow?.settings ?? {}).storeInfo.about,
+    storeInfoAbout: settings.storeInfo.about,
     scope: persona?.scope ?? "",
     offTopicMessage: persona?.offTopicMessage ?? "",
+    aiSetup: {
+      status: settings.aiSetup.status,
+      generatedAt: settings.aiSetup.generatedAt,
+      reviewedAt: settings.aiSetup.reviewedAt,
+      conflicts: settings.aiSetup.conflicts,
+      faqDrafts: settings.aiSetup.faqDrafts,
+    },
   };
 
   return {
@@ -194,13 +208,17 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<Instructi
 
   try {
     switch (intent) {
-      case "store-info-prefill": {
-        const { buildStoreInfoDraft } = await import("../lib/instructions/store-info.server");
-        return { ok: true, intent, draft: await buildStoreInfoDraft(shopDomain) };
-      }
       case "save-general": {
         await saveGeneralInstructions(shopId, payload);
         return { ok: true, intent };
+      }
+      case "ai-setup-regenerate": {
+        // Spec 26: rewrites only fields the merchant hasn't changed; rate-limited.
+        const { requestAiSetup } = await import("../lib/instructions/ai-setup.server");
+        const queued = await requestAiSetup(shopId, shopDomain, { force: true });
+        return queued
+          ? { ok: true, intent }
+          : { ok: false, intent, error: "Instructions were rewritten recently — try again in a few minutes." };
       }
       case "save-handover": {
         await saveHandoverConfig(shopId, payload);

@@ -104,32 +104,6 @@ export function InstructionsGeneralTab(props: { initial: GeneralData }) {
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }));
 
-  // "Fill from Shopify": a draft from the store's Shopify details. It only
-  // fills the field (the save bar appears) — the merchant reviews, then saves.
-  const prefillFetcher = useFetcher<InstructionsActionResult>();
-  const prefilling = prefillFetcher.state !== "idle";
-  useEffect(() => {
-    const result = prefillFetcher.data;
-    if (prefillFetcher.state !== "idle" || !result || result.intent !== "store-info-prefill") return;
-    if (result.ok && result.draft) {
-      const draft = result.draft;
-      setForm((prev) => ({
-        ...prev,
-        // Never overwrite what the merchant already wrote — add the draft below it.
-        storeInfoAbout: (prev.storeInfoAbout.trim()
-          ? `${prev.storeInfoAbout.trim()}\n\n${draft}`
-          : draft
-        ).slice(0, STORE_INFO_MAX),
-      }));
-      shopify.toast.show("Added your Shopify store details — review, then save");
-    } else if (result.ok) {
-      shopify.toast.show("Shopify has no store details to add yet");
-    } else {
-      shopify.toast.show(result.error ?? "Couldn't read your Shopify store details", { isError: true });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prefillFetcher.state, prefillFetcher.data]);
-
   // Arriving from the dashboard step (#store-info): bring the section into view.
   useEffect(() => {
     if (typeof window !== "undefined" && window.location.hash === "#store-info") {
@@ -162,9 +136,76 @@ export function InstructionsGeneralTab(props: { initial: GeneralData }) {
 
   const discard = () => setForm(saved);
 
+  // Spec 26: instructions written from the store's own data after install.
+  const regenerateFetcher = useFetcher<InstructionsActionResult>();
+  const regenerating = regenerateFetcher.state !== "idle";
+  useEffect(() => {
+    const result = regenerateFetcher.data;
+    if (regenerateFetcher.state !== "idle" || !result || result.intent !== "ai-setup-regenerate") return;
+    if (result.ok) {
+      shopify.toast.show("Rewriting your instructions from your store data — refresh in about a minute");
+    } else {
+      shopify.toast.show(result.error ?? "Couldn't start — try again", { isError: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [regenerateFetcher.state, regenerateFetcher.data]);
+  const aiSetup = props.initial.aiSetup;
+  const aiWritten = aiSetup.status === "done" && aiSetup.generatedAt;
+  const needsReview = aiWritten && !aiSetup.reviewedAt;
+  const inProgress = aiSetup.status === "pending" || aiSetup.status === "running";
+
   return (
     <s-stack gap="base">
       <SaveBar dirty={dirty} saving={saving} onSave={save} onDiscard={discard} />
+
+      {needsReview ? (
+        <s-banner tone="info" heading="Your assistant's instructions were written from your store">
+          <s-stack gap="small-200">
+            <s-paragraph>
+              We used your Shopify store details, policies, pages and catalogue. They&apos;re live now — review them and
+              press Save to confirm. Anything you change is never rewritten.
+            </s-paragraph>
+            {aiSetup.conflicts.length > 0 ? (
+              <s-stack gap="small-100">
+                <s-text type="strong">Your store data disagrees with itself — fix it in Shopify so the assistant is consistent:</s-text>
+                <s-unordered-list>
+                  {aiSetup.conflicts.map((conflict) => (
+                    <s-list-item key={conflict}>{conflict}</s-list-item>
+                  ))}
+                </s-unordered-list>
+              </s-stack>
+            ) : null}
+            {aiSetup.faqDrafts > 0 ? (
+              <s-paragraph>
+                {aiSetup.faqDrafts} FAQ draft{aiSetup.faqDrafts === 1 ? "" : "s"} added in Training → FAQs — answer and
+                publish the ones you want shoppers to see.
+              </s-paragraph>
+            ) : null}
+          </s-stack>
+        </s-banner>
+      ) : null}
+      {inProgress ? (
+        <s-banner tone="info" heading="Writing your instructions from your store data…">
+          <s-paragraph>This takes about a minute after your products finish syncing.</s-paragraph>
+        </s-banner>
+      ) : null}
+
+      <s-section heading="Write from my store">
+        <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="center">
+          <s-paragraph color="subdued">
+            Rewrite store info, role, tone, behaviours, scope and messages from your Shopify store data. Fields you have
+            edited yourself are kept.
+          </s-paragraph>
+          <s-button
+            icon="wand"
+            loading={regenerating}
+            disabled={regenerating || inProgress}
+            onClick={() => regenerateFetcher.submit({ intent: "ai-setup-regenerate" }, { method: "post" })}
+          >
+            {aiWritten ? "Rewrite from my store" : "Write from my store"}
+          </s-button>
+        </s-grid>
+      </s-section>
 
       {/* Store info (2026-09-14): what the AI knows about the store itself.
           Saved to ShopSettings.storeInfo.about and embedded as the store_info
@@ -172,21 +213,14 @@ export function InstructionsGeneralTab(props: { initial: GeneralData }) {
           dashboard "Add store info" step links here (#store-info). */}
       <s-section id="store-info" heading="Store info">
           <s-stack gap="small-200">
-            <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="center">
-              <s-paragraph color="subdued">
-                Tell your assistant about your store — what you sell, where you&apos;re based,
-                opening hours, and how shoppers can reach you. It answers questions about your
-                store from this.
-              </s-paragraph>
-              <s-button
-                icon="store-import"
-                loading={prefilling}
-                disabled={prefilling}
-                onClick={() => prefillFetcher.submit({ intent: "store-info-prefill" }, { method: "post" })}
-              >
-                Fill from Shopify
-              </s-button>
-            </s-grid>
+            {/* "Fill from Shopify" was removed 2026-09-15 (owner decision): "Write
+                from my store" (spec 26) above writes this field and every other
+                one from the same Shopify data and more. */}
+            <s-paragraph color="subdued">
+              Tell your assistant about your store — what you sell, where you&apos;re based,
+              opening hours, and how shoppers can reach you. It answers questions about your
+              store from this.
+            </s-paragraph>
             <s-text-area
               label="Store info"
               labelAccessibilityVisibility="exclusive"

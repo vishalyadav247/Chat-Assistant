@@ -106,11 +106,32 @@ model Product {
   searchText       Unsupported("tsvector")? // GENERATED column (see init migration)
   createdAt        DateTime                     @default(now())
   updatedAt        DateTime                     @updatedAt
+  passages         ProductPassage[]
 
   @@unique([shopId, shopifyProductId])
   @@index([shopId, price])
   @@index([shopId, stock])
   @@map("products")
+}
+
+/// Spec 25 — a long product description split into passages, each embedded, so
+/// meaning search and product-detail answers cover the whole description.
+/// Built at catalog sync; rows cascade with their product.
+model ProductPassage {
+  id         String                       @id @default(cuid())
+  shopId     String
+  productId  String
+  product    Product                      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  position   Int
+  body       String
+  bodyHash   String // normalised text hash — repeated paragraphs are boilerplate
+  sourceHash String // hash of the description the passages were built from
+  embedding  Unsupported("vector(1536)")?
+  createdAt  DateTime                     @default(now())
+
+  @@index([shopId, productId])
+  @@index([shopId, bodyHash])
+  @@map("product_passages")
 }
 
 /// Shopify metafield definitions (products + variants) mirrored per shop —

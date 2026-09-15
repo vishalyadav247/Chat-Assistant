@@ -49,6 +49,8 @@ export interface ProductCandidate {
   score: number | null; // vector similarity (null for keyword-only hits)
   /** Matching description fragment(s) from the keyword lane; null for vector-only rows. */
   headline: string | null;
+  /** The description passage that matched the query by meaning (spec 25); null when none. */
+  passage: string | null;
   /** Shopper/router words this product's text actually contains (keyword lane). */
   matchedTerms: string[];
   /** The subset of matchedTerms found in the title / type / vendor / tags (not only the description). */
@@ -74,6 +76,8 @@ export interface ProductSearchArgs {
   limit?: number;
   /** Rules card (spec 08): when false, unavailable products may be recommended. */
   excludeOutOfStock?: boolean;
+  /** Also search description passages by meaning (spec 25, AI agent). */
+  usePassages?: boolean;
 }
 
 // Purchasable = tracked stock on hand OR any variant availableForSale (covers
@@ -83,7 +87,7 @@ const PURCHASABLE = Prisma.sql`("stock" > 0 OR EXISTS (
   WHERE (v->>'available')::boolean
 ))`;
 
-function stockCondition(excludeOutOfStock: boolean): Prisma.Sql {
+export function stockCondition(excludeOutOfStock: boolean): Prisma.Sql {
   return excludeOutOfStock ? PURCHASABLE : Prisma.sql`TRUE`;
 }
 
@@ -144,9 +148,15 @@ export async function hybridProductSearch(args: ProductSearchArgs): Promise<Prod
   const priceMax = args.priceMax ?? null;
   const excludeOutOfStock = args.excludeOutOfStock ?? true;
 
-  const [keywordRows, vectorRows] = await Promise.all([
+  const [keywordRows, vectorRows, passageRows] = await Promise.all([
     keywordSearch(shopId, args.keywords, args.message ?? "", priceMax, limit, excludeOutOfStock),
     vectorSearch(shopId, args.queryEmbedding, priceMax, limit, excludeOutOfStock),
+    args.usePassages
+      ? passageSearch(shopId, args.queryEmbedding, priceMax, limit, excludeOutOfStock).catch((error) => {
+          logError("passage_search_error", error, { shopId });
+          return [] as RawRow[];
+        })
+      : Promise.resolve([] as RawRow[]),
   ]);
 
   // Coverage first (a product whose NAME or tags carry the shopper's words —
@@ -174,6 +184,22 @@ export async function hybridProductSearch(args: ProductSearchArgs): Promise<Prod
     if (existing) {
       existing.score = row.score;
       existing.fused += contribution;
+      return;
+    }
+    if ((row.score ?? 0) < args.minMeaningScore) return;
+    merged.set(row.id, { ...toCandidate(row), fused: contribution });
+  });
+  // Spec 25: the best description passage per product is a second meaning
+  // lane. It reaches facts past the product vector's first 2,000 description
+  // chars; its score raises the product's meaning score and its text becomes
+  // the snippet that tells the model WHY the product matched.
+  passageRows.forEach((row, rank) => {
+    const contribution = 1 / (RRF_K + rank);
+    const existing = merged.get(row.id);
+    if (existing) {
+      existing.fused += contribution;
+      if ((row.score ?? 0) > (existing.score ?? 0)) existing.score = row.score;
+      existing.passage = row.passage ?? existing.passage;
       return;
     }
     if ((row.score ?? 0) < args.minMeaningScore) return;
@@ -253,6 +279,8 @@ interface RawRow {
   metafieldText: string | null;
   score: number | null;
   headline: string | null;
+  /** Best matching description passage (passage lane only). */
+  passage?: string | null;
   kwHit: boolean | null;
   matched: string[] | null;
   headMatched: string[] | null;
@@ -710,6 +738,62 @@ async function vectorSearch(
   `);
 }
 
+/** A passage repeated across this many of a shop's products is boilerplate (spec 25). */
+const COMMON_PASSAGE_PRODUCTS = 3;
+
+/**
+ * Spec 25 passage lane: the best-matching description passage per product,
+ * with the product filters in SQL. Boilerplate passages (the same text in
+ * ≥ COMMON_PASSAGE_PRODUCTS products of the shop — a shared care guide, "pairs
+ * with…") are skipped: they match every product equally and say nothing about
+ * which one fits. `hnsw.iterative_scan` keeps a small shop's results complete
+ * on a database shared with large ones (the shop filter applies after the
+ * index scan; pgvector ≥ 0.8 keeps scanning until LIMIT is met).
+ */
+async function passageSearch(
+  shopId: string,
+  queryEmbedding: number[],
+  priceMax: number | null,
+  limit: number,
+  excludeOutOfStock: boolean,
+): Promise<RawRow[]> {
+  const vec = toSqlVector(queryEmbedding);
+  const [, rows] = await db.$transaction([
+    db.$executeRawUnsafe(`SET LOCAL hnsw.iterative_scan = relaxed_order`),
+    db.$queryRaw<RawRow[]>(Prisma.sql`
+      WITH hits AS (
+        SELECT pp."productId", pp."body", (1 - (pp."embedding" <=> ${vec}::vector))::float8 AS score
+        FROM "product_passages" pp
+        WHERE pp."shopId" = ${shopId}
+          AND pp."embedding" IS NOT NULL
+          AND pp."bodyHash" NOT IN (
+            SELECT "bodyHash" FROM "product_passages"
+            WHERE "shopId" = ${shopId}
+            GROUP BY "bodyHash"
+            HAVING count(DISTINCT "productId") >= ${COMMON_PASSAGE_PRODUCTS}
+          )
+        ORDER BY pp."embedding" <=> ${vec}::vector
+        LIMIT ${limit * 6}
+      ),
+      best AS (
+        SELECT DISTINCT ON ("productId") "productId", "body", score
+        FROM hits
+        ORDER BY "productId", score DESC
+      )
+      SELECT ${BASE_COLUMNS}, b.score AS score, NULL::text AS headline, b."body" AS passage,
+             FALSE AS "kwHit", NULL::text[] AS matched, NULL::text[] AS "headMatched", 0::float8 AS coverage
+      FROM best b
+      JOIN "products" ON "products"."id" = b."productId" AND "products"."shopId" = ${shopId}
+      WHERE "learnEnabled" = true AND "status" = 'active' AND "publishedOnline" = true
+        AND ${stockCondition(excludeOutOfStock)}
+        AND (${priceMax}::float8 IS NULL OR "price" <= ${priceMax}::float8)
+      ORDER BY b.score DESC
+      LIMIT ${limit}
+    `),
+  ]);
+  return rows;
+}
+
 function toCandidate(row: RawRow): ProductCandidate {
   return {
     id: row.id,
@@ -725,7 +809,8 @@ function toCandidate(row: RawRow): ProductCandidate {
     description: row.description ?? "",
     metafieldText: row.metafieldText ?? "",
     score: row.score === null || row.score === undefined ? null : Number(row.score),
-    headline: cleanHeadline(row.headline),
+    headline: cleanHeadline(row.headline, `${row.description ?? ""} ${row.metafieldText ?? ""}`),
+    passage: row.passage ?? null,
     matchedTerms: row.matched ?? [],
     headTerms: row.headMatched ?? [],
     // Two decimals: sums of 0.4-weighted terms otherwise print as 3.5999999….
@@ -734,11 +819,31 @@ function toCandidate(row: RawRow): ProductCandidate {
   };
 }
 
-/** ts_headline marks matches with <b>…</b>; the model gets plain text. */
-function cleanHeadline(headline: string | null | undefined): string | null {
+/**
+ * ts_headline marks matches with <b>…</b>; the model gets plain text.
+ *
+ * Its fragments start and end on the parser's tokens, and a hyphenated word is
+ * several tokens: "6mm non-slip TPE yoga mat" reached the model as "slip TPE
+ * yoga mat" — the negation cut off inverts the fact (QA3-A6). Each fragment is
+ * widened back to whole words of the source text.
+ */
+export function cleanHeadline(headline: string | null | undefined, source = ""): string | null {
   if (!headline) return null;
-  const text = headline.replace(/<\/?b>/g, "").replace(/\s+/g, " ").trim();
-  return text.length > 0 ? text : null;
+  const plain = headline.replace(/<\/?b>/g, "").replace(/\s+/g, " ").trim();
+  if (!plain) return null;
+  const text = source.replace(/\s+/g, " ");
+  if (!text) return plain;
+  const lowerText = text.toLowerCase();
+  const fragments = plain.split(" … ").map((fragment) => {
+    const at = lowerText.indexOf(fragment.toLowerCase());
+    if (at < 0) return fragment;
+    let start = at;
+    while (start > 0 && !/\s/.test(text[start - 1])) start--;
+    let end = at + fragment.length;
+    while (end < text.length && !/\s/.test(text[end])) end++;
+    return text.slice(start, end).trim();
+  });
+  return fragments.join(" … ");
 }
 
 /**
@@ -783,8 +888,14 @@ export function candidateSnippet(candidate: ProductCandidate): string {
   const parts: string[] = [];
   if (candidate.productType) parts.push(candidate.productType);
   if (candidate.tags.length > 0) parts.push(candidate.tags.slice(0, 5).join(", "));
-  const body = candidate.headline ?? candidate.description.replace(/\s+/g, " ").trim().slice(0, 220);
+  const body = candidate.headline ?? (candidate.passage ? null : candidate.description.replace(/\s+/g, " ").trim().slice(0, 220));
   if (body) parts.push(body);
+  // Spec 25: the description passage that matched by meaning — often a fact far
+  // past what the keyword fragment or the description's opening shows.
+  if (candidate.passage) {
+    const passage = candidate.passage.replace(/\s+/g, " ").trim();
+    parts.push(`matching description: ${passage.length > 450 ? `${passage.slice(0, 450)}…` : passage}`);
+  }
   // Merchant-enabled metafields (materials, care, dimensions…) are the facts
   // shoppers ask about most — always present when set, bounded like the body.
   const meta = candidate.metafieldText.replace(/\s+/g, " ").trim();

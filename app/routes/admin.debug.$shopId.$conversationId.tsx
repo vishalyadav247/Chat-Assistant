@@ -4,7 +4,7 @@ import db from "../db.server";
 import { AdminShell } from "../components/admin/AdminShell";
 import { AdminBadge, AdminCard, AdminEmpty, AdminPage } from "../components/admin/AdminUi";
 import { requireOwnerAdmin } from "../lib/admin/admin-auth.server";
-import { logWarn } from "../lib/log.server";
+import { logAudit } from "../lib/log.server";
 import type { CapturedLlmCall } from "../lib/pipeline/turn-capture.server";
 import type { TraceStep, TraceSummary } from "../lib/pipeline/trace-types";
 
@@ -40,8 +40,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     : null;
 
   // One access-log row per view: who read which store's shopper conversation.
-  logWarn("turn_trace_viewed", `debug conversation viewed (${traces.length} turns)`, {
-    by: session.admin.email,
+  logAudit("turn_trace_viewed", session.admin.email, `debug conversation viewed (${traces.length} turns)`, {
     shopId,
     conversationId,
     turns: traces.length,

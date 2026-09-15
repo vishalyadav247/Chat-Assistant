@@ -34,6 +34,8 @@
     "deploy:prod": "node scripts/deploy-shopify.cjs",
     "eval:quality": "tsx scripts/qa/agent-quality.test.ts",
     "eval:conversations": "tsx scripts/qa/conversations.test.ts",
+    "passages:backfill": "tsx scripts/backfill-product-passages.ts",
+    "ai-setup": "tsx scripts/ai-setup.ts",
     "qa:preflight": "tsx scripts/qa/preflight.ts"
   },
   "prisma": {

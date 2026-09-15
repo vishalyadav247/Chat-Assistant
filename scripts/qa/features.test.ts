@@ -3699,16 +3699,32 @@ async function qaFixes(ctx: { db: any; A: string; B: string }): Promise<void> {
       })) {
         // drain
       }
-      await new Promise((resolve) => setTimeout(resolve, 300)); // save is fire-and-forget
+      // The save is fire-and-forget: no fixed sleep here — see the sentinel below.
     };
     const before = await db.turnTrace.count({ where: { shopId: A } });
+    // Order matters: both "must NOT write" turns go first, then a turn that MUST
+    // write. saveTurnTrace does the same shop + conversation lookups for all
+    // three, so once the live turn's row has landed (bounded poll, ≤5 s — a
+    // fixed 300 ms wait was flaky under load) the two earlier saves have had at
+    // least as long to write a late row. The absence checks then run.
     await run("");
-    ok("C4a a turn with no conversation writes no trace", (await db.turnTrace.count({ where: { shopId: A } })) === before);
     await run("conversation-that-does-not-exist");
-    ok("C4b a turn whose conversation is gone writes no trace", (await db.turnTrace.count({ where: { shopId: A } })) === before);
     const live = await db.conversation.create({ data: { shopId: A, sessionId: `${TAG}-c4-sess` } });
     await run(live.id);
-    ok("C4c a real conversation's turn is recorded", (await db.turnTrace.count({ where: { shopId: A, conversationId: live.id } })) === 1);
+    const liveCount = () => db.turnTrace.count({ where: { shopId: A, conversationId: live.id } });
+    const pollStart = Date.now();
+    let recorded = await liveCount();
+    while (recorded === 0 && Date.now() - pollStart < 5_000) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      recorded = await liveCount();
+    }
+    // Settle margin after the sentinel so a same-tick late write still shows.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    recorded = await liveCount();
+    const others = await db.turnTrace.count({ where: { shopId: A, NOT: { conversationId: live.id } } });
+    ok("C4a a turn with no conversation writes no trace", recorded === 1 && others === before, `sentinel=${recorded} others=${others} before=${before}`);
+    ok("C4b a turn whose conversation is gone writes no trace", recorded === 1 && (await db.turnTrace.count({ where: { shopId: A, conversationId: "conversation-that-does-not-exist" } })) === 0 && others === before);
+    ok("C4c a real conversation's turn is recorded", recorded === 1, `${recorded} row(s) after ${Date.now() - pollStart} ms`);
     await db.turnTrace.deleteMany({ where: { shopId: A, conversationId: live.id } });
     await db.conversation.deleteMany({ where: { id: live.id, shopId: A } });
   }
@@ -4076,23 +4092,12 @@ async function dashboardSetup(ctx: { db: any }): Promise<void> {
       kept.storeInfo?.about === aboutText && !listed.some((s: any) => s.type === "store_info"),
       `about kept=${kept.storeInfo?.about === aboutText}`,
     );
-    const { storeInfoDraftFrom } = await import("../../app/lib/instructions/store-info.server");
-    const draft = storeInfoDraftFrom({
-      name: "Luna",
-      description: "Handmade crystal jewellery.",
-      contactEmail: "hi@luna.test",
-      currencyCode: "INR",
-      shipsToCountries: ["IN", "US"],
-      primaryDomain: { host: "luna.test" },
-    });
+    // DS12 ("Fill from Shopify" draft) retired 2026-09-15: the button was replaced
+    // by "Write from my store" (spec 26), covered by scripts/qa/ai-setup.test.ts.
     ok(
-      "DS12 Fill from Shopify draft: name, domain, description, shipping, currency, email",
-      draft.includes("Luna is an online store at luna.test.") &&
-        draft.includes("Handmade crystal jewellery.") &&
-        /We ship to: India, United States\./.test(draft) &&
-        draft.includes("Prices are in INR.") &&
-        draft.includes("hi@luna.test"),
-      draft.replace(/\n/g, " | "),
+      "DS12 the General tab offers Write from my store and no longer Fill from Shopify",
+      /Write from my store/.test(readFileSync("app/components/InstructionsGeneralTab.tsx", "utf-8")) &&
+        !/Fill from Shopify<\/s-button>|intent: "store-info-prefill"/.test(readFileSync("app/components/InstructionsGeneralTab.tsx", "utf-8")),
     );
     ok(
       "DS8 completed count matches the done steps",

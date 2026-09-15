@@ -103,8 +103,11 @@ async function main(): Promise<void> {
     ok("no info level exists", !/export function logInfo/.test(seam));
     ok("no debug level exists", !/export function logDebug/.test(seam));
     ok(
-      "the only exported writers are logError / logWarn / logSync",
-      (seam.match(/^export (async )?function log/gm) ?? []).length === 3,
+      "the only exported writers are logError / logWarn / logSync / logAudit",
+      (seam.match(/^export (async )?function (log\w+)/gm) ?? [])
+        .map((line) => line.replace(/^export (async )?function /, ""))
+        .sort()
+        .join(",") === "logAudit,logError,logSync,logWarn",
     );
 
     // ────────────────────────────────────────────────────────────────────────

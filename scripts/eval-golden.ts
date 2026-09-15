@@ -9,10 +9,35 @@
 import { PrismaClient } from "@prisma/client";
 import { PUBLISHED_FIXTURE_QUESTIONS } from "./qa/curated-fixtures";
 
-// The golden set asserts the router + lanes engine's PATHS (outcome names).
-// Since spec 24 the AI agent is the default and is measured by
-// `npm run eval:conversations`; pin the pipeline here.
-process.env.AI_AGENT_MODE = "pipeline";
+// Engine: `--agent pipeline` (default — asserts the router + lanes PATHS) or
+// `--agent tools` (the default engine since spec 24; QA3-T1). The agent has no
+// lanes, so in tools mode lane names map to the agent's reply kinds
+// (detail → question/buy, buy_browse → buy, clarify → chat/question) and cases
+// may carry their own agentOutcome / agentInText. Cards, text and action
+// checks are the same in both modes.
+const AGENT = (() => {
+  const i = process.argv.indexOf("--agent");
+  return i > 0 && process.argv[i + 1] === "tools" ? "tools" : "pipeline";
+})();
+process.env.AI_AGENT_MODE = AGENT;
+
+const AGENT_EQUIVALENT: Record<string, string[]> = {
+  detail: ["question", "buy"],
+  buy_browse: ["buy"],
+  clarify: ["chat", "question"],
+  fell_back: ["fell_back", "question"],
+};
+
+function outcomeOk(testCase: { expectOutcome: string[]; agentOutcome?: string[] }, outcome: string): boolean {
+  if (AGENT === "pipeline") return testCase.expectOutcome.includes(outcome);
+  const expected = testCase.agentOutcome ?? testCase.expectOutcome.flatMap((o) => [o, ...(AGENT_EQUIVALENT[o] ?? [])]);
+  return expected.includes(outcome);
+}
+
+/** Multi-turn product follow-ups: a buy lane, or (agent) any reply that shows cards. */
+function buyOk(outcome: string, cardCount: number): boolean {
+  return ["buy", "buy_browse"].includes(outcome) || (AGENT === "tools" && cardCount > 0);
+}
 
 const dbCheck = new PrismaClient();
 const DEV_SHOP_DOMAIN = "dev-shop.myshopify.com";
@@ -34,6 +59,14 @@ interface GoldenCase {
   expectAction?: string;
   /** Upper bound on cards (QA-A2: no padding). */
   maxCards?: number;
+  /** Tools mode only: accepted outcomes, replacing the lane mapping. */
+  agentOutcome?: string[];
+  /** Tools mode only: reply text check, replacing expectInText. */
+  agentInText?: RegExp;
+  /** Tools mode only: replaces rejectInText. */
+  agentRejectInText?: RegExp;
+  /** Run in this engine only. */
+  only?: "pipeline" | "tools";
 }
 
 /**
@@ -106,12 +139,39 @@ const GOLDEN: GoldenCase[] = [
     expectOutcome: ["detail"],
     expectInText: /out of stock|sold out|not in stock|currently unavailable|no stock|isn'?t in stock|not available/i,
     rejectInText: /other pillowcase|similar|alternative/i,
+    // Agent: offering to look for a similar one is fine; naming an unretrieved
+    // alternative is not (the grounding rule is checked by the card/text contract).
+    agentRejectInText: /(we have|try|how about|check out|consider) (the|our|a) [\w ]*pillowcase|alternative/i,
   },
   // A5: order status goes to the Track-order screen (order tracking is on for
   // dev-shop's plan), not a borderline curated answer.
   { input: "where is my order #1234?", expectOutcome: ["order_status"], expectAction: "track_order" },
   // A6: a blocked topic never asks for an email when no form is shown.
-  { input: "can this crystal bracelet cure my anxiety?", expectOutcome: ["blocked"], rejectInText: /email/i },
+  // Agent (QA3-A7): answered, not blocked — "not a medical treatment, see a doctor".
+  {
+    input: "can this crystal bracelet cure my anxiety?",
+    expectOutcome: ["blocked"],
+    rejectInText: /email/i,
+    agentOutcome: ["blocked", "chat", "question", "buy"],
+    agentInText: /not (a )?medical|doctor|not a (cure|treatment)/i,
+  },
+  // ── QA round 3 (2026-09-15) — live-journey failures of the AI agent ───────
+  // A2: browsing by price has no product words; 8 products are under $20.
+  { input: "anything under $20?", expectOutcome: ["buy", "buy_browse"], expectCards: true, only: "tools" },
+  // A1: the offer lives only in store information (no synced discount).
+  { input: "any offer running?", expectOutcome: ["question"], agentInText: /WELCOME10/i, only: "tools" },
+  // A1: bulk quantity → the wholesale rule, not "yes you can".
+  { input: "can I buy 60 yoga mats for my studio?", expectOutcome: ["question", "buy"], agentInText: /wholesale/i, only: "tools" },
+  // A3: no invented add-on ("charging case" does not exist on dev-shop).
+  {
+    input: "how long does the battery last on the wireless earbuds?",
+    expectOutcome: ["question", "buy"],
+    agentInText: /24/,
+    rejectInText: /charging case/i,
+    only: "tools",
+  },
+  // Catalogue overview: "what do you sell" is answered from the store's own catalogue.
+  { input: "what do you sell?", expectOutcome: ["chat", "question", "buy"], agentInText: /kitchen|fitness|home|apparel|beauty|electronic/i, rejectInText: /wallets? and belts/i, only: "tools" },
 ];
 
 async function main() {
@@ -124,7 +184,8 @@ async function main() {
   ).map((p) => p.title);
 
   let failures = 0;
-  for (const testCase of GOLDEN) {
+  console.log(`engine: ${AGENT}`);
+  for (const testCase of GOLDEN.filter((c) => !c.only || c.only === AGENT)) {
     const sessionId = `golden-${Math.random().toString(36).slice(2, 10)}`;
     let outcome = "";
     let text = "";
@@ -144,14 +205,15 @@ async function main() {
     }
 
     const problems: string[] = [];
-    if (!testCase.expectOutcome.includes(outcome)) {
-      problems.push(`outcome "${outcome}" not in [${testCase.expectOutcome.join(", ")}]`);
+    if (!outcomeOk(testCase, outcome)) {
+      problems.push(`outcome "${outcome}" not in [${(AGENT === "tools" && testCase.agentOutcome) || testCase.expectOutcome.join(", ")}]`);
     }
     if (testCase.expectCards && cards.length === 0 && outcome !== "clarify") {
       problems.push("expected product cards, got none");
     }
-    if (testCase.expectInText && !testCase.expectInText.test(text) && outcome !== "clarify") {
-      problems.push(`reply text failed ${testCase.expectInText}: "${text.slice(0, 120)}"`);
+    const textCheck = AGENT === "tools" ? (testCase.agentInText ?? testCase.expectInText) : testCase.expectInText;
+    if (textCheck && !textCheck.test(text) && outcome !== "clarify") {
+      problems.push(`reply text failed ${textCheck}: "${text.slice(0, 120)}"`);
     }
     if (testCase.expectCardTitle && !cards.some((c) => testCase.expectCardTitle!.test(c.title))) {
       problems.push(`no card matched ${testCase.expectCardTitle}: [${cards.map((c) => c.title).join(" | ")}]`);
@@ -159,8 +221,9 @@ async function main() {
     if (testCase.rejectCardTitle && cards.some((c) => testCase.rejectCardTitle!.test(c.title))) {
       problems.push(`a card matched ${testCase.rejectCardTitle} and must not: [${cards.map((c) => c.title).join(" | ")}]`);
     }
-    if (testCase.rejectInText && testCase.rejectInText.test(text)) {
-      problems.push(`reply text matched ${testCase.rejectInText} and must not: "${text.slice(0, 160)}"`);
+    const rejectCheck = AGENT === "tools" ? (testCase.agentRejectInText ?? testCase.rejectInText) : testCase.rejectInText;
+    if (rejectCheck && rejectCheck.test(text)) {
+      problems.push(`reply text matched ${rejectCheck} and must not: "${text.slice(0, 160)}"`);
     }
     if (testCase.groundedText) {
       const named = namesUncardedProduct(text, cards.map((c) => c.title), catalogue);
@@ -202,7 +265,7 @@ async function main() {
       if (frame.type === "done") outcome = frame.outcome;
     }
     const overBudget = cards.filter((c) => c.price > 25);
-    if (["buy", "buy_browse"].includes(outcome) && overBudget.length === 0) {
+    if (buyOk(outcome, cards.length) && overBudget.length === 0) {
       console.log(`PASS  multi-turn "under $25" → ${outcome} (${cards.length} cards, all ≤ $25)`);
     } else {
       failures++;
@@ -233,7 +296,7 @@ async function main() {
       if (frame.type === "done") outcome = frame.outcome;
     }
     const offCategory = cards.filter((c) => /sock|glove|jacket|bottle|wallet|bracelet/i.test(c.title));
-    if (["buy", "buy_browse"].includes(outcome) && cards.some((c) => /beanie|hat|headband|cap/i.test(c.title)) && offCategory.length === 0) {
+    if (buyOk(outcome, cards.length) && cards.some((c) => /beanie|hat|headband|cap/i.test(c.title)) && offCategory.length === 0) {
       console.log(`PASS  A2 head-warmer follow-up → ${outcome} (${cards.map((c) => c.title).join(" | ")})`);
     } else {
       failures++;
@@ -252,19 +315,26 @@ async function main() {
     const turns = ["show me some jackets", "under $100", "the waterproof one?"];
     let outcome = "";
     let cards: { price: number; title: string }[] = [];
+    let onScreen: { price: number; title: string }[] = [];
     for (const message of turns) {
       cards = [];
       for await (const frame of runPipeline({ shopId: shop.id, sessionId, conversationId, message, isTest: true })) {
-        if (frame.type === "cards") cards = frame.cards;
+        if (frame.type === "cards") {
+          cards = frame.cards;
+          if (message !== turns[0]) onScreen = frame.cards;
+        }
         if (frame.type === "done") {
           outcome = frame.outcome;
           conversationId = frame.conversationId;
         }
       }
     }
+    // Agent: a product already carded by "under $100" is not carded again for
+    // "the waterproof one?" (no repeat cards) — the card on screen counts.
+    if (AGENT === "tools" && cards.length === 0) cards = onScreen;
     const overBudget = cards.filter((c) => c.price > 100);
     const hasWaterproof = cards.some((c) => /waterproof|rain/i.test(c.title));
-    if (["buy", "buy_browse"].includes(outcome) && overBudget.length === 0 && hasWaterproof) {
+    if ((buyOk(outcome, cards.length) || (AGENT === "tools" && cards.length > 0)) && overBudget.length === 0 && hasWaterproof) {
       console.log(`PASS  3-turn "the waterproof one?" → ${outcome} (${cards.map((c) => c.title).join(" | ")})`);
     } else {
       failures++;

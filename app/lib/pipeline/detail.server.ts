@@ -124,6 +124,7 @@ async function candidatesByShopifyIds(
       // must not reuse it.
       score: null,
       headline: null,
+      passage: null,
       matchedTerms: [],
       headTerms: [],
       coverage: 0,

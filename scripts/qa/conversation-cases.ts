@@ -296,6 +296,34 @@ export const CONVERSATION_CASES: ConversationCase[] = [
     ],
   },
   {
+    // Spec 25: the fact sits ~5,500 chars into an 8,600-char description —
+    // past the product vector (2,000) and the old get_product cut (3,500/5,000).
+    id: "deep-description-fact",
+    source: "spec 25 — description passages (Moonstone 'hormonal balance' passage)",
+    tag: "pipeline",
+    turns: [
+      {
+        shopper: "does the moonstone bracelet help with hormonal balance or menstrual problems?",
+        expect: {
+          notFallback: true,
+          maxWords: 60,
+          replyIncludes: /hormon|menstru|reproductive|cycle/i,
+          judge:
+            "The Moonstone bracelet's description says it is traditionally linked with supporting hormonal balance, reducing problems with menstrual cycles and reproductive well-being. The reply must say so briefly (2–3 short lines), framed as traditional belief rather than a medical promise.",
+        },
+      },
+      {
+        shopper: "how should I cleanse and charge it?",
+        expect: {
+          notFallback: true,
+          maxWords: 60,
+          replyIncludes: /moon/i,
+          judge: "The description says to recharge it under moonlight on a full moon. The reply must give that care advice briefly.",
+        },
+      },
+    ],
+  },
+  {
     id: "wear-this",
     source: "jgw-check 11:05 — 'how to wear this' fell back to leave-your-email",
     tag: "pipeline",

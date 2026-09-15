@@ -11,4 +11,5 @@ export const PURPOSE_LABELS: Record<string, string> = {
   summary: "Conversation summaries",
   moderation: "Moderation",
   embedding: "Embeddings (sync + ingestion)",
+  setup: "AI setup (instructions written from store data)",
 };

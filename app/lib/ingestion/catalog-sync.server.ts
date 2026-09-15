@@ -20,6 +20,7 @@ import {
 } from "./metafields.server";
 import { logError, logWarn } from "../log.server";
 import { htmlToText } from "./fetchers.server";
+import { syncProductPassages } from "./product-passages.server";
 
 // Catalog sync (spec 02). Full paged sync + webhook-driven single upserts.
 // Re-embeds ONLY when the embedding text (title/type/vendor/tags/description/
@@ -429,6 +430,7 @@ async function upsertProducts(shopId: string, products: SyncedProduct[]): Promis
   if (products.length === 0) return;
   const enabledMetafields = await loadEnabledMetafields(shopId);
   const toEmbed: { id: string; text: string }[] = [];
+  const forPassages: { id: string; title: string; description: string }[] = [];
 
   for (const product of products) {
     const { variants, metafields, ...fields } = product;
@@ -456,9 +458,13 @@ async function upsertProducts(shopId: string, products: SyncedProduct[]): Promis
     if (!existing || existing.contentHash !== contentHash) {
       toEmbed.push({ id: row.id, text: embeddingText });
     }
+    forPassages.push({ id: row.id, title: row.title, description: row.description });
   }
 
   await embedProducts(shopId, toEmbed);
+  // Spec 25: passages for long descriptions — rebuilt only when the description
+  // changed (the sync checks its own source hash), and never fails the sync.
+  await syncProductPassages(shopId, forPassages);
 }
 
 // ── Collections ─────────────────────────────────────────────────────────────
@@ -766,6 +772,7 @@ export async function fullDiscountSync(shopDomain: string): Promise<void> {
   const { admin } = await unauthenticated.admin(shopDomain);
   let cursor: string | null = null;
   let total = 0;
+  const seenIds = new Set<string>();
 
   do {
     const response = await admin.graphql(DISCOUNTS_QUERY, { variables: { cursor } });
@@ -785,6 +792,7 @@ export async function fullDiscountSync(shopDomain: string): Promise<void> {
     };
     const page = body.data.discountNodes;
     for (const node of page.nodes) {
+      seenIds.add(node.id);
       if (!node.discount?.title) continue;
       const fields = discountRowFields(node.discount);
       await db.discount.upsert({
@@ -796,6 +804,14 @@ export async function fullDiscountSync(shopDomain: string): Promise<void> {
     }
     cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
   } while (cursor);
+
+  // QA3-S1: prune discounts deleted in Shopify. A lost DISCOUNTS_DELETE webhook
+  // otherwise left the code live, and the agent kept offering it. The full
+  // enumeration completed — a GraphQL error throws out of the loop above.
+  const pruned = await db.discount.deleteMany({
+    where: { shopId, shopifyDiscountId: { notIn: [...seenIds] } },
+  });
+  if (pruned.count > 0) console.log(`discount_sync_pruned ${shopDomain} discounts=${pruned.count}`);
 
   await db.syncState.upsert({
     where: { shopId },
