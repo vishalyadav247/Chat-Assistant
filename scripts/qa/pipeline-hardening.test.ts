@@ -22,6 +22,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+// This suite asserts the router + lanes engine (spec 23). Since spec 24 the AI
+// agent is the default; pin the pipeline so these cases keep testing it.
+process.env.AI_AGENT_MODE = "pipeline";
+
 for (const line of readFileSync(join(process.cwd(), ".env"), "utf-8").split(/\r?\n/)) {
   const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
   if (match && !line.trim().startsWith("#") && process.env[match[1]] === undefined) {
@@ -487,7 +491,9 @@ async function phase2to4(db: Db, shopId: string, shopBId: string, h: Helpers): P
   const vec = async (table: string, id: string, forShop: string, v: number[]) => {
     await db.$executeRaw(Prisma.sql`UPDATE ${Prisma.raw(`"${table}"`)} SET "embedding" = ${emb.toSqlVector(v)}::vector WHERE "id" = ${id} AND "shopId" = ${forShop}`);
   };
-  const INSTALL_FALLBACK = /fallbackMessage:\s*\n?\s*"([^"]+)"/.exec(src("app/lib/install.server.ts"))?.[1] ?? "";
+  // The English fallback every pre-spec-24 install stored (new installs seed it
+  // blank). Existing rows still carry it, so the suite keeps using it.
+  const { LEGACY_INSTALL_FALLBACK: INSTALL_FALLBACK } = await import("../../app/lib/ai-defaults");
 
   // ── shared fixtures: catalogue (inserted BEFORE any search fills the lexicon cache) ──
   const mk = (n: number, title: string, description = "", extra: Record<string, unknown> = {}) =>
@@ -777,13 +783,18 @@ async function phase2to4(db: Db, shopId: string, shopBId: string, h: Helpers): P
     ok("PH-3.5d", "after an AI reply, enthusiastic caps alone → no handover", (await detect("SHOW ME RED BRACELETS PLEASE")) === null);
 
     // Pipeline level: 3 consecutive KEYWORD blocks.
+    // Since the QA2-A7 fix the 3rd block itself hands over, so each check runs
+    // on its own conversation (a handed-over thread no longer ends in 3 blocks).
     const s = newSession();
     const b1 = await turn("gambling odds today", s);
     await turn("tell me about gambling please", s, b1.conversationId);
+    ok("PH-3.5e", "detectCannotAnswer counts banned_keyword turns (threshold 2 after two blocks)", await H.detectCannotAnswer(shopId, b1.conversationId, handoverConfigSchema.parse({ triggers: { cannotAnswer: { enabled: true, threshold: 2 } } })));
     const b3 = await turn("is gambling allowed here", s, b1.conversationId);
-    ok("PH-3.5e", "detectCannotAnswer counts three banned_keyword turns", await H.detectCannotAnswer(shopId, b1.conversationId, handoverConfigSchema.parse({})));
     ok("PH-3.5f", "DEFECT-CHECK: the 3rd consecutive keyword block triggers the cannot-answer handover (spec Accept)", b3.outcome === "handover" || b3.frames.some((f) => f.type === "handover"), `outcome=${b3.outcome} — finishBlocked never calls maybeEscalateCannotAnswer (router blocks behave the same)`);
-    const c4 = await turn("qa-unparseable hmm", s, b1.conversationId);
+    const s2 = newSession();
+    const g1 = await turn("gambling odds today", s2);
+    await turn("tell me about gambling please", s2, g1.conversationId);
+    const c4 = await turn("qa-unparseable hmm", s2, g1.conversationId);
     ok("PH-3.5g", "banned + banned + clarify escalates on the clarify turn (count parity)", c4.outcome === "handover", `outcome=${c4.outcome}`);
     const embedsBefore = fake.calls.filter((c) => c.kind !== "stream").length;
     const rep = handoverConfigSchema.parse({ triggers: { repeatedQuestion: { enabled: true, threshold: 2 }, negativeSentiment: { enabled: true } } });

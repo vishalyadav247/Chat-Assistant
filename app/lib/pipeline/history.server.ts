@@ -26,7 +26,12 @@ export interface HistoryBundle {
 export async function loadHistory(
   shopId: string,
   conversationId: string,
-  opts: { excludeMessageId?: string } = {},
+  opts: {
+    excludeMessageId?: string;
+    /** Agent mode (spec 24): append the products each assistant reply showed,
+     *  with their ids, so "this" / "the blue one" resolve to a real product. */
+    annotateCards?: boolean;
+  } = {},
 ): Promise<HistoryBundle> {
   requireShopId(shopId);
   const convo = await db.conversation.findFirst({
@@ -45,9 +50,17 @@ export async function loadHistory(
     where: historyWhere,
     orderBy: { createdAt: "desc" },
     take: ROUTER_WINDOW + 40, // window + summarization lookback
-    select: { role: true, content: true },
+    select: { role: true, content: true, productCards: true, intent: true, sourceLayer: true },
   });
-  const rows = fetched.reverse();
+  // The leave-message form's submission is stored as a shopper message holding
+  // the email, phone and order number for the team. It must never reach the
+  // model — not as history and not through the summary (which is also carried
+  // into the contact's later conversations).
+  const rows = fetched.reverse().map((r) =>
+    r.role === "in" && r.sourceLayer === "handover"
+      ? { ...r, content: "[The shopper left their contact details for the store team.]" }
+      : r,
+  );
 
   const recent = rows.slice(-ROUTER_WINDOW);
   // olderCount must be the TRUE count of messages older than the window, not
@@ -85,15 +98,43 @@ export async function loadHistory(
   const summaryMsg: ChatMessage[] = summary
     ? [{ role: "system", content: `Earlier conversation summary: ${summary}` }]
     : [];
-  const toChat = (r: { role: string; content: string }): ChatMessage => ({
-    role: r.role === "in" ? "user" : "assistant",
-    content: r.content,
-  });
+  // Agent mode: what a reply showed and looked up rides as a separate system
+  // note after it, not inside the assistant text — a model imitates its own
+  // earlier replies, and bracketed ids in them would surface in new replies.
+  const toChat = (r: { role: string; content: string; productCards?: unknown; intent?: unknown }): ChatMessage[] => {
+    const message: ChatMessage = { role: r.role === "in" ? "user" : "assistant", content: r.content };
+    if (!opts.annotateCards || r.role === "in") return [message];
+    const note = `${cardsNote(r.productCards)}${factsNote(r.intent)}`.trim();
+    return note ? [message, { role: "system", content: note }] : [message];
+  };
 
   return {
-    routerHistory: [...summaryMsg, ...recent.map(toChat)],
-    generationHistory: [...summaryMsg, ...recent.slice(-GENERATION_WINDOW).map(toChat)],
+    routerHistory: [...summaryMsg, ...recent.flatMap(toChat)],
+    generationHistory: [...summaryMsg, ...recent.slice(-GENERATION_WINDOW).flatMap(toChat)],
   };
+}
+
+/** "[Products shown with this reply: Title (id 123), …]" — or "" when the reply had none. */
+function cardsNote(productCards: unknown): string {
+  if (!Array.isArray(productCards) || productCards.length === 0) return "";
+  const items = productCards
+    .map((c) => {
+      const card = c as { shopifyProductId?: unknown; title?: unknown };
+      if (typeof card?.title !== "string" || typeof card?.shopifyProductId !== "string") return null;
+      return `${card.title} (id ${card.shopifyProductId.split("/").pop()})`;
+    })
+    .filter(Boolean);
+  return items.length > 0 ? `Products shown with the previous reply: ${items.join("; ")}.` : "";
+}
+
+/** "[Looked up for this reply: …]" — the compact tool facts an agent reply was
+ *  based on (spec 24), so a later "price of this" is answered from the lookup,
+ *  not from the model's memory. */
+function factsNote(intent: unknown): string {
+  const facts = (intent as { facts?: unknown } | null)?.facts;
+  if (!Array.isArray(facts)) return "";
+  const lines = facts.filter((f): f is string => typeof f === "string" && f.length > 0);
+  return lines.length > 0 ? ` Facts looked up for the previous reply: ${lines.join(" | ")}.` : "";
 }
 
 async function summarize(

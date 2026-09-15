@@ -34,6 +34,16 @@ try {
   // no .env — use the ambient environment
 }
 
+// --agent tools|pipeline and --agent-model <id> pick the engine IN THIS PROCESS
+// (spec 24), so both can be measured without restarting the dev server. Set
+// before any app module is imported, because env() caches on first read.
+{
+  const i = process.argv.indexOf("--agent");
+  if (i > 0) process.env.AI_AGENT_MODE = process.argv[i + 1];
+  const m = process.argv.indexOf("--agent-model");
+  if (m > 0) process.env.AGENT_MODEL = process.argv[m + 1];
+}
+
 const prisma = new PrismaClient();
 
 function flag(name: string): string | undefined {
@@ -56,6 +66,9 @@ interface TurnResult {
   cards: string[];
   outcome: string;
   handover: boolean;
+  /** Wall time of the turn and the model calls it made (trace summary). */
+  ms: number;
+  llmCalls: number;
   /** Router/lane decisions from the trace, for debugging a failure. */
   decisions: Record<string, unknown>;
   failures: string[];
@@ -78,6 +91,7 @@ async function runTurn(
   const { runPipeline } = await import("../../app/lib/pipeline/index.server");
   const { createTrace } = await import("../../app/lib/pipeline/trace.server");
   const trace = createTrace(true);
+  const startedAt = Date.now();
   let reply = "";
   let outcome = "";
   let handover = false;
@@ -96,11 +110,18 @@ async function runTurn(
   const decisions: Record<string, unknown> = {};
   for (const step of trace.steps()) {
     if (step.layer === "router") decisions.router = step.detail;
+    else if (step.layer === "agent_tool") {
+      const calls = (decisions.agentTools as string[] | undefined) ?? [];
+      calls.push(`${step.label.replace(/^Tool: /, "")}(${String((step.detail as { arguments?: unknown })?.arguments ?? "")})`);
+      decisions.agentTools = calls;
+    }
     else if (["detail_confirm", "question_rescue", "rag_fallback", "guardrail_meaning", "curated_served", "recommendation_served", "model_picks", "detail_subject"].includes(step.layer)) {
       decisions[step.layer] = step.status;
     }
   }
-  return { shopper: message, reply: reply.trim(), cards, outcome, handover, decisions, conversationId: convId };
+  const ms = Date.now() - startedAt;
+  const { llmCalls } = trace.summary();
+  return { shopper: message, reply: reply.trim(), cards, outcome, handover, ms, llmCalls, decisions, conversationId: convId };
 }
 
 // ── Mechanical checks ───────────────────────────────────────────────────────
@@ -126,6 +147,13 @@ function check(turn: Omit<TurnResult, "failures" | "judge">, expect: TurnExpect)
   }
   if (expect.notBlocked && turn.outcome === "blocked") out.push("refused as a banned topic");
   if (expect.noHandover && turn.handover) out.push("handover triggered");
+  if (expect.maxCards !== undefined && turn.cards.length > expect.maxCards) {
+    out.push(`${turn.cards.length} cards (max ${expect.maxCards})`);
+  }
+  if (expect.maxWords !== undefined) {
+    const words = turn.reply.split(/\s+/).filter(Boolean).length;
+    if (words > expect.maxWords) out.push(`reply is ${words} words (max ${expect.maxWords})`);
+  }
   return out;
 }
 
@@ -217,7 +245,7 @@ async function main(): Promise<number> {
   const cases = CONVERSATION_CASES.filter((c) => !ONLY_CASE || c.id === ONLY_CASE);
   if (cases.length === 0) throw new Error(`no case "${ONLY_CASE}"`);
   console.log(
-    `shop ${SHOP_DOMAIN} · ${cases.length} conversation(s) · ${RUNS} run(s) · judge ${USE_JUDGE ? JUDGE_MODEL : "off"}\n`,
+    `shop ${SHOP_DOMAIN} · engine ${process.env.AI_AGENT_MODE !== "pipeline" ? `agent (${process.env.AGENT_MODEL || "dashboard model"})` : "pipeline"} · ${cases.length} conversation(s) · ${RUNS} run(s) · judge ${USE_JUDGE ? JUDGE_MODEL : "off"}\n`,
   );
 
   const runs: CaseRun[] = [];
@@ -235,6 +263,8 @@ async function main(): Promise<number> {
         console.log(`   ${mark} ${i + 1}. "${t.shopper}" → ${t.outcome}`);
         console.log(`        reply: ${t.reply.replace(/\s+/g, " ").slice(0, 220)}`);
         if (t.cards.length) console.log(`        cards: ${t.cards.join(" | ")}`);
+        if (Array.isArray(t.decisions.agentTools)) console.log(`        tools: ${(t.decisions.agentTools as string[]).join(" → ")}`);
+        else if (t.decisions.agentTools === undefined && process.env.AI_AGENT_MODE !== "pipeline") console.log("        tools: none");
         for (const f of t.failures) console.log(`        ✗ ${f}`);
       });
     }
@@ -269,6 +299,11 @@ async function main(): Promise<number> {
   }
   const wholeCases = runs.filter((r) => r.turns.every((t) => t.failures.length === 0)).length;
   console.log(`overall   ${pass}/${total} turns (${Math.round((pass / total) * 100)}%) · ${wholeCases}/${runs.length} conversations fully correct`);
+  const allTurns = runs.flatMap((r) => r.turns);
+  const times = allTurns.map((t) => t.ms).sort((a, b) => a - b);
+  const pct = (p: number) => times[Math.min(times.length - 1, Math.floor(p * times.length))] ?? 0;
+  const avgCalls = allTurns.reduce((s, t) => s + t.llmCalls, 0) / Math.max(1, allTurns.length);
+  console.log(`speed     median ${(pct(0.5) / 1000).toFixed(1)} s · p90 ${(pct(0.9) / 1000).toFixed(1)} s · ${avgCalls.toFixed(1)} model calls/turn (judge excluded)`);
 
   // Persist for the next comparison.
   mkdirSync("scripts/qa/results", { recursive: true });
@@ -277,7 +312,7 @@ async function main(): Promise<number> {
   const turnRates = Object.fromEntries([...perTurn].map(([k, v]) => [k, v]));
   writeFileSync(
     outFile,
-    JSON.stringify({ shop: SHOP_DOMAIN, runs: RUNS, judge: USE_JUDGE ? JUDGE_MODEL : null, at: new Date().toISOString(), summary: { pass, total }, turnRates, results: runs }, null, 2),
+    JSON.stringify({ shop: SHOP_DOMAIN, engine: process.env.AI_AGENT_MODE !== "pipeline" ? `agent:${process.env.AGENT_MODEL || "dashboard model"}` : "pipeline", runs: RUNS, judge: USE_JUDGE ? JUDGE_MODEL : null, at: new Date().toISOString(), summary: { pass, total }, turnRates, results: runs }, null, 2),
   );
   console.log(`\nresults → ${outFile}`);
 

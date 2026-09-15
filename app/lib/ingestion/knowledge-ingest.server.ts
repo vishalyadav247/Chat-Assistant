@@ -65,11 +65,16 @@ export async function ingestSource(shopId: string, sourceId: string): Promise<In
   if (!source) {
     throw new Error(`knowledge-ingest: source ${sourceId} not found for shop`);
   }
+  const meta = { ...((source.metadata ?? {}) as Record<string, unknown>) };
+  // The merchant's off switch survives every rebuild state: knowledge search
+  // serves any source whose status is not "inactive", so flipping a switched-off
+  // source to pending/error would put its chunks back in front of shoppers
+  // (PH-1.2j).
+  const switchedOff = meta.desiredStatus === "inactive" || source.status === "inactive";
   await db.dataSource.updateMany({
     where: { id: source.id, shopId },
-    data: { status: "pending" },
+    data: { status: switchedOff ? "inactive" : "pending" },
   });
-  const meta = { ...((source.metadata ?? {}) as Record<string, unknown>) };
 
   try {
     const docs = await loadDocs(shopId, source.type, source.url, meta, source.name);
@@ -95,11 +100,14 @@ export async function ingestSource(shopId: string, sourceId: string): Promise<In
         sourceId: source.id,
         chunks: chunks.length,
       });
+      // Same visibility as the product path (metafields.server.ts embedProducts).
+      const { recordEvent } = await import("../analytics/events.server");
+      await recordEvent(shopId, "embedding_skipped", { sourceId: source.id, chunks: chunks.length });
     }
 
     delete meta.error;
     delete meta.consecutiveFailures;
-    const status = meta.desiredStatus === "inactive" ? "inactive" : "active";
+    const status = switchedOff ? "inactive" : "active";
 
     // Swap the chunk set atomically. The advisory xact lock serializes
     // concurrent rebuilds of the same source (two overlapping runs would
@@ -151,7 +159,7 @@ export async function ingestSource(shopId: string, sourceId: string): Promise<In
       .updateMany({
         where: { id: source.id, shopId },
         data: {
-          status: "error",
+          status: switchedOff ? "inactive" : "error",
           metadata: {
             ...meta,
             // A failed FIRST crawl indexed nothing, so it must not consume the

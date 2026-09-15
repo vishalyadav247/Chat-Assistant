@@ -5,6 +5,7 @@ import { enqueue } from "./jobs/queue.server";
 import { JOBS } from "./jobs/handlers.server";
 import { resolveShopId } from "./tenancy.server";
 import { logError } from "./log.server";
+import { DEFAULT_GUARDRAILS, DEFAULT_PERSONA } from "./ai-defaults";
 
 // Install/afterAuth bootstrap (specs 02/08): shop row, default persona +
 // guardrails + seeded app recommendations, initial catalog sync. Idempotent —
@@ -13,12 +14,6 @@ import { logError } from "./log.server";
 /** Default transcript retention for stores installing after 2026-09-14 (QA-P4). */
 export const NEW_INSTALL_RETENTION_DAYS = 90;
 
-const DEFAULT_GUARDRAILS = {
-  answerOnlyFromKnowledge: true,
-  bannedTopics: ["medical advice", "legal advice", "competitor pricing"],
-  fallbackMessage:
-    "I'm not sure about that one — leave your email and our team will get back to you.",
-};
 
 export async function onShopAuthenticated(shopDomain: string): Promise<void> {
   try {
@@ -34,26 +29,25 @@ export async function onShopAuthenticated(shopDomain: string): Promise<void> {
 
     const persona = await db.persona.findUnique({ where: { shopId } });
     if (!persona) {
+      // Generic defaults (app/lib/ai-defaults.ts) the merchant refines in
+      // Instructions → General. Store info stays empty — the merchant adds it.
       await db.persona.create({
         data: {
           shopId,
-          role: "You are a friendly sales and support assistant for this store.",
-          communicationStyle: "friendly",
-          brandVoice: "Warm, approachable and helpful. Plain, encouraging language.",
-          // What the merchant edits in Instructions → General, and what the AI
-          // reads (buildPersonaPrompt). How many cards show is decided by the
-          // pipeline, so this deliberately names no number; grounding and the
-          // medical/legal blocks live in the lane prompts and banned topics.
-          behaviours:
-            "Greet warmly. Understand the shopper's need before recommending, and give a short reason for each suggestion. Ask one clarifying question if the request is vague. Never pressure.",
-          welcomeMessage: "Hi {{customer_name}} 👋 What can I help you find today?",
+          role: DEFAULT_PERSONA.role,
+          communicationStyle: DEFAULT_PERSONA.communicationStyle,
+          brandVoice: DEFAULT_PERSONA.brandVoice,
+          behaviours: DEFAULT_PERSONA.behaviours,
+          welcomeMessage: DEFAULT_PERSONA.welcomeMessage,
         },
       });
     }
 
     const guardrails = await db.guardrails.findUnique({ where: { shopId } });
     if (!guardrails) {
-      await db.guardrails.create({ data: { shopId, ...DEFAULT_GUARDRAILS } });
+      await db.guardrails.create({
+        data: { shopId, ...DEFAULT_GUARDRAILS, bannedTopics: [...DEFAULT_GUARDRAILS.bannedTopics] },
+      });
     }
 
     // Transcript retention defaults to 90 days for NEW installs (QA-P4, owner

@@ -133,9 +133,10 @@ export default function AdminAiSettings() {
               {selectedNote ? <s-text color="subdued">{selectedNote}</s-text> : null}
               <s-banner tone="info">
                 Every model listed here is request-compatible and priced, so switching is safe to apply — the app adapts
-                the request per model family automatically. Quality still varies: the prompts were tuned on gpt-4o-mini
-                (19/19 on the golden set) and gpt-4.1-mini scored 15/16 on the earlier 16-case set, so after switching it is worth running{" "}
-                <code>npm run eval:golden</code> to confirm nothing regressed.
+                the request per model family automatically. This model also drives the AI agent (unless AGENT_MODEL is set).
+                Quality still varies: on the real-conversation eval gpt-4.1-mini (the default) scored 87% and gpt-4.1 97%;
+                other models are unmeasured with the agent, so after switching run{" "}
+                <code>npm run eval:conversations</code> to confirm nothing regressed.
               </s-banner>
             </s-stack>
           </AdminCard>

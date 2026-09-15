@@ -25,8 +25,9 @@ ONE column, top to bottom — the two-column checklist | feed grid is gone:
 "Good {morning/afternoon/evening}, {shop name} 👋"; dynamic subline (waiting-question count + chat
 add-to-carts in the last 30 days). Status pill top-right: **"Assistant on"** (pulsing dot) /
 **"Assistant off"** — a status display, not a toggle (one mis-click on a pill must not switch the
-AI off for every shopper). Actions: **Answer N questions** (→ unresolved queue), **Sync catalog**
-(→ syncs every catalogue/content source, same as step 1's Re-sync), **Preview widget** (→ storefront).
+AI off for every shopper). Actions: **Answer N questions** (→ unresolved queue) and **Preview widget**
+(→ storefront). The hero's "Sync catalog" button was removed 2026-09-15 (owner): it ran the same
+sync-all as step 1's Sync now / Re-sync now in the setup card directly below.
 
 ### Status banner (max one, by priority)
 1. **AI off** — title "Your AI assistant is turned off"; body keeps the human-mode wording (the
@@ -72,7 +73,7 @@ Step 8 keeps the embed states of Settings → General: **On** badge (done), **Dr
 read_themes — informational, excluded from the total, "Check in Theme editor" link).
 
 **Step 1 detail** (open by default; the chevron collapses it; a sync re-opens it): "Last synced …" +
-**Re-sync now** button; a green progress bar of sources finished; one row per source — Products,
+**Re-sync now** button (while syncing the line reads "Syncing — N of M sources done"; no inner progress bar — removed 2026-09-15, the card header already has one); one row per source — Products,
 Collections, Pages, Blogs, Discounts — with "N of M learned" and a status: **Syncing…** (spinner),
 **Sync failed**, master Learn switch off → **no status badge, only an "Enable learning" link** to
 that Training tab (the row reads "M synced · not learned yet"), **Nothing learned** (0 rows switched on, or nothing synced) or **Learned** (tick).

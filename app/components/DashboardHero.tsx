@@ -111,9 +111,7 @@ export function DashboardHero(props: {
   pendingQuestions: number;
   atcThisMonth: number;
   aiEnabled: boolean;
-  syncing: boolean;
   onAnswerQuestions: () => void;
-  onSyncCatalog: () => void;
   onPreviewWidget: () => void;
 }) {
   const { pendingQuestions: pending, atcThisMonth: atc } = props;
@@ -192,9 +190,8 @@ export function DashboardHero(props: {
             ? `Answer ${pending} question${pending === 1 ? "" : "s"}`
             : "Review questions"}
         </HeroButton>
-        <HeroButton kind="ghost" disabled={props.syncing} onClick={props.onSyncCatalog}>
-          {props.syncing ? "Syncing…" : "Sync catalog"}
-        </HeroButton>
+        {/* No "Sync catalog" here (owner, 2026-09-15): it duplicated step 1's
+            Sync now / Re-sync now in the setup card right below. */}
         <HeroButton kind="ghost" onClick={props.onPreviewWidget}>
           Preview widget
         </HeroButton>

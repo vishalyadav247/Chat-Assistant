@@ -444,21 +444,24 @@ async function correctTerms(shopId: string, terms: string[]): Promise<string[]> 
     // ("anklet") could snap to a near-spelling of an unrelated catalog word —
     // confident retrieval of the wrong product instead of an honest "we don't
     // carry that". An ambiguous typo (two lexemes near-tied) is left alone too.
-    let best = "";
-    let bestScore = 0;
-    let runnerUp = 0;
+    const scored: { word: string; score: number }[] = [];
     for (const word of lexicon.list) {
       if (Math.abs(word.length - term.length) > 2) continue;
-      const score = trigramSimilarity(term, word);
-      if (score > bestScore) {
-        runnerUp = bestScore;
-        bestScore = score;
-        best = word;
-      } else if (score > runnerUp && word !== best) {
-        runnerUp = score;
-      }
+      scored.push({ word, score: trigramSimilarity(term, word) });
     }
-    if (best && bestScore >= 0.6 && bestScore - runnerUp >= 0.08) fixes.set(term, best);
+    scored.sort((a, b) => b.score - a.score);
+    const best = scored[0]?.word ?? "";
+    const bestScore = scored[0]?.score ?? 0;
+    // Singular/plural of the winner are the same word, not a competitor: with
+    // both "lantern" and "lanterns" in the catalogue, "lanterm" must still
+    // correct (QA2-A6) — the margin is measured against a DIFFERENT word.
+    const sameWord = (w: string) => w === `${best}s` || w === `${best}es` || best === `${w}s` || best === `${w}es`;
+    const runnerUp = scored.find((s) => s.word !== best && !sameWord(s.word))?.score ?? 0;
+    // A term that is the winner plus extra letters ("anklet" ⊃ "ankle",
+    // "earring" ⊃ "ear") is a different real word the shop does not stock,
+    // not a typo — snapping it retrieves the wrong product (QA2-A5).
+    const extendsWinner = best.length > 0 && term.startsWith(best) && !/^(s|es)$/.test(term.slice(best.length));
+    if (best && !extendsWinner && bestScore >= 0.6 && bestScore - runnerUp >= 0.08) fixes.set(term, best);
   }
   if (fixes.size === 0) return terms;
   return terms.map((t) => fixes.get(t) ?? t);

@@ -651,13 +651,17 @@ DATABASE_URL=postgresql://chatconvert:DB_PASSWORD@localhost:5432/chatconvert?sch
 SHOPIFY_API_KEY=6b2bcbe0ed1fc4b0600f96acc4f0eb72
 SHOPIFY_API_SECRET=SHOPIFY_SECRET
 SHOPIFY_APP_URL=https://chatconvert.progryss.com
-SCOPES=read_content,read_customers,write_customers,read_discounts,read_legal_policies,read_online_store_pages,read_orders,read_products,read_themes,write_app_proxy,write_files
+SCOPES=read_content,read_customers,write_customers,read_discounts,read_legal_policies,read_metaobjects,read_orders,read_products,read_themes,write_app_proxy,write_files
 
 # LLM
 OPENAI_API_KEY=OPENAI_KEY
 LLM_PROVIDER=openai
-CHAT_MODEL=gpt-4o-mini
+CHAT_MODEL=gpt-4.1-mini
 EMBEDDING_MODEL=text-embedding-3-small
+# AI engine (spec 24): tools = AI agent for every shop (default); pipeline = rollback only
+AI_AGENT_MODE=tools
+# Optional: pin the agent to one model regardless of the /admin dashboard model (blank = dashboard → CHAT_MODEL)
+AGENT_MODEL=
 
 # Email — use EMAIL_PROVIDER=log to defer this
 EMAIL_PROVIDER=resend

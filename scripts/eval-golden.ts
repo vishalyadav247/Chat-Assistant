@@ -9,6 +9,11 @@
 import { PrismaClient } from "@prisma/client";
 import { PUBLISHED_FIXTURE_QUESTIONS } from "./qa/curated-fixtures";
 
+// The golden set asserts the router + lanes engine's PATHS (outcome names).
+// Since spec 24 the AI agent is the default and is measured by
+// `npm run eval:conversations`; pin the pipeline here.
+process.env.AI_AGENT_MODE = "pipeline";
+
 const dbCheck = new PrismaClient();
 const DEV_SHOP_DOMAIN = "dev-shop.myshopify.com";
 

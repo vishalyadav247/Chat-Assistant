@@ -15,8 +15,16 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional().default(""),
   // Only one implementation exists; a dashboard toggle would be meaningless.
   LLM_PROVIDER: z.enum(["openai"]).default("openai"),
-  // Dashboard-managed (AI model settings); env = fallback.
-  CHAT_MODEL: z.string().default("gpt-4o-mini"),
+  // Dashboard-managed (AI model settings); env = fallback. gpt-4.1-mini since
+  // spec 24: 87% on the real-conversation eval vs 56% for the old pipeline.
+  CHAT_MODEL: z.string().default("gpt-4.1-mini"),
+  // ── AI engine (spec 24) ── `tools` (default) = the conversation-aware agent
+  // for every shop. `pipeline` = the previous router + lanes, kept only as an
+  // emergency rollback switch.
+  AI_AGENT_MODE: z.enum(["pipeline", "tools"]).default("tools"),
+  // Optional: pin the agent to a model regardless of the dashboard setting
+  // (used by the conversation eval). Blank = dashboard model → CHAT_MODEL.
+  AGENT_MODEL: z.string().optional().default(""),
   // Env only ON PURPOSE: stored vectors are pinned to 1536 dims, so changing
   // this needs a re-embed migration, not a settings toggle.
   EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),

@@ -26,6 +26,7 @@ export interface PersonaLanguage {
 export type CannedKey =
   | "clarify"
   | "fallback"
+  | "fallbackNoForm"
   | "busy"
   | "orderStatus"
   | "blockedTopic"
@@ -50,6 +51,15 @@ const STRINGS: Record<CannedKey, Record<string, string>> = {
     fr: "Je ne suis pas sûr de pouvoir répondre — laissez votre e-mail et notre équipe vous recontactera.",
     de: "Da bin ich mir nicht sicher — hinterlasse deine E-Mail und unser Team meldet sich bei dir.",
   },
+  // For shops whose handover settings show no leave-message form: no promise
+  // to collect an email the widget cannot take.
+  fallbackNoForm: {
+    en: "I'm not sure about that one — please reach out to our team and they'll be happy to help.",
+    hi: "इस बारे में मुझे पक्का पता नहीं — कृपया हमारी टीम से संपर्क करें, वे खुशी से मदद करेंगे।",
+    es: "No estoy seguro de eso — ponte en contacto con nuestro equipo y te ayudarán con gusto.",
+    fr: "Je ne suis pas sûr de pouvoir répondre — contactez notre équipe, elle se fera un plaisir de vous aider.",
+    de: "Da bin ich mir nicht sicher — wende dich gern an unser Team, es hilft dir weiter.",
+  },
   busy: {
     en: "You're sending messages very quickly — give me a few seconds and try again.",
     hi: "आप बहुत तेज़ी से संदेश भेज रहे हैं — कुछ सेकंड रुककर फिर से कोशिश करें।",
@@ -72,12 +82,14 @@ const STRINGS: Record<CannedKey, Record<string, string>> = {
     fr: "Je ne peux pas vous aider sur ce sujet — mais je serai ravi de vous aider à trouver un produit ou à répondre à vos questions sur la boutique.",
     de: "Dabei kann ich hier leider nicht helfen — aber ich helfe dir gern, ein Produkt zu finden oder Fragen zum Shop zu beantworten.",
   },
+  // No contact promise in the text (QA2-A4): when the shop collects details,
+  // the pipeline attaches the leave-message form under this message.
   cap: {
-    en: "Our chat assistant is offline right now — leave your email and we'll follow up.",
-    hi: "हमारा चैट असिस्टेंट अभी ऑफ़लाइन है — अपना ईमेल छोड़ दें, हम आपसे संपर्क करेंगे।",
-    es: "Nuestro asistente de chat está desconectado ahora — deja tu correo y te contactaremos.",
-    fr: "Notre assistant de chat est hors ligne pour le moment — laissez votre e-mail et nous vous recontacterons.",
-    de: "Unser Chat-Assistent ist gerade offline — hinterlasse deine E-Mail und wir melden uns.",
+    en: "Our chat assistant is offline right now — please try again a little later.",
+    hi: "हमारा चैट असिस्टेंट अभी ऑफ़लाइन है — कृपया थोड़ी देर बाद फिर से कोशिश करें।",
+    es: "Nuestro asistente de chat está desconectado ahora — vuelve a intentarlo en un rato.",
+    fr: "Notre assistant de chat est hors ligne pour le moment — veuillez réessayer un peu plus tard.",
+    de: "Unser Chat-Assistent ist gerade offline — bitte versuch es etwas später noch einmal.",
   },
   humanWait: {
     en: "Thanks for reaching out! Our team is helping other customers right now — we'll connect you with an agent shortly.",

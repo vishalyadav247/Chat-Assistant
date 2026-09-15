@@ -249,12 +249,9 @@ function TrainingDetail(props: {
             {inProgress ? "Syncing…" : "Re-sync now"}
           </s-button>
         </s-grid>
-        <ProgressTrack
-          value={finished}
-          max={states.length}
-          height={6}
-          label="Sources finished syncing"
-        />
+        {/* No second progress bar here (owner, 2026-09-15): the card header
+            already has one; sync progress reads from the line above and the
+            per-row Syncing… status. */}
         <s-stack gap="small-200">
           {training.sources.map((source, index) => {
             const state = states[index];
@@ -327,7 +324,7 @@ export function DashboardChecklist(props: {
   // step 1 training detail. The toggles still collapse them.
   const [showSteps, setShowSteps] = useState(true);
   const [detailOpen, setDetailOpen] = useState(true);
-  // A sync started anywhere on the page (hero "Sync catalog" too) opens the
+  // A sync started from step 1 (Sync now / Re-sync now) opens the
   // detail so the merchant sees each source finish; the chevron still closes it.
   useEffect(() => {
     if (props.syncStartedAt) setDetailOpen(true);

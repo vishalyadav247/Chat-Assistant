@@ -60,6 +60,8 @@ import {
 } from "./detail.server";
 import { logError } from "../log.server";
 import { createTrace, type Trace, type TraceStep, type TraceSummary } from "./trace.server";
+import { agentLane, agentModeEnabled, agentModel } from "./agent.server";
+import { customFallbackMessage, withPersonaDefaults } from "../ai-defaults";
 
 // Runtime agent pipeline (spec 03). The LLM is only the voice: code picks the
 // lane, fetches facts, builds cards from DB rows. One embedding per turn,
@@ -133,8 +135,10 @@ function variantIds(
 // canned.server.ts, localized for a fixed non-English persona language
 // (hardening spec 23 §3.9). Merchant-authored texts always win over them.
 // QA-A5: order-status questions go to the widget's Track order screen.
+// The bare-number form needs an order marker ("#", "no.", "number"): "order
+// #10045" is a status question, "can I order 100 bracelets?" is a sale (QA2-A2).
 const ORDER_STATUS_RE =
-  /\b(where(?:'s| is)? my (?:order|package|parcel)|track(?:ing)? (?:my |an )?order|order status|status of my order|has my order (?:shipped|been shipped|arrived)|when will my order (?:arrive|ship|come)|order\s*#?\s*\d{3,})\b/i;
+  /\b(where(?:'s| is)? my (?:order|package|parcel)|track(?:ing)? (?:my |an )?order|order status|status of my order|has my order (?:shipped|been shipped|arrived)|when will my order (?:arrive|ship|come)|order\s*(?:#|no\.?|number)\s*\d{3,})\b/i;
 /** Ranked candidates the reply model may choose cards from (the allow-list).
  *  Cards shown stay ≤ 4 (+ cross-sell); this is what the model gets to READ. */
 const MODEL_CANDIDATES = 8;
@@ -265,12 +269,32 @@ export async function* runPipeline(
     const text = canned("cap", config.persona);
     await saveMessage(shopId, convo.id, { role: "out", author: "system", content: text, sourceLayer: "cap" });
     yield { type: "message", text };
+    // The shopper can still reach the team: the leave-message form, when the
+    // shop's handover destination collects details.
+    const capForm = fallbackLeaveMessageForm(config.handover);
+    if (capForm) {
+      yield {
+        type: "handover",
+        data: { destination: config.handover.destination, messages: [], form: capForm, contactMethods: false, aiDormant: false },
+      };
+    }
     yield { type: "done", outcome: "ai_unavailable", conversationId: convo.id };
     return;
   }
 
   const guardrails = config.guardrails;
-  const fallback = guardrails?.fallbackMessage?.trim() || canned("fallback", config.persona);
+  // A never-customised fallback (blank, or the English text every pre-spec-24
+  // install stored) serves the built-in message in the shop's language (QA2-A3).
+  // The built-in fallback offers to take an email — only true when the shop's
+  // handover settings attach the leave-message form; otherwise the variant
+  // without that promise is used.
+  const fallback =
+    customFallbackMessage(guardrails?.fallbackMessage) ||
+    canned(fallbackLeaveMessageForm(config.handover) ? "fallback" : "fallbackNoForm", config.persona);
+  // Spec 24: shops on the tool-using agent skip the router, the meaning scan,
+  // the borderline-curated confirm and every lane below — the agent reads the
+  // whole conversation instead. The deterministic layers above and below still run.
+  const agentMode = agentModeEnabled();
   // previousLastMessageAt is the row's lastMessageAt BEFORE this turn touched
   // it — the 30-min session rule in usage.server.ts needs that value (QA D13).
   const meterPromise = tickConversation({
@@ -286,7 +310,18 @@ export async function* runPipeline(
     conversationId: convo.id,
     message,
     queryEmbedding: null,
-    handover: config.handover,
+    // Already handed over: the SAME repeated question re-triggered the handover
+    // on every later message (duplicate system rows + team notifications). The
+    // explicit ask still works; the repeat counter has done its job.
+    handover: convo.handover
+      ? {
+          ...config.handover,
+          triggers: {
+            ...config.handover.triggers,
+            repeatedQuestion: { ...config.handover.triggers.repeatedQuestion, enabled: false },
+          },
+        }
+      : config.handover,
   }).catch(() => null);
   trace.step("handover_text", "Handover triggers (text)", earlyTrigger ? "hit" : "pass", {
     trigger: earlyTrigger,
@@ -302,7 +337,7 @@ export async function* runPipeline(
   }
 
   // ── Layer a: keyword guardrail (no embedding needed) ──────────────────────
-  const kwHit = guardrails ? keywordScan(message, guardrails.bannedTopics) : null;
+  const kwHit = guardrails ? keywordScan(message, guardrails.bannedTopics, { wholePhrase: agentMode }) : null;
   trace.step(
     "guardrail_keyword",
     "Banned topics: word-boundary scan",
@@ -310,7 +345,7 @@ export async function* runPipeline(
     { topics: guardrails?.bannedTopics ?? [], matched: kwHit?.topic ?? null },
   );
   if (kwHit) {
-    yield* await finishBlocked(shopId, convo.id, kwHit.layer, meterPromise, track, config.persona);
+    yield* await finishBlocked(shopId, convo.id, kwHit.layer, meterPromise, track, config);
     return;
   }
 
@@ -326,16 +361,19 @@ export async function* runPipeline(
   const embedPromise = embedText(message, { shopId });
   const historyPromise = loadHistory(shopId, convo.id, {
     excludeMessageId: shopperMessageId, // appended once below, never twice
+    annotateCards: agentMode,
   });
-  const routedPromise = historyPromise.then((history) =>
-    route({
-      shopId,
-      message,
-      history: history.routerHistory,
-      bannedTopics: guardrails?.bannedTopics ?? [],
-      storeScope: config.persona?.scope ?? "",
-    }),
-  );
+  const routedPromise = agentMode
+    ? null
+    : historyPromise.then((history) =>
+        route({
+          shopId,
+          message,
+          history: history.routerHistory,
+          bannedTopics: guardrails?.bannedTopics ?? [],
+          storeScope: config.persona?.scope ?? "",
+        }),
+      );
   const moderationPromise = moderationCheck(shopId, message);
   const shopperPromise = shopperContext({
     shopId,
@@ -348,7 +386,7 @@ export async function* runPipeline(
   // Nothing awaits these on a short-circuit path, and an unhandled rejection
   // takes the process down under Node's default policy.
   const settle = (p: Promise<unknown>) => void p.catch(() => {});
-  settle(routedPromise);
+  if (routedPromise) settle(routedPromise);
   settle(moderationPromise);
   settle(shopperPromise);
 
@@ -370,7 +408,10 @@ export async function* runPipeline(
   // All three layers treat a transient failure as a MISS (logged), never as a
   // dead turn — the embedding and router money is already spent, and the
   // pipeline can still answer from search/RAG (hardening spec 23 §2.2).
-  const meaningPromise = guardrails
+  // Not in agent mode: the embedding scan cannot tell "any offers running?" from
+  // "competitor pricing" (0.42 ≥ 0.35 on jgw-check); there the keyword scan +
+  // moderation run first and the agent's own policy covers meaning (spec 24).
+  const meaningPromise = guardrails && !agentMode
     ? meaningScan(shopId, queryEmbedding, guardrails).catch((error) => {
         logError("meaning_scan_error", error, { shopId });
         return null;
@@ -418,12 +459,12 @@ export async function* runPipeline(
   }
 
   // ── Layer c: meaning guardrail ────────────────────────────────────────────
-  if (!guardrails || guardrails.bannedTopics.filter((t) => t.trim()).length === 0) {
+  if (agentMode || !guardrails || guardrails.bannedTopics.filter((t) => t.trim()).length === 0) {
     trace.step("guardrail_meaning", "Banned topics: meaning scan", "skip", {
-      reason: "no banned topics configured",
+      reason: agentMode ? "agent mode — the agent's policy covers meaning (spec 24)" : "no banned topics configured",
     });
   }
-  if (guardrails) {
+  if (guardrails && !agentMode) {
     const meaningHit = await meaningPromise;
     if (guardrails.bannedTopics.filter((t) => t.trim()).length > 0) {
       trace.step("guardrail_meaning", "Banned topics: meaning scan", meaningHit ? "hit" : "pass", {
@@ -433,7 +474,7 @@ export async function* runPipeline(
       });
     }
     if (meaningHit) {
-      yield* await finishBlocked(shopId, convo.id, meaningHit.layer, meterPromise, track, config.persona);
+      yield* await finishBlocked(shopId, convo.id, meaningHit.layer, meterPromise, track, config);
       return;
     }
   }
@@ -487,7 +528,9 @@ export async function* runPipeline(
     return;
   }
 
-  if (curated && curated.score >= curatedBorderline) {
+  // Agent mode serves a curated answer only at the serve threshold (or a synonym
+  // hit); a borderline match is left to the agent, which sees the conversation.
+  if (curated && curated.score >= (agentMode ? curatedThreshold : curatedBorderline)) {
     // Learn products OFF ⇒ no product data reaches the shopper (spec 07), so a
     // curated answer's pinned products are withheld, not looked up.
     const curatedCards = (ids: string[]): Promise<ProductCard[]> =>
@@ -624,13 +667,64 @@ export async function* runPipeline(
     }
   }
 
+  // ── AI agent mode (spec 24) ───────────────────────────────────────────────
+  if (agentMode) {
+    const moderationHit = await moderationPromise;
+    trace.countLlm("moderation");
+    trace.step("guardrail_moderation", "Provider moderation (ran in parallel)", moderationHit ? "hit" : "pass", {
+      flagged: moderationHit?.topic ?? null,
+    });
+    if (moderationHit) {
+      yield* await finishBlocked(shopId, convo.id, "moderation", meterPromise, track, config);
+      return;
+    }
+    const [{ generationHistory }, shopper] = await Promise.all([historyPromise, shopperPromise]);
+    const language = languageInstruction(config.persona);
+    const personaPrompt = [
+      // Blank role / brand voice (or no persona row) → the install defaults.
+      buildPersonaPrompt(withPersonaDefaults(config.persona)),
+      language,
+      shopper,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    trace.step("agent", "AI agent (tools)", "info", {
+      model: agentModel() ?? "dashboard model → CHAT_MODEL",
+      historyMessages: generationHistory.length,
+      shopper: shopper || "anonymous visitor",
+    });
+    yield* agentLane({
+      shopId,
+      convoId: convo.id,
+      config,
+      message,
+      personaPrompt,
+      history: generationHistory,
+      meterPromise,
+      track,
+      trace,
+      isTest,
+      fallback,
+      queryEmbedding,
+      deps: {
+        saveMessage,
+        recordUnresolved,
+        cardsForShopifyIds,
+        appendCrossSell,
+        discountFacts,
+        escalateCannotAnswer: maybeEscalateCannotAnswer,
+      },
+    });
+    return;
+  }
+
   // ── Router (started at the top of the turn — layer b raced beside it) ─────
   const { routerHistory, generationHistory } = await historyPromise;
   trace.step("history", "Conversation history loaded", "info", {
     routerTurns: routerHistory.length,
     generationTurns: generationHistory.length,
   });
-  const routed = await routedPromise;
+  const routed = await routedPromise!;
   trace.countLlm("router");
   trace.step("router", "Intent router (LLM call 1 of 2)", routed.parseFailed ? "error" : "info", {
     intent: routed.intent,
@@ -649,7 +743,7 @@ export async function* runPipeline(
     flagged: moderationHit?.topic ?? null,
   });
   if (moderationHit) {
-    yield* await finishBlocked(shopId, convo.id, "moderation", meterPromise, track, config.persona);
+    yield* await finishBlocked(shopId, convo.id, "moderation", meterPromise, track, config);
     return;
   }
   // The router may only enforce a policy the MERCHANT configured. With no
@@ -719,7 +813,7 @@ export async function* runPipeline(
     },
   );
   if (routerBlocks) {
-    yield* await finishBlocked(shopId, convo.id, "router", meterPromise, track, config.persona);
+    yield* await finishBlocked(shopId, convo.id, "router", meterPromise, track, config);
     return;
   }
   // Same contract for off_topic: it exists to enforce the merchant's STORE
@@ -2034,17 +2128,21 @@ async function finishBlocked(
   layer: string,
   meterPromise: Promise<unknown>,
   track: TrackFn,
-  persona?: PersonaLanguage | null,
+  config: ShopConfig,
 ): Promise<PipelineFrame[]> {
-  const text = canned("blockedTopic", persona);
+  const text = canned("blockedTopic", config.persona);
   await saveMessage(shopId, convoId, {
     role: "out", author: "ai", content: text, sourceLayer: `banned_${layer}`,
   });
   await track("turn_blocked", { layer });
   await meterPromise;
+  // Consecutive blocks count as "cannot answer" (spec 23 §3.5, QA2-A7): a
+  // shopper refused N times in a row is offered a person.
+  const escalation = await maybeEscalateCannotAnswer(shopId, convoId, config);
   return [
     { type: "message", text },
-    { type: "done", outcome: "blocked", conversationId: convoId },
+    ...escalation,
+    { type: "done", outcome: escalation.length > 0 ? "handover" : "blocked", conversationId: convoId },
   ];
 }
 

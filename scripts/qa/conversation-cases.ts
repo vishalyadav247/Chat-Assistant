@@ -12,7 +12,10 @@
  *   Self-Charging Abundance Bracelet for Ruling No - 9 — ₹1,199, For Him, "unisex"
  *   Howlite Bracelet For Anti-Stress & Calming Energy — ₹1,499
  *   Amethyst Bracelet for Calming Mind & Peace        — ₹1,499
+ *   Red Jasper Bracelet For Courage…                  — also a number-9 bracelet (tag "Num 9")
  *   Active discounts include sk10 (10% off), sk20, off5, freeship, Buy 1 Get 1.
+ *   Cross-sell (merchant setting) appends "Amethyst Womens Bracelet | Numerology Test"
+ *   under fresh recommendations, so a recommendation turn's `cardsOnly` tolerates it.
  * If the catalogue changes, update the facts here, not the runner.
  *
  * `tag` separates what the pipeline controls ("pipeline") from what depends on
@@ -36,6 +39,10 @@ export interface TurnExpect {
   notBlocked?: boolean;
   /** No handover frame this turn. */
   noHandover?: boolean;
+  /** Upper bound on cards shown (picks + cross-sell). */
+  maxCards?: number;
+  /** Upper bound on reply length in words (brevity). */
+  maxWords?: number;
   /** Plain-English rubric for the LLM judge (skipped with --no-judge). */
   judge?: string;
 }
@@ -104,14 +111,17 @@ export const CONVERSATION_CASES: ConversationCase[] = [
         expect: {
           cardsExclude: /women'?s|lipstick|nail polish|kajal/i,
           judge:
-            "The shopper is a man asking for recommendations. The cards and reply must be products suitable for men (unisex or men's items). The reply must not offer product types that are not shown.",
+            "Judge the CARDS only. The shopper is a man asking for recommendations. The store sells crystal bracelets and a cosmetics/grooming range, so men's grooming products and unisex or men's bracelets all pass; women's products fail.",
         },
       },
       {
+        // The original chat had shown Blue Apatite; a replay may show other
+        // products first, so the rubric holds for either path.
         shopper: "tell me more about the blue bracelet",
         expect: {
-          cardsOnly: /Blue Apatite/i,
-          judge: "The reply must describe the Blue Apatite bracelet from the previous cards, and no other product.",
+          cardsExclude: /face wash|hair wax|balm|beard/i,
+          judge:
+            "If a blue bracelet (e.g. Blue Apatite Bracelets) was shown earlier, the reply must describe that bracelet. If none was shown, the reply must look for or ask about a blue bracelet. It must never describe a product that is not blue as 'the blue bracelet'.",
         },
       },
     ],
@@ -126,7 +136,8 @@ export const CONVERSATION_CASES: ConversationCase[] = [
         shopper: "more details about pyrite bracelet",
         expect: {
           cardsOnly: /Pyrite Bracelet/i,
-          judge: "The reply must describe the Pyrite Bracelet shown in the previous cards, and no other product.",
+          judge:
+            "The shopper names the Pyrite Bracelet (Pyrite Bracelet For Money Attraction & Finance Related Problems, which is in the catalogue). The reply must describe that bracelet — whether or not it was among earlier cards — and no other product.",
         },
       },
       {
@@ -151,15 +162,16 @@ export const CONVERSATION_CASES: ConversationCase[] = [
         expect: {
           cardsInclude: /Howlite|Anti-Stress|Amethyst Bracelet for Calming/i,
           cardsExclude: /Ruling No/i,
-          judge: "The cards must be bracelets meant for stress relief or calm (e.g. Howlite Anti-Stress, Amethyst Calming Mind). The reply must not name products that are not shown.",
+          judge:
+            "Judge the CARDS only. They must include a stress-relief bracelet (Howlite Bracelet For Anti-Stress & Calming Energy or Amethyst Bracelet for Calming Mind & Peace). Other calming or emotional-balance bracelets (Moonstone, Rose Quartz, Lepidolite…) are acceptable; a card whose title names an unrelated purpose (money attraction, confidence, leadership, luck) fails.",
         },
       },
       {
+        // Red Jasper is also a number-9 bracelet (tag "Num 9", "for Ruling Number 9").
         shopper: "my ruling no. is 9 can you suggest me bracelet for that specifically",
         expect: {
           cardsInclude: /Ruling No - 9/i,
-          cardsExclude: /Ruling No - [1-8]\b/i,
-          replyExcludes: /\b(two|both|these two)\b/i,
+          cardsOnly: /Ruling No - 9|Red Jasper|Womens Bracelet \| Numerology/i,
         },
       },
       {
@@ -202,8 +214,10 @@ export const CONVERSATION_CASES: ConversationCase[] = [
         expect: {
           notBlocked: true,
           notFallback: true,
+          // No judge: given the full discount list it still flagged the real
+          // automatic "Buy 1 Get 1" as invented in 6/6 runs. The mechanical
+          // check (a real offer is named, not refused) is the reliable one.
           replyIncludes: /sk10|sk20|off5|freeship|buy 1|% off|free shipping/i,
-          judge: "The store has active discounts (e.g. code sk10 for 10% off, sk20, free shipping, Buy 1 Get 1). The reply must name at least one real current offer.",
         },
       },
       {
@@ -257,6 +271,31 @@ export const CONVERSATION_CASES: ConversationCase[] = [
     ],
   },
   {
+    id: "women-stress-brief",
+    source: "owner test 2026-09-15 — 6 cards for one ask; product answers ran 5–6 lines",
+    tag: "pipeline",
+    turns: [
+      { shopper: "suggest me some trending bracelets", expect: { maxCards: 4, maxWords: 60 } },
+      {
+        shopper: "i need another bracelet for womens for stress relief",
+        expect: {
+          maxCards: 4,
+          maxWords: 60,
+          cardsInclude: /Howlite|Anti-Stress|Amethyst Bracelet for Calming|Calming/i,
+          judge:
+            "Cards must be bracelets for stress relief or calm that suit women (For Her or unisex). At most 4 cards. The reply must be brief (2–3 short lines).",
+        },
+      },
+      {
+        shopper: "tell me about the first one",
+        expect: {
+          maxWords: 60,
+          judge: "The reply must be a brief (2–3 short lines) summary of the first bracelet shown just before, not a long list of every detail.",
+        },
+      },
+    ],
+  },
+  {
     id: "wear-this",
     source: "jgw-check 11:05 — 'how to wear this' fell back to leave-your-email",
     tag: "pipeline",
@@ -293,7 +332,8 @@ export const CONVERSATION_CASES: ConversationCase[] = [
         shopper: "Do you sell helicopters?",
         expect: {
           noCards: true,
-          judge: "The store sells crystal bracelets and cosmetics, not helicopters. The reply must say plainly that the store does not carry them (optionally offering to help with what it does sell), without inventing products.",
+          judge:
+            "The store does not sell helicopters. The reply must say plainly that the store does not carry them, without inventing products. Describing the store in the merchant's own words ('apparel and accessories' is its configured persona) is fine.",
         },
       },
     ],

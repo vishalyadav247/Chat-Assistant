@@ -2,6 +2,9 @@ import { env } from "../env.server";
 import { OpenAiProvider } from "./openai.server";
 import { activeTurnCollector } from "../pipeline/turn-capture.server";
 import type {
+  AgentEvent,
+  AgentMessage,
+  ToolDefinition,
   ChatMessage,
   ChatOptions,
   LlmCallContext,
@@ -46,6 +49,38 @@ class CapturingProvider implements LlmProvider {
     })();
   }
 
+  agentStream(
+    messages: AgentMessage[],
+    tools: ToolDefinition[],
+    ctx: LlmCallContext,
+    options?: ChatOptions,
+  ): AsyncIterable<AgentEvent> {
+    const collector = activeTurnCollector();
+    const stream = this.inner.agentStream(messages, tools, ctx, options);
+    if (!collector) return stream;
+    // Debug capture reads plain role/content pairs; tool traffic is rendered
+    // into the content so the recording still shows what the model saw.
+    const call = collector.record(
+      ctx.purpose,
+      messages.map((m) => ({
+        role: m.role === "tool" ? "user" : m.role,
+        content:
+          m.role === "tool"
+            ? `[tool result ${m.toolCallId}] ${m.content}`
+            : m.role === "assistant" && m.toolCalls?.length
+              ? `${m.content ?? ""}[tool calls] ${m.toolCalls.map((c) => `${c.name}(${c.arguments})`).join("; ")}`
+              : (m.content ?? ""),
+      })),
+    );
+    return (async function* () {
+      for await (const event of stream) {
+        if (event.type === "text") collector.appendResponse(call, event.text);
+        else collector.appendResponse(call, `[tool calls] ${event.calls.map((c) => `${c.name}(${c.arguments})`).join("; ")}`);
+        yield event;
+      }
+    })();
+  }
+
   embed(text: string, ctx: ShopContext): Promise<number[]> {
     return this.inner.embed(text, ctx);
   }
@@ -71,4 +106,12 @@ export function getLlmProvider(): LlmProvider {
   return provider;
 }
 
-export type { ChatMessage, ChatOptions, LlmProvider } from "./types";
+export type {
+  AgentEvent,
+  AgentMessage,
+  ChatMessage,
+  ChatOptions,
+  LlmProvider,
+  ToolCall,
+  ToolDefinition,
+} from "./types";

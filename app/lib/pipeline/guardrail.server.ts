@@ -16,9 +16,35 @@ export interface GuardrailHit {
   score: number;
 }
 
-/** Layer a: word-boundary keyword scan (fixes the demo's substring false positives). */
-export function keywordScan(message: string, bannedTopics: string[]): GuardrailHit | null {
+/**
+ * Layer a: word-boundary keyword scan (fixes the demo's substring false positives).
+ *
+ * `wholePhrase` (agent mode, spec 24): the topic must appear as a phrase. The
+ * per-word scan blocks on ANY significant word, so the default topic "medical
+ * advice" refused "is this medical-grade steel?" and "legal advice" refused "is
+ * it legal to ship to Canada?" — false refusals on ordinary product questions
+ * in any store category. The agent's own policy covers paraphrases.
+ */
+export function keywordScan(
+  message: string,
+  bannedTopics: string[],
+  opts: { wholePhrase?: boolean } = {},
+): GuardrailHit | null {
   const lower = message.toLowerCase();
+  if (opts.wholePhrase) {
+    // Singular and plural are the same topic: "elections" blocks "election".
+    const wordPattern = (word: string) => {
+      const stem = word.length > 3 && word.endsWith("s") && !word.endsWith("ss") ? word.slice(0, -1) : word;
+      return `${escapeRegex(stem)}(?:s|es)?`;
+    };
+    for (const topic of bannedTopics) {
+      const words = topic.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+      if (words.length === 0) continue;
+      const pattern = new RegExp(`(^|[^\\p{L}\\p{N}])${words.map(wordPattern).join("[^\\p{L}\\p{N}]+")}($|[^\\p{L}\\p{N}])`, "u");
+      if (pattern.test(lower)) return { topic, layer: "keyword", score: 1 };
+    }
+    return null;
+  }
   for (const topic of bannedTopics) {
     const words = topic
       .toLowerCase()

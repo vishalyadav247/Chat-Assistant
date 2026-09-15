@@ -808,3 +808,25 @@ as `{}`, and the next suite faithfully "restored" the `{}` it found. It was reco
 from the table's un-vacuumed previous row version (`pageinspect`, superuser on the dev container).
 **Run suites one at a time, with memory to spare; after any crashed run, read preflight's plan
 matrix section before trusting the environment.**
+
+## AB. Real conversations, measured as pass rates (`scripts/qa/conversations.test.ts`)
+
+`npm run eval:conversations` replays whole shopper conversations (`scripts/qa/conversation-cases.ts`,
+taken from real jgw-check chats) turn by turn through the real pipeline as isTest turns, N runs each.
+Expectations are shopper-visible only — cards (`cardsInclude` / `cardsOnly` / `cardsExclude`), reply
+text, dead ends, blocks, handovers — plus an optional plain-English rubric graded by an LLM judge
+(REST call, never recorded against merchant usage). Lane names are never asserted, so the pipeline
+and the spec-24 agent are measured by the same cases. Cases are tagged `pipeline` (the engine's
+responsibility) or `data` (merchant configuration). Results land in git-ignored `scripts/qa/results/`.
+
+Flags: `--runs N` · `--case <id>` · `--agent pipeline|tools` · `--agent-model <id>` · `--no-judge` ·
+`--judge-model <id>` (default gpt-4.1; gpt-4.1-mini is ~5× cheaper) · `--compare <results.json>` · `--verbose`.
+A full 3-run eval costs ≈ $0.2 (gpt-4.1-mini agent + mini judge) to ≈ $0.75 (gpt-4.1 agent + gpt-4.1 judge).
+Aborts (exit 2) when the shop's AI is switched off.
+
+Judge caveat: rubrics must carry the facts (the judge sees the conversation, not the catalogue) and
+should grade cards rather than prose where possible — a judge given the full discount list still
+flagged a real automatic "Buy 1 Get 1" as invented, so that turn is checked mechanically only.
+
+Baseline 2026-09-14 (3 runs): pipeline 56% · agent gpt-4.1-mini 87% · agent gpt-4.1 97% of
+pipeline-tagged turns (spec 24 results table).

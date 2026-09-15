@@ -114,6 +114,7 @@ async function callRoute(
 async function main() {
   const { default: db } = await import("../../app/db.server");
   const { onShopAuthenticated } = await import("../../app/lib/install.server");
+  const { DEFAULT_PERSONA } = await import("../../app/lib/ai-defaults");
   const { cleanupShop, countShopRows } = await import("../../app/lib/jobs/handlers.server");
   const uninstalledRoute = await import("../../app/routes/webhooks.app.uninstalled");
   const scopesRoute = await import("../../app/routes/webhooks.app.scopes_update");
@@ -161,9 +162,15 @@ async function main() {
   );
   const guardrails = await db.guardrails.findUnique({ where: { shopId } });
   check("default Guardrails seeded", guardrails !== null);
+  // Spec 24: the fallback is seeded BLANK so the built-in message is served in
+  // the shop's language (QA2-A3); a merchant-written one still wins.
   check(
-    "Guardrails carry a fallback message + banned topics",
-    Boolean(guardrails?.fallbackMessage) && (guardrails?.bannedTopics.length ?? 0) > 0,
+    "Guardrails carry banned topics and a blank (translated built-in) fallback",
+    guardrails?.fallbackMessage === "" && (guardrails?.bannedTopics.length ?? 0) > 0,
+  );
+  check(
+    "Persona is seeded with the generic defaults (behaviours included)",
+    persona?.role === DEFAULT_PERSONA.role && persona?.behaviours === DEFAULT_PERSONA.behaviours,
   );
   const recCount = await db.recommendation.count({ where: { shopId } });
   check("seeded app recommendations", recCount === 2, `${recCount}`);

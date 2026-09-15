@@ -194,7 +194,7 @@ export function InstructionsGeneralTab(props: { initial: GeneralData }) {
               maxLength={STORE_INFO_MAX}
               value={form.storeInfoAbout}
               placeholder={
-                "e.g., Luna Crystals is a small family-run shop in Jaipur selling handmade crystal bracelets and healing stones.\nOpening hours: Mon–Sat, 10am–6pm IST.\nWe ship across India in 3–5 days.\nContact: hello@lunacrystals.com"
+                "e.g., [Store name] is a small family-run business selling [what you sell].\nBased in: [city, country]. Opening hours: [days and times].\nShipping: [where you ship and how long it takes].\nContact: [email / phone]"
               }
               onInput={(e) => set("storeInfoAbout", e.currentTarget.value)}
             />
@@ -213,7 +213,7 @@ export function InstructionsGeneralTab(props: { initial: GeneralData }) {
             rows={3}
             maxLength={250}
             value={form.role}
-            placeholder="e.g., You are a friendly customer support assistant for an online accessories store. Your goal is to help customers find products, answer questions and provide excellent service."
+            placeholder="e.g., You are a friendly shopping assistant for this store. You help shoppers find the right products and answer their questions about products, orders and store policies."
             onInput={(e) => set("role", e.currentTarget.value)}
           />
           <Counter value={form.role} max={250} />
@@ -343,7 +343,7 @@ export function InstructionsGeneralTab(props: { initial: GeneralData }) {
             rows={2}
             maxLength={SCOPE_MAX}
             value={form.scope}
-            placeholder="e.g., handmade crystal jewellery, healing stones and gifts"
+            placeholder="e.g., outdoor clothing and camping gear"
             onInput={(e) => set("scope", e.currentTarget.value)}
           />
           <Counter value={form.scope} max={SCOPE_MAX} />
@@ -370,7 +370,7 @@ export function InstructionsGeneralTab(props: { initial: GeneralData }) {
             maxLength={500}
             value={form.fallbackMessage}
             placeholder="I'm not sure about that one — leave your email and our team will get back to you."
-            details="Leave blank to use the built-in default. The assistant captures the shopper's email as a lead after showing this."
+            details="Leave blank to use the built-in default, shown in your store's language. The assistant captures the shopper's email as a lead after showing this."
             onInput={(e) => set("fallbackMessage", e.currentTarget.value)}
           />
           <Counter value={form.fallbackMessage} max={500} />

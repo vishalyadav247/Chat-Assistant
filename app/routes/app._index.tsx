@@ -219,6 +219,19 @@ export default function DashboardPage() {
   const syncFetcher = useFetcher<typeof action>();
   const processedSync = useRef<unknown>(null);
 
+  // Overview "Reload" shows its busy state only for a reload the MERCHANT
+  // clicked. It used to read `revalidator.state` directly, which the silent 5s
+  // poll below also drives — so the button flickered to "Reloading…" (and went
+  // disabled) every few seconds on its own.
+  const [manualReload, setManualReload] = useState(false);
+  useEffect(() => {
+    if (manualReload && revalidator.state === "idle") setManualReload(false);
+  }, [manualReload, revalidator.state]);
+  const reload = () => {
+    setManualReload(true);
+    revalidator.revalidate();
+  };
+
   // Live KPI + feed poll (spec 13): every ~5s while the tab is visible.
   useEffect(() => {
     const interval = setInterval(() => {
@@ -314,9 +327,7 @@ export default function DashboardPage() {
           pendingQuestions={data.pendingQuestions}
           atcThisMonth={data.atcThisMonth}
           aiEnabled={data.aiEnabled || enablingAi}
-          syncing={syncing}
           onAnswerQuestions={() => navigate("/app/ai-agent/review")}
-          onSyncCatalog={syncAll}
           onPreviewWidget={() =>
             window.open(`https://${data.shopDomain}`, "_blank", "noopener,noreferrer")
           }
@@ -329,14 +340,14 @@ export default function DashboardPage() {
           range={data.metrics.range}
           allowedRanges={data.allowedRanges}
           rangeNextPlan={data.rangeNextPlan}
-          reloading={revalidator.state !== "idle"}
+          reloading={manualReload}
           onRangeChange={(range) =>
             setSearchParams((params) => {
               params.set("range", range);
               return params;
             })
           }
-          onReload={() => revalidator.revalidate()}
+          onReload={reload}
         />
 
         <DashboardChecklist
