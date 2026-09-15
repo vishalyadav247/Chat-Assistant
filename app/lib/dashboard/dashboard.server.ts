@@ -351,6 +351,7 @@ export async function setupChecklist(
   // not trained the AI on anything.
   const trained = Boolean(syncState?.productSyncAt) && learnedTotal > 0;
   const synced = Boolean(syncState?.productSyncAt);
+  const aiWrittenUnreviewed = settings.aiSetup.status === "done" && !settings.aiSetup.reviewedAt;
   const steps: ChecklistStep[] = [
     {
       id: "training",
@@ -380,18 +381,28 @@ export async function setupChecklist(
       action: { kind: "navigate", href: "/app/ai-agent/training?tab=knowledge" },
       actionLabel: "Add sources",
     },
-    {
-      id: "instructions",
-      title: "Add your store info",
-      description:
-        "Tell your AI about your store — what you sell, where you're based and how shoppers can reach you.",
-      // Done once Instructions → General → Store info has text (user decision
-      // 2026-09-14). Seeded instructions exist from install, so "instructions
-      // exist" could never ask the merchant for anything.
-      state: settings.storeInfo.about.trim() ? "done" : "todo",
-      action: { kind: "revisit", href: "/app/ai-agent/instructions#store-info" },
-      actionLabel: settings.storeInfo.about.trim() ? "Review" : "Add store info",
-    },
+    // Done once Instructions → General → Store info has text (user decision
+    // 2026-09-14) — and, when AI wrote it from the store's data (spec 26), once
+    // the merchant has reviewed it (saved General).
+    aiWrittenUnreviewed
+      ? {
+          id: "instructions",
+          title: "Review your AI instructions",
+          description:
+            "Your assistant's store info and instructions were written from your Shopify store. Check them and press Save.",
+          state: "todo",
+          action: { kind: "revisit", href: "/app/ai-agent/instructions" },
+          actionLabel: "Review",
+        }
+      : {
+          id: "instructions",
+          title: "Add your store info",
+          description:
+            "Tell your AI about your store — what you sell, where you're based and how shoppers can reach you.",
+          state: settings.storeInfo.about.trim() ? "done" : "todo",
+          action: { kind: "revisit", href: "/app/ai-agent/instructions#store-info" },
+          actionLabel: settings.storeInfo.about.trim() ? "Review" : "Add store info",
+        },
     {
       id: "chatbox",
       title: "Chatbox settings & appearance",

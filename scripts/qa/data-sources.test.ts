@@ -14,6 +14,10 @@
  *   retrieval — deterministic: what the pipeline's own search hands the model
  *   answer    — end to end: what the shopper reads (runPipeline, isTest)
  *
+ * Runs in whatever engine the environment selects — the tools agent by default
+ * (spec 24), the old router with AI_AGENT_MODE=pipeline. Section 6 needs the
+ * dev server running (its pg-boss worker drains the queued rebuilds).
+ *
  * Runs on a throwaway shop and removes it with the app's real uninstall purge,
  * which is itself asserted: nothing may survive it.
  */
@@ -73,7 +77,11 @@ async function main(): Promise<number> {
   });
   const shopId = shop.id;
   let sender: import("pg-boss").PgBoss | undefined;
-  console.log(`throwaway shop ${DOMAIN}`);
+  // Tools mode (spec 24 agent) is the default; AI_AGENT_MODE=pipeline runs the
+  // old router + lanes. The assertions are about what the shopper reads
+  // (reply text, cards, the done-frame outcome), so they hold in both modes.
+  const { agentModeEnabled } = await import("../../app/lib/pipeline/agent.server");
+  console.log(`throwaway shop ${DOMAIN} · engine: ${agentModeEnabled() ? "tools (default)" : "pipeline (AI_AGENT_MODE=pipeline)"}`);
 
   // ── helpers ────────────────────────────────────────────────────────────
   const turn = async (message: string): Promise<Turn> => {
@@ -98,7 +106,8 @@ async function main(): Promise<number> {
   const says = (t: Turn, re: RegExp) => re.test(t.text) || t.cards.some((c) => re.test(c.title));
   const brief = (t: Turn) =>
     `${t.outcome} · "${t.text.replace(/\s+/g, " ").trim().slice(0, 110)}"${t.cards.length ? ` · cards: ${t.cards.map((c) => c.title).join(" | ")}` : ""}`;
-  /** Retrieval layer: the top-3 chunks the question lane would ground on. */
+  /** Retrieval layer: the top-3 knowledgeSearch chunks — the same search the
+   *  tools agent's store-info preload/tool and the old question lane ground on. */
   const retrieves = async (question: string, re: RegExp): Promise<boolean> => {
     const hits = await knowledgeSearch(shopId, await embedText(question, { shopId }), 3);
     return hits.some((h) => re.test(`${h.topic} ${h.body}`));
@@ -453,8 +462,11 @@ async function main(): Promise<number> {
 
     // ── 6. the real toggle path: queued rebuild ──────────────────────────
     // The Training route does NOT rebuild inline — it enqueues a job and marks
-    // the bridge pending. knowledgeSearch only reads ACTIVE sources, so the
-    // whole bridge is invisible to the agent until a worker drains the job.
+    // the bridge pending. Since spec 23 §1.2 an ENABLED source keeps serving its
+    // last good chunks while pending (knowledgeSearch excludes only "inactive"),
+    // so a click never blanks the bridge; the switch takes effect when the
+    // worker has rebuilt it. A merchant-INACTIVE source is the opposite: a
+    // re-ingest must never flip it back into service (QA2-A1).
     section("6. Queued rebuild (what a merchant's click actually does)");
     // Send-only queue client. enqueue() would otherwise start() the app's own
     // queue, which registers EVERY job handler — turning this test process into
@@ -466,27 +478,77 @@ async function main(): Promise<number> {
     await sender.start();
     global.pgBossGlobal = { boss: sender, started: Promise.resolve() };
     const bridgeId = await ensureBridgeSource(shopId, "pages");
-    await rebuildContentBridge(shopId, "pages");
-    ok(
-      "while the rebuild is queued the page is NOT answerable (bridge pending)",
-      !(await retrieves(Q.page, F.page)),
-      "every toggle blanks the whole bridge until the job runs",
-    );
-    const deadline = Date.now() + 90_000;
-    let bridge = await db.dataSource.findFirst({ where: { id: bridgeId }, select: { status: true, metadata: true } });
-    while (bridge?.status === "pending" && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 2000));
-      bridge = await db.dataSource.findFirst({ where: { id: bridgeId }, select: { status: true, metadata: true } });
-    }
-    const err = (bridge?.metadata as { error?: string } | null)?.error;
-    ok(
-      "the APP's worker (dev server) drains the queued rebuild within 90s and the page is back",
-      bridge?.status === "active" && (await retrieves(Q.page, F.page)),
-      bridge?.status === "pending"
+    const readBridge = () => db.dataSource.findFirst({ where: { id: bridgeId }, select: { status: true, chunkCount: true, metadata: true } });
+    const drain = async () => {
+      const deadline = Date.now() + 90_000;
+      let b = await readBridge();
+      while (b?.status === "pending" && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 1000));
+        b = await readBridge();
+      }
+      return b;
+    };
+    const drainDetail = (b: Awaited<ReturnType<typeof readBridge>>) => {
+      const err = (b?.metadata as { error?: string } | null)?.error;
+      return b?.status === "pending"
         ? "still pending — no app worker picked the job up (is the dev server running?)"
-        : `status=${bridge?.status}${err ? ` error=${err}` : ""}`,
-    );
-    if (bridge?.status !== "active") await rebuildContentBridge(shopId, "pages", { inline: true });
+        : `status=${b?.status}${err ? ` error=${err}` : ""}`;
+    };
+
+    // 6a. Merchant switches the page OFF → the route queues a rebuild.
+    const chunksBefore = (await readBridge())?.chunkCount ?? 0;
+    await db.storePage.update({ where: { id: page.id }, data: { learnEnabled: false } });
+    await rebuildContentBridge(shopId, "pages");
+    {
+      const before = await readBridge();
+      const served = await retrieves(Q.page, F.page);
+      const after = await readBridge();
+      const stillPending = before?.status === "pending" && after?.status === "pending";
+      ok(
+        "while the rebuild is queued the bridge keeps serving its last good chunks (spec 23 §1.2)",
+        // If the worker drained the job between the two reads there is no
+        // pending window left to observe — the drain check below covers it.
+        !stillPending || (served && (after?.chunkCount ?? 0) === chunksBefore && chunksBefore > 0),
+        stillPending ? `pending, served=${served}, chunks ${chunksBefore}→${after?.chunkCount}` : `worker drained before the check (status=${after?.status})`,
+      );
+    }
+    {
+      const b = await drain();
+      ok(
+        "the APP's worker (dev server) drains the queued rebuild within 90s and the switched-off page is gone",
+        b?.status === "active" && !(await retrieves(Q.page, F.page)),
+        drainDetail(b),
+      );
+      if (b?.status === "active") {
+        const t = await turn(Q.page);
+        ok("…and after the drain the answer no longer knows the page", !says(t, F.page), brief(t));
+      }
+    }
+    // 6b. Switch it back ON through the same queued path.
+    await db.storePage.update({ where: { id: page.id }, data: { learnEnabled: true } });
+    await rebuildContentBridge(shopId, "pages");
+    {
+      const b = await drain();
+      ok(
+        "switched back ON: the worker's rebuild makes the page answerable again",
+        b?.status === "active" && (await retrieves(Q.page, F.page)),
+        drainDetail(b),
+      );
+      if (b?.status !== "active") await rebuildContentBridge(shopId, "pages", { inline: true });
+    }
+
+    // 6c. QA2-A1: a merchant-INACTIVE source stays out of service across a
+    //     re-ingest (serve-stale applies to enabled sources only).
+    await db.dataSource.updateMany({ where: { id: policy.id, shopId }, data: { status: "inactive" } });
+    await ingestSource(shopId, policy.id).catch(() => undefined);
+    {
+      const row = await db.dataSource.findFirst({ where: { id: policy.id, shopId }, select: { status: true } });
+      ok("an inactive source stays inactive after a re-ingest", row?.status === "inactive", `status=${row?.status}`);
+      ok("…and its chunks are not retrieved", !(await retrieves(Q.policy, F.policy)));
+      const t = await turn(Q.policy);
+      ok("…and the answer does not use it", !says(t, F.policy), brief(t));
+    }
+    await db.dataSource.updateMany({ where: { id: policy.id, shopId }, data: { status: "active" } });
 
     // ── 7. purge ─────────────────────────────────────────────────────────
     section("7. Uninstall purge leaves nothing behind");

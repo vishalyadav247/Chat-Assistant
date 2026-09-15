@@ -251,8 +251,11 @@ async function write(
   event: string,
   detail: unknown,
   context: LogContext | undefined,
+  audit?: { by: string },
 ): Promise<void> {
-  const decision = rateCheck(event, Date.now());
+  // Audit rows (who read shopper data) are never rate-capped: a gap in an access
+  // trail is worse than the row volume, which is bounded by operator page views.
+  const decision = audit ? "write" : rateCheck(event, Date.now());
   if (decision === "drop") return;
 
   const shopId = await resolveShopId(context, detail);
@@ -277,6 +280,11 @@ async function write(
   // text is the diagnostic).
   const bag = detailBag(detail);
   const safeDetail = bag ? sanitize(bag, 1) : detail;
+  const builtContext = buildContext(detail, context);
+  // The viewer's identity is the point of an audit row. It is an operator/staff
+  // account set by trusted server code (never shopper input), so it is stored
+  // after sanitising instead of being scrubbed like free-form values.
+  const finalContext = audit ? { ...(builtContext ?? {}), by: truncate(audit.by, 200) } : builtContext;
 
   await db.appLog.create({
     data: {
@@ -284,18 +292,24 @@ async function write(
       event: truncate(event, 120),
       shopId,
       message: describe(safeDetail) || event,
-      context: (buildContext(detail, context) ?? undefined) as never,
+      context: (finalContext ?? undefined) as never,
     },
   });
 }
 
-function emit(level: LogLevel, event: string, detail: unknown, context: LogContext | undefined): void {
+function emit(
+  level: LogLevel,
+  event: string,
+  detail: unknown,
+  context: LogContext | undefined,
+  audit?: { by: string },
+): void {
   // Mirror first — the console line must survive a DB outage.
   const mirror = level === "error" ? console.error : console.warn;
   if (detail === undefined) mirror(event, context ?? "");
   else mirror(event, detail, context ?? "");
 
-  void write(level, event, detail, context).catch((error) => {
+  void write(level, event, detail, context, audit).catch((error) => {
     // Never recurse into the seam; the mirror above already carries the event.
     console.error("app_log_write_failed", error);
   });
@@ -309,6 +323,16 @@ export function logError(event: string, detail?: unknown, context?: LogContext):
 /** Record a recoverable/degraded condition. Fire-and-forget. */
 export function logWarn(event: string, detail?: unknown, context?: LogContext): void {
   emit("warn", event, detail, context);
+}
+
+/**
+ * Record an access to sensitive data (e.g. Debug recordings of shopper
+ * conversations). Every call writes a row — no rate cap — and `by` keeps the
+ * operator's account. Pass only trusted server-side identities as `by`.
+ * Fire-and-forget.
+ */
+export function logAudit(event: string, by: string, detail?: unknown, context?: LogContext): void {
+  emit("warn", event, detail, context, { by });
 }
 
 /** Awaitable variant for scripts and tests that need the row to exist. */

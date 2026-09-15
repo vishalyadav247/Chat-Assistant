@@ -52,6 +52,8 @@ export const JOBS = {
   metafieldApply: "metafield-apply",
   metafieldDefinitionsSync: "metafield-definitions-sync",
   teamNotify: "team-notify", // spec 18: browser push + handover email to team members
+  // Spec 26: instructions written from the store's data after the first sync.
+  aiSetup: "ai-setup",
 } as const;
 
 /** Grace window after uninstall before domain data is erased (spec 17 delta).
@@ -87,6 +89,11 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
 
   await boss.work<ShopJob>(JOBS.discountSync, async ([job]) => {
     await fullDiscountSync(job.data.shopDomain);
+  });
+
+  await boss.work<ShopJob & { force?: boolean }>(JOBS.aiSetup, async ([job]) => {
+    const { aiSetupJob } = await import("../instructions/ai-setup.server");
+    await aiSetupJob(job.data);
   });
 
   await boss.work<ShopJob>(JOBS.pageSync, async ([job]) => {
@@ -160,6 +167,7 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
     // backstop for the fire-and-forget race in cleanupShop: a log row written
     // microseconds after a purge would otherwise outlive its shop.
     await purgeAppLogs().catch((error: unknown) => logError("app_log_purge_error", error));
+    await purgeOrphanUsage().catch((error: unknown) => logError("usage_orphan_purge_error", error));
     // Debug turn recordings (Admin → Debug, 2026-09-14): 7-day ceiling
     // regardless of any switch state, plus a hard 20,000-row cap so a
     // recording window left open cannot grow the table without bound. No
@@ -561,6 +569,18 @@ export async function purgeAppLogs(): Promise<number> {
   return aged.count + orphaned.count;
 }
 
+/**
+ * Token-usage rows whose shop row no longer exists (QA3-S4). Writes now skip
+ * uninstalled and missing shops atomically, but rows written before that — or
+ * for a shop deleted outright (test fixtures) — inflated the fleet cost tile.
+ */
+export async function purgeOrphanUsage(): Promise<number> {
+  return db.$executeRaw`
+    DELETE FROM "llm_usage_daily" u
+    WHERE NOT EXISTS (SELECT 1 FROM "shops" s WHERE s."id" = u."shopId")
+  `;
+}
+
 /** Delete ALL rows for a shop (uninstall cleanup; shop/redact is the ~48h backstop). */
 export async function cleanupShop(shopDomain: string): Promise<void> {
   const shop = await db.shop.findUnique({ where: { domain: shopDomain } });
@@ -595,6 +615,9 @@ export async function cleanupShop(shopDomain: string): Promise<void> {
     db.handoverConfig.deleteMany({ where: { shopId } }),
     db.widgetSettings.deleteMany({ where: { shopId } }),
     db.shopSettings.deleteMany({ where: { shopId } }),
+    // Spec 25 passages cascade with their product; deleted explicitly anyway so
+    // the purge never depends on the foreign key alone.
+    db.productPassage.deleteMany({ where: { shopId } }),
     db.product.deleteMany({ where: { shopId } }),
     db.productMetafieldDefinition.deleteMany({ where: { shopId } }),
     db.collection.deleteMany({ where: { shopId } }),
@@ -691,6 +714,7 @@ export async function countShopRows(
     ["widget_settings", await db.widgetSettings.count(where)],
     ["shop_settings", await db.shopSettings.count(where)],
     ["products", await db.product.count(where)],
+    ["product_passages", await db.productPassage.count(where)],
     ["product_metafield_definitions", await db.productMetafieldDefinition.count(where)],
     ["collections", await db.collection.count(where)],
     ["discounts", await db.discount.count(where)],

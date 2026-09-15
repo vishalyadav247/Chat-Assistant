@@ -34,7 +34,31 @@ function toSqlVector(vector: number[]): string {
   return `[${vector.join(",")}]`;
 }
 
+/**
+ * Demo fixtures must never reach a real database (owner rule 2026-09-15: seed
+ * data must not leak into live conversations at any cost). Every row below is
+ * written under the dev-shop domain only, and this refuses to run at all
+ * against production or a non-local database unless explicitly forced.
+ */
+function assertDevDatabase(): void {
+  const url = process.env.DATABASE_URL ?? "";
+  let host = "";
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    // unparseable → treated as non-local below
+  }
+  const local = ["localhost", "127.0.0.1", "::1", "postgres", "db"].includes(host);
+  if ((process.env.NODE_ENV === "production" || !local) && !process.argv.includes("--i-know-this-is-not-production")) {
+    throw new Error(
+      `Refusing to seed demo data: NODE_ENV=${process.env.NODE_ENV ?? ""} database host "${host}". ` +
+        "The seed is for the local dev database only.",
+    );
+  }
+}
+
 async function main() {
+  assertDevDatabase();
   const shop = await db.shop.upsert({
     where: { domain: DEV_SHOP_DOMAIN },
     update: { uninstalledAt: null },

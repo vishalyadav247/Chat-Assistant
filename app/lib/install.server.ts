@@ -99,6 +99,14 @@ export async function onShopAuthenticated(shopDomain: string): Promise<void> {
     // daily run its plan may not include.
     if (!syncState?.pageSyncAt || wasUninstalled) await enqueue(JOBS.pageSync, { shopDomain });
     if (!syncState?.articleSyncAt || wasUninstalled) await enqueue(JOBS.articleSync, { shopDomain });
+
+    // Spec 26: a NEW store gets its instructions written from its own data once
+    // the first product sync lands (the job waits for it). Stores that already
+    // existed are not rewritten on a token refresh — they use Regenerate.
+    if (!before || !persona) {
+      const { requestAiSetup } = await import("./instructions/ai-setup.server");
+      await requestAiSetup(shopId, shopDomain).catch((error) => logError("ai_setup_request_error", error, { shopId }));
+    }
   } catch (error) {
     // afterAuth must never break the OAuth flow.
     logError("after_auth_error", error);

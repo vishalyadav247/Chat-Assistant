@@ -127,13 +127,43 @@ sequenceDiagram
 | Tool | Input | What code does | Output to model | Available when |
 |---|---|---|---|---|
 | `search_products` | `query`, optional `max_price` | Hybrid keyword + meaning search over the shop's catalogue | ≤ 8 products: id, title, price (shop currency), availability, `match` (`best` / `possible`), details snippet | Learn products ON |
-| `get_product` | `product` (title or id) | Resolves the product; loads its row | price, availability, variants/sizes, type, vendor, tags, specs (≤ 1,500 chars), description (≤ 3,500 chars) | Learn products ON |
+| `get_product` | `product` (title or id), `question` (what the shopper wants to know) | Resolves the product; loads its row; for long descriptions picks the passages that match the question | price, availability, variants/sizes, type, vendor, tags, specs (≤ 1,500 chars), and either `description_overview` + `description_relevant` (the 3 passages closest to the question) or the whole description (≤ 5,000 chars) when it is short | Learn products ON |
 | `show_products` | `products` (titles or ids, ≤ 4) | Resolves, validates (published, in stock if required), builds cards from DB rows; cross-sell only after a search | titles shown + any not shown | Learn products ON |
-| `search_store_info` | `question` | Merchant curated answers close to the question (≥ 0.65) + meaning search over all knowledge sources + collection names | ≤ 2 store answers (with pinned products) + ≤ 4 passages (≤ 1,500 chars each) + collection titles | always |
+| `search_store_info` | `question` | Merchant curated answers close to the question (≥ 0.65) + meaning search over all knowledge sources + matching product-description passages + collection names | ≤ 2 store answers (with pinned products) + ≤ 4 passages (≤ 1,500 chars each) + ≤ 2 `product description` passages + collection titles | always |
 | `get_discounts` | — | Active, AI-enabled synced discounts with code / automatic | discount list | Learn discounts ON |
 | `offer_button` | `button` | Adds a widget button | ok + label | Only buttons enabled in widget settings: `track_order`, `contact_team`, `browse_faq` |
 | `decline` | `kind`: `banned_topic` / `off_topic` | Ends the turn with the store's own message (merchant off-topic message, or the translated built-in); banned refusals count toward the cannot-answer handover | ok | always |
 | `cannot_answer` | `question` | Logs to unresolved queue; reply offers the form | ok | always |
+
+**Grounding rules in code (2026-09-15):**
+
+- **Store info preloaded.** Before round 1, the closest store information for the shopper's
+  message (top 2 knowledge chunks scoring ≥ 0.45, ≤ 800 chars each) is added as a system note. It
+  reuses the turn's embedding: one indexed query, no model call. On jgw-check, store questions
+  score 0.48–0.67 and small talk ≤ 0.38. Without it, "Do you offer engraving?" got "the store info
+  doesn't mention it" with no lookup (4/4 traces). The note says it is incomplete and does not
+  replace get_product. Product passages are deliberately **not** preloaded: "how should I cleanse
+  it" matches other products' descriptions at 0.55.
+- **Search results carry the shopper's question.** When the model's search words differ from the
+  shopper's message, each result also gets `description_about_shoppers_question`: the product's
+  passage matching the shopper's own words (≥ 0.55). "moonstone bracelet" searched for "does it
+  help with hormonal balance?" now returns the hormonal-balance passage.
+- **`cannot_answer` needs a lookup first.** It is refused (with a hint to use get_product /
+  search_store_info) until a lookup tool ran or store info was preloaded this turn.
+
+**QA round 3 (2026-09-15):**
+
+| Mechanism | What it fixes |
+|---|---|
+| **Catalogue overview** in the system prompt (product count, top learn-enabled collections, product types, else common tags; cached 5 min) | "what do you sell?" answered from the store's own rows; an empty catalogue says the product list isn't available |
+| **Store information on lookups**: `get_product`, `search_products` (once per turn) and `get_discounts` results carry store info matching the question, chosen by **margin over the runner-up** (short questions score low in absolute terms) | care, sizing, wholesale rules and codes written in pages (WELCOME10) are no longer missed |
+| **Search**: `min_price`, `cheaper_than` (ceiling = that product's price), browse by price when no words match, retry with the shopper's own words when the rewrite finds nothing, honest "no products matched these words" | "anything under $20", "anything cheaper?", "products for male" |
+| **Held rounds**: text written in a round that ends in tool calls is not shown | two answers in one reply |
+| **Weak-pick filter**: with a best-tier or looked-up pick, "possible" picks are left out (`left_out`) | off-purpose padding cards |
+| **Cards backstop**: retrieved products the reply names get cards | products described with nothing to click |
+| **Turn checks** (one 12-token call, started only when the turn reaches the agent): Q1 cure/treat question → note: look up the product, share what the store says, not a medical treatment, see a doctor; Q2 unrelated task → note: decline off-topic | "will it cure my anxiety?", "write me a poem" (scope alone no longer lets a decline skip the search) |
+| Fixed rules: never claim cures; Learn products OFF → don't name products; no upsell closing questions; only suggest products a tool returned | health claims, invented add-ons |
+| `decline(banned_topic)` counts as banned only when topics are configured | prompt injections counted toward handover |
 
 Limits per turn: at most 4 tool calls per round (extra calls are refused), 5 rounds, 15-second tool
 budget, 45-second hard limit per model round.
@@ -155,13 +185,17 @@ The agent never sees the whole catalogue. Choosing products is a hand-off betwee
 |---|---|---|
 | Keyword (Postgres full-text) | title & tags (strong), type & vendor (strong), description & metafields (weak) | exact words: "obsidian", "pyrite", "ruling number 9" |
 | Meaning (1536-number vector embedding) | title · type · vendor · tags · variant options · enabled metafields · description (first 2,000 chars) | meaning: "stress" ≈ "calming energy" |
+| Description passages (spec 25) | descriptions ≥ 1,200 chars split into ~800-char passages, each with its own vector (`product_passages`) | facts deep in long descriptions: "helps with hormonal balance" at char 5,500 |
+
+Passages are rebuilt only when a description changes. Boilerplate paragraphs repeated in 3+
+products are ignored in search. Existing stores: `npm run passages:backfill -- --all`.
 
 ### During a chat
 
 | Step | Who | What |
 |---|---|---|
 | 1. Write the search | **Model** | Turns the conversation into a query, e.g. "bracelet for stress relief" |
-| 2. Find candidates | **Code / DB** | Keyword + meaning search; filters (shop, active, published, stock, price) in SQL; merged ranking with ≥ 3 of 8 slots kept for meaning matches; returns 8, each labelled `best` (the search's top relevance tier) or `possible` |
+| 2. Find candidates | **Code / DB** | Keyword + meaning + description-passage search; filters (shop, active, published, stock, price) in SQL; merged ranking with ≥ 3 of 8 slots kept for meaning matches; returns 8, each labelled `best` (the search's top relevance tier) or `possible` |
 | 3. Judge fit | **Model** | Reads the 8 candidates (title, tags, matching description fragment) and picks the ones that truly fit |
 | 4. Build cards | **Code** | Resolves the picks, drops invalid ones, renders title/price/image/link from DB rows, ≤ 4 cards |
 | 5. Write the sentence | **Model** | Short reason why they fit (no names/prices — the cards show them) |
@@ -180,7 +214,9 @@ Example candidate the model reads:
 ```
 
 For a question about **one** product ("is it unisex", "price of this"), no search runs:
-`get_product` loads that product's row directly.
+`get_product` loads that product's row directly. For a long description the model gets a short
+overview plus only the passages that answer the question ("how do I cleanse it" → the care
+passage), so the answer is specific instead of a summary of the first 5,000 characters.
 
 ---
 
@@ -196,7 +232,8 @@ Tool: **`search_store_info`** → curated answers + `knowledgeSearch` (pgvector 
    unserved even if a re-crawl fails).
 4. Take top 9, remove near-duplicates, keep best 4.
 5. Keep only chunks scoring ≥ `minMeaningScore` (default 0.30).
-6. Add collection names (if Learn collections ON).
+6. Add up to 2 matching product-description passages (`source: "product description"`, score ≥ `minMeaningScore` + 0.10).
+7. Add collection names (if Learn collections ON).
 
 ### Sources stored in the knowledge table
 
@@ -325,7 +362,7 @@ used at runtime when a field is blank. The merchant edits them in **Instructions
 | Welcome message | "Hi {{customer_name}} 👋 What can I help you find today?" |
 | Banned topics | medical advice, legal advice, competitor pricing |
 | Fallback message | **blank** → the built-in message in the store's language (a merchant-written message wins; the old English default stored by earlier installs is treated as blank) |
-| **Store info** | **empty** — facts about the store must be added by the merchant (Instructions → General → Store info, or "Fill from Shopify") |
+| **Store info** | empty at install, then written from the store's Shopify data by AI setup (spec 26) after the first sync; the merchant reviews it in Instructions → General ("Write / Rewrite from my store") |
 
 ### 6.4 Prompts that are NOT used in agent mode
 
@@ -505,10 +542,17 @@ Deployment checklist:
 1. Set production env: `CHAT_MODEL=gpt-4.1-mini`, `AI_AGENT_MODE=tools` (or leave both unset to use
    the defaults), and `SCOPES` exactly as in `shopify.app.toml`.
 2. Check the /admin → AI dashboard model: if set, it overrides `CHAT_MODEL` for every shop.
-3. Deploy, then watch Admin → Usage and the logs for `agent_error` / `agent_tool_error` for the
+3. Deploy, run `npx prisma migrate deploy`, then `npm run passages:backfill -- --all` once
+   (builds description passages for stores already installed; new syncs build them automatically).
+4. AI setup (spec 26): new installs get instructions written from their store data automatically.
+   For stores installed before, run `npm run ai-setup -- --shop <domain>` (or `--all`); it only
+   writes fields still at defaults and never a merchant's own text.
+4b. Optional debugger: `ALLOW_TURN_TRACING=true` enables /admin → Debug recording in production
+   (off by default; publish the debug-access privacy clause first).
+5. Watch Admin → Usage and the logs for `agent_error` / `agent_tool_error` for the
    first days.
-4. Rollback without a code change: `AI_AGENT_MODE=pipeline` and restart.
-5. Run `npm run eval:conversations` before any prompt, tool or model change.
+6. Rollback without a code change: `AI_AGENT_MODE=pipeline` and restart.
+7. Run `npm run eval:conversations` before any prompt, tool or model change.
 
 ---
 
@@ -549,7 +593,8 @@ Cost of a full 3-run eval: ≈ $0.20 (gpt-4.1-mini agent + gpt-4.1-mini judge) t
 | Model only chooses from top 8 search results | Right product ranked 9th is never seen | Model may search again; consider larger candidate set |
 | Knowledge search is meaning-only | Exact terms (policy names, "COD") can rank low | Add keyword matching like product search |
 | Title lookup is an unindexed text match | Slow on very large catalogues | Add a trigram index when needed |
-| gpt-4.1-mini sometimes skips lookups / pads cards | Lower accuracy than gpt-4.1 | Match labels on search results (done); gpt-4.1 if needed |
+| gpt-4.1-mini sometimes skips lookups / pads cards | Lower accuracy than gpt-4.1; e.g. a follow-up "how should I cleanse it?" answered once from general knowledge with no tool call (1/3) | Match labels, store-info preload, cannot_answer gate (done); next: require a lookup in round 1 when the conversation has a product in focus, or gpt-4.1 |
+| Replies still name products and pad to 4 cards on broad needs | "stress relief" shows confidence/money bracelets; replies exceed 2–3 lines | Eval tracks it (women-stress-brief, stress-then-ruling-9#2); fix at the search tier, not phrases |
 | Answer quality depends on store data | Weak answers when data is missing or wrong | Merchant data checks (e.g. empty return policy) |
 | Meaning-based banned-topic scan removed in agent mode | Subtle banned requests rely on the model | Phrase scan + moderation + instruction; monitor |
 | Conversation eval covers one store (jgw-check) | Other categories measured only indirectly | Add real conversations from other stores as they appear |

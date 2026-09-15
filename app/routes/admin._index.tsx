@@ -7,7 +7,7 @@ import { StatGrid, StatTile } from "../components/ui/StatTile";
 import { SPACE } from "../components/ui/tokens";
 import { requireAdminUser } from "../lib/admin/admin-auth.server";
 import { getEffectiveAiConfig } from "../lib/admin/admin-settings.server";
-import { PLANS } from "../lib/billing/plans.server";
+import { currentPlans } from "../lib/billing/plans.server";
 import { PLAN_IDS } from "../lib/billing/plan-shared";
 
 // Admin overview (spec 19). Cross-tenant aggregates BY DESIGN — this is the
@@ -52,7 +52,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     adminEmail: session.admin.email,
     totalShops,
     uninstalledShops,
-    tiers: PLAN_IDS.map((id) => ({ id, name: PLANS[id].name, count: planCounts[id] ?? 0 })),
+    tiers: PLAN_IDS.map((id) => ({ id, name: currentPlans()[id].name, count: planCounts[id] ?? 0 })),
     recentShops: recentShops.map((s) => ({
       ...s,
       installedAt: s.installedAt.toISOString().slice(0, 10),

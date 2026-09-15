@@ -60,7 +60,7 @@ import {
 } from "./detail.server";
 import { logError } from "../log.server";
 import { createTrace, type Trace, type TraceStep, type TraceSummary } from "./trace.server";
-import { agentLane, agentModeEnabled, agentModel } from "./agent.server";
+import { agentLane, agentModeEnabled, agentModel, turnChecks } from "./agent.server";
 import { customFallbackMessage, withPersonaDefaults } from "../ai-defaults";
 
 // Runtime agent pipeline (spec 03). The LLM is only the voice: code picks the
@@ -669,6 +669,11 @@ export async function* runPipeline(
 
   // ── AI agent mode (spec 24) ───────────────────────────────────────────────
   if (agentMode) {
+    // Started only once the turn reaches the agent: curated, handover, order
+    // status and rule turns stay at zero generation calls. It still overlaps
+    // the moderation wait and the history/shopper loads below (QA3-A7).
+    const turnChecksPromise = turnChecks(shopId, message);
+    void turnChecksPromise.catch(() => {});
     const moderationHit = await moderationPromise;
     trace.countLlm("moderation");
     trace.step("guardrail_moderation", "Provider moderation (ran in parallel)", moderationHit ? "hit" : "pass", {
@@ -678,7 +683,15 @@ export async function* runPipeline(
       yield* await finishBlocked(shopId, convo.id, "moderation", meterPromise, track, config);
       return;
     }
-    const [{ generationHistory }, shopper] = await Promise.all([historyPromise, shopperPromise]);
+    const [{ generationHistory }, shopper, checks] = await Promise.all([
+      historyPromise,
+      shopperPromise,
+      turnChecksPromise,
+    ]);
+    trace.countLlm("router");
+    if (checks?.medicalClaim || checks?.unrelatedTask) {
+      trace.step("agent_turn_checks", "Pre-agent checks", "hit", { ...checks });
+    }
     const language = languageInstruction(config.persona);
     const personaPrompt = [
       // Blank role / brand voice (or no persona row) → the install defaults.
@@ -706,6 +719,7 @@ export async function* runPipeline(
       isTest,
       fallback,
       queryEmbedding,
+      checks,
       deps: {
         saveMessage,
         recordUnresolved,
@@ -2407,6 +2421,7 @@ async function recommendationRulePool(
       metafieldText: p.metafieldText,
       score: null,
       headline: null,
+      passage: null,
       matchedTerms: [],
       headTerms: [],
       coverage: 0,

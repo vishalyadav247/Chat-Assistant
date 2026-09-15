@@ -8,7 +8,7 @@ import { ConfirmDeleteModal } from "../components/ui/ConfirmDeleteModal";
 import { requireOwnerAdmin } from "../lib/admin/admin-auth.server";
 import { startTurnTracing, stopTurnTracing, turnTracingState } from "../lib/admin/turn-tracing.server";
 import { DEFAULT_TRACE_HOURS, MAX_TRACE_SHOPS, TRACE_DURATION_HOURS } from "../lib/admin/turn-tracing-shared";
-import { logWarn } from "../lib/log.server";
+import { logAudit } from "../lib/log.server";
 import { sameOrigin } from "../lib/team/same-origin.server";
 
 // Admin → Debug: record REAL storefront chat turns — shopper message, reply,
@@ -80,9 +80,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   // PCD access log (QA-C3): opening the list shows shopper message openers.
-  logWarn("turn_trace_list_viewed", `debug list viewed (${byConversation.size} conversations)`, {
-    by: session.admin.email,
-  });
+  logAudit("turn_trace_list_viewed", session.admin.email, `debug list viewed (${byConversation.size} conversations)`);
 
   return {
     adminEmail: session.admin.email,
@@ -121,8 +119,7 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<ActionRes
         hours: Number(formData.get("hours")),
         by: session.admin.email,
       });
-      logWarn("turn_tracing_started", `recording ${state.shopIds.length} store(s) until ${state.until}`, {
-        by: session.admin.email,
+      logAudit("turn_tracing_started", session.admin.email, `recording ${state.shopIds.length} store(s) until ${state.until}`, {
         shopIds: state.shopIds,
         until: state.until,
       });
@@ -133,14 +130,12 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<ActionRes
   }
   if (intent === "stop-recording") {
     await stopTurnTracing();
-    logWarn("turn_tracing_stopped", "storefront turn recording stopped", { by: session.admin.email });
+    logAudit("turn_tracing_stopped", session.admin.email, "storefront turn recording stopped");
     return { ok: true, intent };
   }
   if (intent === "clear-recordings") {
     const removed = await db.turnTrace.deleteMany({});
-    logWarn("turn_traces_cleared", `${removed.count} recorded turn(s) deleted`, {
-      by: session.admin.email,
-    });
+    logAudit("turn_traces_cleared", session.admin.email, `${removed.count} recorded turn(s) deleted`);
     return { ok: true, intent };
   }
   return { ok: false, intent };

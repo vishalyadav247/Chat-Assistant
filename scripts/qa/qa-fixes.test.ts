@@ -1044,7 +1044,7 @@ async function aiFixes(ctx: any): Promise<void> {
       /input: "hi", expectOutcome: \["chat"\]/.test(golden) &&
       /Mulberry Silk Pillowcase in stock\?",\s*expectOutcome: \["detail"\],[\s\S]{0,200}rejectInText/.test(golden) &&
       /"where is my order #1234\?", expectOutcome: \["order_status"\], expectAction: "track_order"/.test(golden) &&
-      /cure my anxiety\?", expectOutcome: \["blocked"\], rejectInText: \/email\/i/.test(golden) &&
+      /cure my anxiety\?",\s*expectOutcome: \["blocked"\],\s*rejectInText: \/email\/i/.test(golden) &&
       /"show me black bracelets"[^\n]*groundedText: true/.test(golden) &&
       /something warm for my head under \$20/.test(golden),
   );

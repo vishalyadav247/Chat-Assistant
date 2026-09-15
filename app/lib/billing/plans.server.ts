@@ -310,6 +310,16 @@ function maybeRefresh(): void {
 // Eager load at boot so the first requests already see stored overrides.
 void loadPlanConfig().catch(() => undefined);
 
+/**
+ * The live plan matrix for screens that list every plan (admin overview, promo
+ * codes). Reading PLANS directly never triggers a refresh, so a page with no
+ * gate call on its path showed a stale matrix indefinitely (QA3-S3).
+ */
+export function currentPlans(): Record<PlanId, PlanDefinition> {
+  maybeRefresh();
+  return PLANS;
+}
+
 function planDef(plan: string): PlanDefinition {
   return PLANS[(plan as PlanId) in PLANS ? (plan as PlanId) : "free"];
 }

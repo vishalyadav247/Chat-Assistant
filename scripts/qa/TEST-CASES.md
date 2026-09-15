@@ -35,7 +35,7 @@
 | A-13 | `app_subscriptions/update` ACTIVE | Webhook for the current subscription | Plan/interval/trial/usage-line backfilled; `plan_changed` only when something changed | H |
 | A-14 | Stale/out-of-order ACTIVE webhook | Webhook id ≠ live subscription id | Ignored + `app_subscription_stale_active_ignored` logged. A paying shop is never downgraded | A |
 | A-15 | CANCELLED/EXPIRED/DECLINED | Webhook for a **replaced** subscription | Ignored unless `shop.subscriptionId === subscriptionId` (a plan switch cancels the replaced sub) | A |
-| A-16 | FROZEN / PENDING status | Webhook with those statuses | **Known defect: ignored, so an unpaid frozen subscription keeps the paid plan** | A |
+| A-16 | FROZEN / PENDING status | Webhook with those statuses | A FROZEN (unpaid) subscription drops the shop to free; it never keeps the paid plan. *(Fixed — was a known defect; `subscription-webhook.test.ts` asserts "FROZEN drops the shop to free", QA2-T3 2026-09-15)* | A |
 | A-17 | Overage reporting | Exceed quota on a monthly paid plan | `overageCount++`, one `appUsageRecordCreate` at `overageRate(plan)`, `overageReported++` on acceptance; errors logged, never thrown into chat | overage.test.ts |
 | A-18 | Conversation metering | One shopper session, many turns | Exactly one tick; `SESSION_INACTIVITY_MS`=30min creates a new billable session; `isTest` never ticks | H, B |
 | A-22 | Overage is never lost | A report fails (network/token/rate limit) | The debt survives as `overageCount - overageReported` and the hourly `overage-reconcile` job bills it; re-running never double-charges | overage.test.ts |
@@ -425,6 +425,8 @@ route files exist, never that their loaders run or their pages paint.
 | T-16 | Coupons master switch | Off hides the discount card on Plan & Usage AND validatePromoCode refuses; existing discounted subscriptions untouched | H, A |
 | T-17 | Plan visibility | A hidden plan leaves offeredPlans() and is never named by an upgrade prompt; a shop already on it keeps its quotas and still sees it as its current plan | H, A |
 | T-18 | Admin theme | light / dark / auto persists in cc_admin_theme and is applied server-side on first paint (no flash); an unknown value falls back to auto | H |
+| T-19 | Debug is owner-only | The env root renders `/admin/debug` and each view writes a `turn_trace_list_viewed` audit row whose `by` is the operator's account; a signed-in non-owner operator gets 403 (other pages still open); cross-origin POST deletes nothing | A |
+| T-20 | Enforcement switch stays removed | No enforcement card; `intent=enforcement` refused; nothing enforcement-shaped stored (removed 2026-09-08 — gates always live) | A |
 
 ## U. Storefront — the full app-proxy contract (`scripts/qa/storefront.test.ts`)
 
@@ -479,11 +481,26 @@ gives every request a 30 s timeout with one retry on a connection failure (POSTs
 connection was refused) — that absorbs a cold start, not a shared server. Run `npm run qa:preflight`
 first; it also checks the curated QA fixtures are in their intended state with no marker text (QA-T3).
 
+**AI engine.** Since spec 24 the **tools agent is the default** (`AI_AGENT_MODE` unset or `tools`):
+curated answers, recommendation rules, order status, handover and keyword guardrails still run
+deterministically first, then the tool-using agent answers (saved `sourceLayer` is `question` /
+`buy` / `chat` / `rag_fallback`, declines are `off_topic` / `banned_agent`). The previous router +
+lanes is an emergency rollback: run a suite against it with `AI_AGENT_MODE=pipeline` in the
+environment (PowerShell: `$env:AI_AGENT_MODE='pipeline'; npx tsx <suite>`, then
+`Remove-Item Env:AI_AGENT_MODE`), or `npm run eval:conversations -- --agent pipeline`. Two
+entry points pin the old engine because they assert router lanes: `pipeline-hardening.test.ts` and
+`npm run eval:golden` set `AI_AGENT_MODE=pipeline` themselves. The answer-level suites
+(data-sources, conversations, agent-quality) assert only what the shopper sees and hold in both.
+
 | Suite | Area | Needs dev server |
 |---|---|---|
 | `scripts/qa/plan-gates.test.ts` | B | no |
 | `scripts/qa/promo-codes.test.ts` | C | no |
 | `scripts/qa/subscription-webhook.test.ts` | A | no |
+| `scripts/qa/overage.test.ts` | A-02/03/17/18/22–24 — metering + overage billing (forces `BILLING_TEST_MODE`) | no |
+| `scripts/qa/trial.test.ts` | A-T — free-trial entitlement, once per shop | no |
+| `scripts/qa/tenancy-race.test.ts` | N — concurrent afterAuth `resolveShopId` P2002 guard (regression cover, not a reproduction) | no |
+| `scripts/qa/polaris-events.test.ts` | R — source guard: no `onChange` on Polaris `<s-*>` components (React 18 never delivers it) | no |
 | `scripts/qa/model-portability.test.ts` | D | no |
 | `scripts/qa/availability.test.ts` | H | no |
 | `scripts/qa/handover.test.ts` | G | no |
@@ -508,6 +525,9 @@ first; it also checks the curated QA fixtures are in their intended state with n
 | `scripts/qa/conversations.test.ts` | AB — real multi-turn shopper conversations, pass rates over N runs (`npm run eval:conversations`) | no |
 | `scripts/qa/pipeline-hardening.test.ts` | PH-1.1 … PH-4.8 — spec 23 acceptance criteria (fake model + stubbed Shopify; one live check when `OPENAI_API_KEY` is set) | no |
 | `scripts/qa/qa-fixes.test.ts` | QF-* — QA-FIX-PLAN-2026-09-14 gaps not covered elsewhere (Debug recording controls, erasure, webhook enqueue, landing page, config) | for the HTTP cases (skipped with a SKIP line when unreachable) |
+| `scripts/qa/sync-learning.test.ts` | SL-* — data sync → AI learning: every Shopify data type (products, variants/metafields, description passages + backfill, collections, discounts, pages/blogs, knowledge sources, store info/FAQ) flows sync/webhook → job handler → rows/embeddings → what the agent's tools return, and every update/delete/switch/tenant boundary propagates (fake scripted model + stubbed Shopify; never a queue worker) | no |
+| `scripts/qa/agent-tools.test.ts` | AT — AI agent tools mode (spec 24/25): engine switch + model resolution, grounding, tool gates, deterministic layers first, budget, context/privacy, passages, bootstrap/logAudit/usage upsert/purge, Debug capture, tenancy under concurrency (scripted fake model; AT-L1 live only with OPENAI_API_KEY) | no |
+| `scripts/eval-golden.ts` (`npm run eval:golden`) | D — router golden set; pins `AI_AGENT_MODE=pipeline` | no |
 
 Seeding: `scripts/qa/seed-curated.ts` (curated fixtures), `scripts/qa/perf-seed.ts` (synthetic
 volume — **remove it again afterwards**).
@@ -756,9 +776,13 @@ gets one retry for wording variance; an absence check never retries.
 
 Instructions: the **Behaviours** box is followed in small talk and in a knowledge answer;
 a banned topic is refused; a configured store scope serves the merchant's own off-topic
-message and still answers an in-catalogue product. Queued rebuild: while a toggle's job
-is queued the whole bridge is invisible (measured, by design of `status = pending`), and the
-APP's worker drains it. Purge: the uninstall purge leaves no shop-scoped row, grants included.
+message and still answers an in-catalogue product. Queued rebuild (the path a merchant's click
+takes): while a toggle's job is queued the bridge **keeps serving its last good chunks** (spec 23
+§1.2 — an enabled `pending` source is servable; until 2026-09-15 this row said the bridge went
+dark, which was the pre-hardening behaviour, QA2-T2); the APP's worker drains the job and the
+switched-off page is then gone from retrieval and the answer; switched back on through the same
+queue, it returns. A merchant-**inactive** source stays inactive across a re-ingest and is never
+served (QA2-A1). Runs in the default tools engine (see the Suite index). Purge: the uninstall purge leaves no shop-scoped row, grants included.
 
 ### Defects this round found (all fixed)
 

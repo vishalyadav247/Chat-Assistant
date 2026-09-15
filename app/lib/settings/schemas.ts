@@ -183,6 +183,29 @@ export const surveySchema = z.object({
 /** Store info text cap — mirrored by the Instructions counter and save schema. */
 export const STORE_INFO_MAX = 1500;
 
+export const AI_SETUP_STATUSES = ["none", "pending", "running", "done", "error", "skipped"] as const;
+
+export const aiSetupSchema = z.object({
+  status: z.enum(AI_SETUP_STATUSES).catch("none"),
+  /** ISO time of the last completed generation ("" = never). */
+  generatedAt: z.string().max(40).catch(""),
+  /** ISO time the merchant last saved General after a generation ("" = not reviewed). */
+  reviewedAt: z.string().max(40).catch(""),
+  /** ISO time the last run was requested (regenerate rate limit). */
+  requestedAt: z.string().max(40).catch(""),
+  model: z.string().max(60).catch(""),
+  /** Field → hash of the text AI wrote into it. */
+  hashes: z.record(z.string(), z.string().max(80)).catch({}),
+  /** Contradictions found in the store's own data, shown to the merchant. */
+  conflicts: z.array(z.string().max(300)).max(10).catch([]),
+  /** FAQ drafts created by the last run. */
+  faqDrafts: z.number().int().min(0).catch(0),
+  /** Wait-for-sync attempts of the current run. */
+  attempts: z.number().int().min(0).catch(0),
+  error: z.string().max(300).catch(""),
+});
+export type AiSetupData = z.infer<typeof aiSetupSchema>;
+
 export const shopSettingsSchema = z.object({
   storeInfo: z
     .object({
@@ -263,6 +286,11 @@ export const shopSettingsSchema = z.object({
       blogs: z.boolean().catch(true),
     })
     .catch({ products: true, collections: true, discounts: true, pages: true, blogs: true }),
+  /** AI setup (spec 26): instructions written from the store's own data after
+   *  the first sync. `hashes` records the text AI wrote per field — a field
+   *  whose current text still matches is AI-owned and may be rewritten; one the
+   *  merchant changed never is. */
+  aiSetup: aiSetupSchema.catch(aiSetupSchema.parse({})),
   // Team roster moved to the TeamMember table (spec 18) — any leftover
   // `team` key in stored JSON is stripped on the next save.
 });

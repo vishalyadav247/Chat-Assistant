@@ -164,6 +164,7 @@ Severity: **Major** = fix before submission · **Minor** = fix when convenient.
 
 ## 6. Checklist
 
-- [ ] QA2-C1 · [ ] QA2-C2 · [ ] QA2-C3
+- [x] QA2-C1 · [x] QA2-C2 · [x] QA2-C3 — 2026-09-15: `logAudit()` in `log.server.ts` (no rate cap, keeps the operator's `by`), used by all 5 Debug audit rows; qa-fixes 87 passed / 0 failed. Scopes aligned in spec-24 rollout.
+- 2026-09-15 (spec 24 rollout, verify with the listed tests): A1 switched-off source stays inactive · A2 ORDER_STATUS_RE needs `#`/no./number · A3 blank fallback = localized canned · A4 cap copy no email promise · A5/A6 typo correction · A7 finishBlocked escalates · A8 embedding_skipped event. A9 is pipeline-mode only (agent mode is default). T1/T2/T3 not done — `data-sources` "page NOT answerable while rebuild queued" is QA2-T2 test drift.
 - [ ] QA2-A1 · [ ] QA2-A2 · [ ] QA2-A3 · [ ] QA2-A4 · [ ] QA2-A5 · [ ] QA2-A6 · [ ] QA2-A7 · [ ] QA2-A8 · [ ] QA2-A9
 - [ ] QA2-T1 · [ ] QA2-T2 · [ ] QA2-T3 · [ ] QA2-E1 (storefront re-run)

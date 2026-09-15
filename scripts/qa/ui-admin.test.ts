@@ -337,11 +337,13 @@ async function main(): Promise<void> {
 // Each page must promise its real content: the specific tables, forms and
 // fields the component renders — not merely "a 200".
 const PAGE_MARKERS: Record<string, string[]> = {
-  "/admin": ["Installed stores", "Plan enforcement", "Stores by plan", "Recent installs", "ccpf-meter"],
+  // "Plan enforcement" / "Enforcement" were removed with the global switch
+  // (2026-09-08, admin.plans.tsx) — gates are always live now.
+  "/admin": ["Installed stores", "Chat model", "Stores by plan", "Recent installs", "ccpf-meter", "Jump to"],
   "/admin/access": ["Operators", "The .env admin", "ADMIN_PASSWORD", "Your sessions", "Sign out other sessions"],
   "/admin/ai": ["Chat model", "Generation overrides", "Embedding model", "Temperature", "Max tokens", "Currently effective"],
   "/admin/logs": ["Top failing events", "Entries", "Level", "Event", "Store", "Errors", "Warnings"],
-  "/admin/plans": ["Enforcement", "Plan matrix", "Conversations / month", "Curated answers", "Monthly price ($)", "Trial days", "Remove ChatConvert branding"],
+  "/admin/plans": ["Plan matrix", "Pricing", "to merchants", "Conversations / month", "Curated answers", "Monthly price ($)", "Trial days", "Remove ChatConvert branding"],
   "/admin/promo-codes": ["Codes", "<s-table", "admin-add-promo", "Add New"],
   "/admin/settings": ["OpenAI API key", "Transactional email", "Links &amp; listing", "Operational flags", "Web push", "Reset"],
   "/admin/usage": ["Tokens used", "Estimated cost", "Stores with activity", "By merchant"],
@@ -481,6 +483,55 @@ async function securitySection({ db, COOKIE, TAG, hashToken, operator }: any): P
       `${cross.status} probe=${probe ? (survived ? "kept" : "DELETED") : "no shop"}`,
     );
     if (probe) await db.turnTrace.deleteMany({ where: { id: probe.id } });
+  }
+  // 2e-ter. Debug is OWNER-only (QA-C3): the env root renders it and every view
+  //         writes an audit row that keeps the viewer's account (logAudit `by`);
+  //         a signed-in non-owner operator gets a 403 and no data.
+  {
+    const unauth = await get("/admin/debug");
+    ok("unauthenticated GET /admin/debug → /admin/login", unauth.status === 302 && (unauth.location ?? "").startsWith("/admin/login"), `${unauth.status} ${unauth.location}`);
+    const since = new Date(Date.now() - 1000);
+    const p = await get("/admin/debug", COOKIE);
+    const broken = isBrokenPage(p);
+    ok("owner GET /admin/debug renders", broken === null, broken ?? `200, ${p.body.length}b`);
+    const missing = ["Record storefront turns", "Recorded conversations"].filter((m) => !p.body.includes(m));
+    ok("owner GET /admin/debug contains its promised content", missing.length === 0, missing.length ? `missing: ${missing.join(", ")}` : "2 markers");
+    const csp = p.headers.get("content-security-policy") ?? "";
+    ok("/admin/debug is not framable", csp.includes("frame-ancestors 'none'") && (p.headers.get("x-frame-options") ?? "").toUpperCase() === "DENY", csp);
+    // logAudit is fire-and-forget — poll briefly for the row.
+    let audit: any = null;
+    for (let i = 0; i < 25 && !audit; i++) {
+      audit = await db.appLog.findFirst({ where: { event: "turn_trace_list_viewed", occurredAt: { gte: since } }, orderBy: { occurredAt: "desc" } });
+      if (!audit) await new Promise((r) => setTimeout(r, 200));
+    }
+    const by = (audit?.context ?? {}) as { by?: string };
+    ok(
+      "viewing Debug writes an audit row whose `by` is the operator's account",
+      typeof by.by === "string" && by.by.toLowerCase() === String(operator.email).toLowerCase(),
+      audit ? `by=${typeof by.by === "string" ? `***@${by.by.split("@")[1] ?? "?"}` : JSON.stringify(by.by)}` : "no turn_trace_list_viewed row",
+    );
+
+    const { hashPassword } = await import("../../app/lib/team/password.server");
+    const { randomBytes } = await import("node:crypto");
+    const plain = await db.adminUser.create({
+      data: { email: `${TAG}-nonowner@example.invalid`, name: "QA non-owner", role: "admin", passwordHash: await hashPassword(randomBytes(18).toString("base64url")) },
+    });
+    const raw = randomBytes(32).toString("base64url");
+    await db.adminSession.create({
+      data: { tokenHash: hashToken(raw), adminId: plain.id, expiresAt: new Date(Date.now() + 3_600_000), userAgent: TAG },
+    });
+    try {
+      const other = await get("/admin/plans", `cc_admin=${raw}`);
+      const deny = await get("/admin/debug", `cc_admin=${raw}`);
+      ok(
+        "non-owner operator: /admin/plans renders but GET /admin/debug → 403",
+        other.status === 200 && deny.status === 403 && !deny.body.includes("Recorded conversations"),
+        `plans=${other.status} debug=${deny.status}`,
+      );
+    } finally {
+      await db.adminSession.deleteMany({ where: { adminId: plain.id } });
+      await db.adminUser.deleteMany({ where: { id: plain.id } });
+    }
   }
   // 2f. Not framable — including with the ?shop= param that used to opt a page
   //     into the embedded CSP branch.
@@ -682,7 +733,9 @@ async function plansSection({ db, COOKIE, snapshot }: any): Promise<void> {
     const row = await readRow();
     ok(
       "…and nothing enforcement-shaped was stored",
-      !row || JSON.parse(row.value).enforcement === undefined,
+      // readRow() already returns the raw stored string (or null).
+      !row || JSON.parse(row).enforcement === undefined,
+      row ? `stored enforcement=${JSON.parse(row).enforcement}` : "absent",
     );
   }
 
@@ -703,7 +756,9 @@ async function plansSection({ db, COOKIE, snapshot }: any): Promise<void> {
     const d = await loaderData("/admin/plans", "admin.plans", COOKIE);
     ok("fresh GET: quota edit is live", d.plans.free.quotas.curated_answers === 77, String(d.plans.free.quotas.curated_answers));
     ok("fresh GET: feature toggle is live", d.plans.free.features.includes("remove_branding"), JSON.stringify(d.plans.free.features));
-    ok("fresh GET: price + trial + overage edits are live", d.plans.free.priceMonthly === 1.5 && d.plans.free.trialDays === 3 && d.plans.free.overagePerConversation === 0.25, JSON.stringify([d.plans.free.priceMonthly, d.plans.free.trialDays, d.plans.free.overagePerConversation]));
+    // Free never bills overage: applyConfig ignores a rate posted for it (the
+    // field is not even rendered for that tier), so a smuggled 0.25 must stay null.
+    ok("fresh GET: price + trial edits are live; an overage rate on Free is ignored", d.plans.free.priceMonthly === 1.5 && d.plans.free.trialDays === 3 && d.plans.free.overagePerConversation === null, JSON.stringify([d.plans.free.priceMonthly, d.plans.free.trialDays, d.plans.free.overagePerConversation]));
 
     const html = await get("/admin/plans", COOKIE);
     ok("server-rendered form field shows the new quota", html.body.includes('label="Curated answers" min="0" value="77"'));
@@ -814,8 +869,9 @@ async function plansSection({ db, COOKIE, snapshot }: any): Promise<void> {
     const tier = Object.keys(o.plans ?? {})[0];
     ok(
       "plans: the SERVER is serving the restored matrix again",
-      d.enforcement === (o.enforcement ?? "enforced") && (!tier || d.plans[tier].quotas.conversations === o.plans[tier].quotas.conversations),
-      `${d.enforcement} / ${tier}`,
+      // The loader no longer exposes an enforcement mode (switch removed 2026-09-08).
+      d.hasOverrides === Boolean(o.plans) && (!tier || d.plans[tier].quotas.conversations === o.plans[tier].quotas.conversations),
+      `hasOverrides=${d.hasOverrides} / ${tier}`,
     );
   }
   }
@@ -854,7 +910,9 @@ async function promoSection({ db, COOKIE, createdPromoIds }: any): Promise<void>
     ok("code is normalised (upper-cased, whitespace stripped)", Boolean(row), CODE);
     ok("percent value, duration, cap and expiry persisted", row && Number(row.value) === 15.25 && row.durationIntervals === 3 && row.maxRedemptions === 2 && row.expiresAt?.toISOString() === "2030-01-31T23:59:59.999Z", row ? `${row.value}/${row.durationIntervals}/${row.maxRedemptions}/${row.expiresAt?.toISOString()}` : "missing");
     ok("plan restriction drops non-paid plans", row && JSON.stringify(row.plans) === JSON.stringify(["pro", "plus"]), JSON.stringify(row?.plans));
-    ok("interval restriction persisted", row && JSON.stringify(row.intervals) === JSON.stringify(["monthly"]), JSON.stringify(row?.intervals));
+    // Annual billing was withdrawn (2026-09-07): monthly is the only interval, so
+    // a code is never scoped by interval — a posted interval is ignored.
+    ok("no interval restriction is stored (monthly is the only interval)", Boolean(row) && JSON.stringify(row.intervals) === "[]", JSON.stringify(row?.intervals));
     ok("expiry is end-of-day UTC (documented, not merchant-local)", row?.expiresAt?.toISOString().endsWith("T23:59:59.999Z") === true);
 
     const after = await loaderData(P, R, COOKIE);
@@ -1138,7 +1196,12 @@ async function logsSection({ db, COOKIE }: any): Promise<void> {
     const top = base.topEvents[0];
     const d = await load(`?hours=336&level=${top.level}&event=${encodeURIComponent(top.event)}`);
     ok("combined range + level + event filters compose", d.rows.every((r: any) => r.level === top.level && r.event === top.event), `${d.rows.length} rows`);
-    const emailish = (r: any) => /[\w.+-]+@[\w-]+\.[a-z]{2,}/i.test(`${r.message} ${r.context ?? ""}`.replace(/@example\.invalid/g, "").replace(/@\S*myshopify\.com/g, ""));
+    // Audit rows (logAudit — Debug views, recording start/stop/clear) keep the
+    // OPERATOR's account in context.by on purpose (QA2-C1, 2026-09-15): an access
+    // trail must say who looked. Only that key is exempt; any other email-shaped
+    // text in message or context is still a leak.
+    const withoutAuditBy = (context: string) => context.replace(/"by"\s*:\s*"[^"]*"/g, "");
+    const emailish = (r: any) => /[\w.+-]+@[\w-]+\.[a-z]{2,}/i.test(`${r.message} ${withoutAuditBy(r.context ?? "")}`.replace(/@example\.invalid/g, "").replace(/@\S*myshopify\.com/g, ""));
     const leaky = base.rows.filter(emailish);
     ok(
       "no log row leaks an email address into the operator console",
@@ -1289,13 +1352,24 @@ async function settingsSection({ db, COOKIE, snapshot }: any): Promise<void> {
   // 9b. Operational flags round-trip.
   {
     const flip = !before.embedStatusEnabled;
-    const r = await submit(P, R, { intent: "flags", embedStatusEnabled: String(flip) }, COOKIE);
+    // The flags form always posts BOTH switches (admin.settings.tsx), so the test
+    // does too — otherwise the dev-only billing test mode would be saved off.
+    const billingTestMode = String(Boolean(before.billingTestMode));
+    const r = await submit(P, R, { intent: "flags", embedStatusEnabled: String(flip), billingTestMode }, COOKIE);
     ok("POST flags succeeds", r.data.ok === true, JSON.stringify(r.data));
     const d = await loaderData(P, R, COOKIE);
     ok("fresh GET shows the flipped flag", d.embedStatusEnabled === flip, String(d.embedStatusEnabled));
-    ok("no billing switches remain to disturb", !("billingTestMode" in d) && !("billingForceTestCharges" in d));
+    // 2026-09-08: "Force test charges" was removed; "Billing test mode" stayed as
+    // a DEV-ONLY switch (not rendered in production, where isBillingTestMode()
+    // discards it) because the dev app cannot create real subscriptions.
+    ok(
+      "force-test-charges is gone; billing test mode is dev-only and not disturbed by a flags save",
+      !("billingForceTestCharges" in d) && d.billingTestMode === before.billingTestMode &&
+        (d.nodeEnv === "production" || (await get(P, COOKIE)).body.includes("Billing test mode")),
+      `billingTestMode=${d.billingTestMode} nodeEnv=${d.nodeEnv}`,
+    );
     ok("persisted in app_secrets", (await storedJson()).embedStatusEnabled === flip);
-    await submit(P, R, { intent: "flags", embedStatusEnabled: String(before.embedStatusEnabled) }, COOKIE);
+    await submit(P, R, { intent: "flags", embedStatusEnabled: String(before.embedStatusEnabled), billingTestMode }, COOKIE);
     ok("flags restored", (await loaderData(P, R, COOKIE)).embedStatusEnabled === before.embedStatusEnabled);
   }
 
