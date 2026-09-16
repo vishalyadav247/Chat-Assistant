@@ -168,7 +168,12 @@ bold "Health check on 127.0.0.1:$PORT"
 DEADLINE=$(( SECONDS + 45 ))
 CODE=000
 while [ "$SECONDS" -lt "$DEADLINE" ]; do
-  CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:$PORT/" || echo 000)"
+  # curl PRINTS "000" on a refused connection and also exits non-zero, so the
+  # old `|| echo 000` appended a second "000": CODE became "000000", which is
+  # not equal to "000", so a still-booting app was reported as a successful
+  # deploy (2026-09-16). Take curl's own output and normalise it instead.
+  CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:$PORT/" 2>/dev/null)" || true
+  case "$CODE" in ''|*[!0-9]*|000) CODE=000 ;; esac
   # Any HTTP status means the server is listening and routing. 000 means the
   # connection was refused - which is exactly the failure mode a green pm2
   # status hides.
