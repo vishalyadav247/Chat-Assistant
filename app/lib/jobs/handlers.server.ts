@@ -4,6 +4,7 @@ import { requireShopId } from "../tenancy.server";
 import {
   fullCatalogSync,
   type CatalogSyncChunk,
+  type CollectionSyncChunk,
   fullCollectionSync,
   fullDiscountSync,
   upsertProductFromWebhook,
@@ -83,8 +84,10 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
     });
   });
 
-  await boss.work<ShopJob>(JOBS.collectionSync, async ([job]) => {
-    await fullCollectionSync(job.data.shopDomain);
+  // Resumable like the catalogue sync (a continuation carries its cursor).
+  await boss.work<ShopJob & CollectionSyncChunk>(JOBS.collectionSync, async ([job]) => {
+    const { shopDomain, ...resume } = job.data;
+    await fullCollectionSync(shopDomain, resume);
   });
 
   await boss.work<ShopJob & { collectionId: string }>(
@@ -610,6 +613,8 @@ export async function cleanupShop(shopDomain: string): Promise<void> {
     // "no rows survive cleanupShop" contract stays absolute.
     db.appLog.deleteMany({ where: { shopId } }),
     db.knowledge.deleteMany({ where: { shopId } }),
+    db.lookupRow.deleteMany({ where: { shopId } }),
+    db.lookupFile.deleteMany({ where: { shopId } }),
     db.dataSource.deleteMany({ where: { shopId } }),
     db.faq.deleteMany({ where: { shopId } }),
     db.faqCategory.deleteMany({ where: { shopId } }),
@@ -708,6 +713,8 @@ export async function countShopRows(
     ["llm_usage_daily", await db.llmUsageDaily.count(where)],
     ["app_logs", await db.appLog.count(where)],
     ["knowledge", await db.knowledge.count(where)],
+    ["lookup_rows", await db.lookupRow.count(where)],
+    ["lookup_files", await db.lookupFile.count(where)],
     ["data_sources", await db.dataSource.count(where)],
     ["faqs", await db.faq.count(where)],
     ["faq_categories", await db.faqCategory.count(where)],

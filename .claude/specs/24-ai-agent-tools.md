@@ -32,6 +32,7 @@ and validates:
 | `search_products(query, max_price?)` | ≤ 8 candidates: id, title, price (shop currency), availability, `match` best/possible, snippet | Learn products |
 | `get_product(product)` | the product row: price, availability, variants, type, vendor, tags, metafields, description | Learn products |
 | `show_products(products)` | renders ≤ 4 cards (+ merchant cross-sell only under a fresh search) | Learn products |
+| `lookup_table(table, filters[])` | spec 28 — rows of the merchant's CSV lookup tables matched exactly (typo / punctuation / word-prefix tolerant, numeric ranges), `narrow_by` for filters not given, rows linked to products by SKU/handle/title become retrievable for `show_products` | ≥ 1 active table |
 | `search_store_info(question)` | curated answers ≥ curatedBorderline (+ pinned products) + knowledge chunks ≥ minMeaningScore (searched with the model's question AND the shopper's words) + collection names | always |
 | `get_discounts()` | active, AI-enabled discounts with codes | Learn discounts |
 | `offer_button(button)` | track_order / contact_team / browse_faq (only those the shop enabled) | widget settings |

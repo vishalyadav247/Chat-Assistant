@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { WidgetSettingsData } from "../lib/settings/schemas";
 import { useIsMobile } from "../lib/ui/use-mobile";
 import { ensureWidgetPreviewAssets } from "../lib/ui/widget-preview-assets";
+import { DEFAULT_APP_STORE_HANDLE } from "../lib/review";
 import type { ChatTeamMember } from "./ChatboxChatPage";
 
 // Live preview (spec 06) with parity BY CONSTRUCTION: it injects the exact
@@ -55,7 +56,7 @@ interface Renderer {
     survey: { format: string; intro: string; thanks: string },
     cb: unknown,
   ) => HTMLElement;
-  footer: (showBranding: boolean) => HTMLElement;
+  footer: (showBranding: boolean, url?: string) => HTMLElement;
   /** Bot identity on message bubbles (null → default chat icon, no caption). */
   setAvatar?: (identity: { url: string | null; name: string } | null) => void;
 }
@@ -266,7 +267,7 @@ export function ChatboxPreview(props: {
       panel.appendChild(body);
 
       if (screen === "chat") panel.appendChild(R.inputBar({}).el);
-      panel.appendChild(R.footer(showBranding));
+      panel.appendChild(R.footer(showBranding, `https://apps.shopify.com/${DEFAULT_APP_STORE_HANDLE}`));
       root.appendChild(panel);
     }
 

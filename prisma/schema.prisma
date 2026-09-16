@@ -307,6 +307,34 @@ model DataSource {
   @@map("data_sources")
 }
 
+/// Spec 28 — one row of a merchant's lookup table (data_sources type "table").
+/// Cells are keyed "c0", "c1", … — names and roles live in the source metadata.
+model LookupRow {
+  id           String @id
+  shopId       String
+  dataSourceId String
+  rowIndex     Int
+  values       Json // {key: cell as uploaded}
+  norm         Json // {key: normalised cell}
+  nums         Json // {key: [lo, hi]} for numeric / range cells
+
+  @@index([shopId, dataSourceId, rowIndex])
+  @@index([norm(ops: JsonbPathOps)], type: Gin)
+  @@map("lookup_rows")
+}
+
+/// Spec 28 — the uploaded lookup-table file (gzip), read by the import job.
+model LookupFile {
+  dataSourceId String   @id
+  shopId       String
+  gzip         Bytes
+  bytes        Int
+  createdAt    DateTime @default(now())
+
+  @@index([shopId])
+  @@map("lookup_files")
+}
+
 model Knowledge {
   id           String                       @id @default(cuid())
   shopId       String

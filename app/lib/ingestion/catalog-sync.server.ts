@@ -55,7 +55,7 @@ const PRODUCTS_QUERY = `#graphql
         totalInventory
         variants(first: 50) {
           nodes {
-            id title price availableForSale
+            id title price availableForSale sku
             metafields(first: 30) { nodes { namespace key type value definition { id } } }
           }
         }
@@ -139,7 +139,9 @@ interface SyncedProduct {
   publishedOnline?: boolean;
   price: number;
   stock: number;
-  variants?: { id: string; title: string; price: number; available: boolean }[];
+  // sku: lookup-table rows link to products by it (spec 28). Not part of the
+  // embedding text, so adding it never re-embeds a catalogue.
+  variants?: { id: string; title: string; price: number; available: boolean; sku?: string }[];
   /** All product + variant metafields; undefined = leave the stored value untouched. */
   metafields?: StoredMetafield[];
 }
@@ -237,6 +239,7 @@ export async function fullCatalogSync(shopDomain: string, resume: CatalogSyncChu
                   title: string;
                   price: string;
                   availableForSale: boolean;
+                  sku: string | null;
                   metafields: { nodes: MetafieldNode[] };
                 }>;
               };
@@ -282,6 +285,7 @@ export async function fullCatalogSync(shopDomain: string, resume: CatalogSyncChu
             title: v.title,
             price: Number(v.price),
             available: v.availableForSale,
+            ...(v.sku ? { sku: v.sku } : {}),
           })),
           metafields: collectMetafields(node.metafields.nodes, node.variants.nodes),
         }),
@@ -447,6 +451,31 @@ export async function waitForQueryBudget(extensions: ShopifyCostExtensions | und
   return waitMs;
 }
 
+type AdminClient = Awaited<ReturnType<typeof unauthenticated.admin>>["admin"];
+
+/**
+ * One Admin GraphQL call that waits out rate limiting (THROTTLED) instead of
+ * failing, then paces the NEXT call to the points bucket. Collection sync used
+ * raw calls: on install it runs next to a big catalogue's product sync, both
+ * drain the same bucket, the first throttled call threw, and the store was left
+ * with no collections at all.
+ */
+async function graphqlPaced<T>(admin: AdminClient, query: string, variables: Record<string, unknown>): Promise<T> {
+  let attempt = 0;
+  for (;;) {
+    try {
+      const response = await admin.graphql(query, { variables });
+      const body = (await response.json()) as T & { extensions?: ShopifyCostExtensions };
+      await waitForQueryBudget(body.extensions);
+      return body;
+    } catch (error) {
+      if (!isThrottledError(error) || attempt >= THROTTLE_MAX_RETRIES) throw error;
+      attempt++;
+      await sleep(THROTTLE_BACKOFF_MS * attempt);
+    }
+  }
+}
+
 export async function upsertProductFromWebhook(shopDomain: string, payload: unknown): Promise<void> {
   const shopId = await existingShopId(shopDomain);
   if (!shopId) return;
@@ -502,6 +531,7 @@ export async function upsertProductFromWebhook(shopDomain: string, payload: unkn
     inventory_quantity?: number;
     inventory_management?: string | null;
     inventory_policy?: string;
+    sku?: string | null;
   }>;
   const stock = webhookVariants.reduce((sum, v) => sum + (v.inventory_quantity ?? 0), 0);
   const price = Math.min(...(webhookVariants.length ? webhookVariants : [{ price: "0" }]).map((v) => Number(v.price ?? 0)));
@@ -549,6 +579,7 @@ export async function upsertProductFromWebhook(shopDomain: string, payload: unkn
             (v.inventory_quantity ?? 0) > 0 ||
             v.inventory_management == null ||
             v.inventory_policy === "continue",
+          ...(v.sku ? { sku: v.sku } : {}),
         })),
       shopifyProductId,
       title: p.title ?? "",
@@ -685,7 +716,7 @@ const MAX_COLLECTION_PRODUCTS = 2000;
  * collection — the exact failure a merchant would blame on the AI.
  */
 async function syncCollectionMembership(
-  admin: Awaited<ReturnType<typeof unauthenticated.admin>>["admin"],
+  admin: AdminClient,
   shopId: string,
   collectionId: string,
 ): Promise<number> {
@@ -693,10 +724,7 @@ async function syncCollectionMembership(
   let cursor: string | null = null;
   let capped = false;
   do {
-    const response = await admin.graphql(COLLECTION_PRODUCTS_QUERY, {
-      variables: { id: collectionId, cursor },
-    });
-    const body = (await response.json()) as {
+    const body: { data: { collection: { products: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: Array<{ id: string }> } } | null } } = await graphqlPaced<{
       data: {
         collection: {
           products: {
@@ -705,8 +733,9 @@ async function syncCollectionMembership(
           };
         } | null;
       };
-    };
-    const page = body.data.collection?.products;
+    }>(admin, COLLECTION_PRODUCTS_QUERY, { id: collectionId, cursor });
+    const page: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: Array<{ id: string }> } | undefined =
+      body.data.collection?.products;
     if (!page) break;
     for (const node of page.nodes) ids.push(node.id);
     if (ids.length >= MAX_COLLECTION_PRODUCTS) {
@@ -766,7 +795,9 @@ export async function upsertCollectionFromWebhook(shopDomain: string, payload: u
   await db.collection.upsert({
     where: { shopId_shopifyCollectionId: { shopId, shopifyCollectionId } },
     update: fields,
-    create: { shopId, shopifyCollectionId, ...fields },
+    // Learned by default like products, pages and articles — the Learn card's
+    // master switch is the merchant's off switch.
+    create: { shopId, shopifyCollectionId, ...fields, learnEnabled: true },
   });
   const { admin } = await unauthenticated.admin(shopDomain);
   await syncCollectionMembership(admin, shopId, shopifyCollectionId);
@@ -784,80 +815,113 @@ export async function deleteCollectionFromWebhook(shopDomain: string, payload: u
   await db.collectionProduct.deleteMany({ where: { shopId, collectionId: shopifyCollectionId } });
 }
 
-export async function fullCollectionSync(shopDomain: string): Promise<void> {
+/** Resume point of a collection sync that ran out of time (see CHUNK_BUDGET_MS). */
+export interface CollectionSyncChunk {
+  cursor?: string | null;
+  /** When the logical sync began (ISO) — rows not touched since were deleted in Shopify. */
+  runStartedAt?: string;
+  processed?: number;
+  members?: number;
+  chunk?: number;
+  budgetMs?: number;
+}
+
+export async function fullCollectionSync(shopDomain: string, resume: CollectionSyncChunk = {}): Promise<void> {
   const shopId = await existingShopId(shopDomain);
   if (!shopId) return;
-  const { admin } = await unauthenticated.admin(shopDomain);
-  let cursor: string | null = null;
-  let total = 0;
-  let members = 0;
-  const seenIds = new Set<string>();
+  const runStartedAt = resume.runStartedAt ? new Date(resume.runStartedAt) : new Date();
+  const startedAt = Date.now();
+  let cursor: string | null = resume.cursor ?? null;
+  let total = resume.processed ?? 0;
+  let members = resume.members ?? 0;
 
-  do {
-    const response = await admin.graphql(COLLECTIONS_QUERY, { variables: { cursor } });
-    const body = (await response.json()) as {
-      data: {
-        collections: {
-          pageInfo: { hasNextPage: boolean; endCursor: string | null };
-          nodes: Array<{
-            id: string;
-            title: string;
-            description: string | null;
-            productsCount: { count: number } | null;
-            ruleSet: { rules: unknown[] } | null;
-          }>;
+  try {
+    const { admin } = await unauthenticated.admin(shopDomain);
+    do {
+      const body = await graphqlPaced<{
+        data: {
+          collections: {
+            pageInfo: { hasNextPage: boolean; endCursor: string | null };
+            nodes: Array<{
+              id: string;
+              title: string;
+              description: string | null;
+              productsCount: { count: number } | null;
+              ruleSet: { rules: unknown[] } | null;
+            }>;
+          };
         };
-      };
-    };
-    const page = body.data.collections;
-    for (const node of page.nodes) {
-      await db.collection.upsert({
-        where: { shopId_shopifyCollectionId: { shopId, shopifyCollectionId: node.id } },
-        update: {
+      }>(admin, COLLECTIONS_QUERY, { cursor });
+      const page = body.data.collections;
+      for (const node of page.nodes) {
+        const fields = {
           title: node.title,
           description: node.description ?? "",
           productCount: node.productsCount?.count ?? 0,
           conditions: node.ruleSet ? `Automated (${node.ruleSet.rules.length} rules)` : "Manual",
-        },
-        create: {
-          shopId,
-          shopifyCollectionId: node.id,
-          title: node.title,
-          description: node.description ?? "",
-          productCount: node.productsCount?.count ?? 0,
-          conditions: node.ruleSet ? `Automated (${node.ruleSet.rules.length} rules)` : "Manual",
-        },
-      });
-      seenIds.add(node.id);
-      total++;
-      // Membership, so collection-targeted recommendations can resolve to
-      // actual products. Enumerated per collection rather than nested in the
-      // page query above: 100 collections × 250 products in one request would
-      // blow the GraphQL cost budget.
-      members += await syncCollectionMembership(admin, shopId, node.id);
+        };
+        await db.collection.upsert({
+          where: { shopId_shopifyCollectionId: { shopId, shopifyCollectionId: node.id } },
+          // Every update stamps updatedAt, which is what the prune below reads.
+          update: fields,
+          // Learned by default like products, pages and articles (the master
+          // switch is the merchant's off switch). Existing rows keep their choice.
+          create: { shopId, shopifyCollectionId: node.id, ...fields, learnEnabled: true },
+        });
+        total++;
+        // Membership, so collection-targeted recommendations can resolve to
+        // actual products. Enumerated per collection rather than nested in the
+        // page query above: 100 collections × 250 products in one request would
+        // blow the GraphQL cost budget.
+        members += await syncCollectionMembership(admin, shopId, node.id);
+      }
+      cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+      // Out of time: continue in a new job, like the product sync, so a store
+      // with many large collections is never killed by the queue's job expiry.
+      if (cursor && Date.now() - startedAt > (resume.budgetMs ?? CHUNK_BUDGET_MS)) {
+        const chunk = (resume.chunk ?? 0) + 1;
+        const { enqueue } = await import("../jobs/queue.server");
+        const { JOBS } = await import("../jobs/handlers.server");
+        await enqueue(JOBS.collectionSync, {
+          shopDomain,
+          cursor,
+          runStartedAt: runStartedAt.toISOString(),
+          processed: total,
+          members,
+          chunk,
+        } satisfies CollectionSyncChunk & { shopDomain: string });
+        logWarn("collection_sync_continues", `chunk ${chunk}: ${total} collections so far`, { shopId });
+        return;
+      }
+    } while (cursor);
+
+    // QA D7: prune collections deleted in Shopify. The enumeration completed
+    // (any error throws before this line), so every live collection was
+    // upserted during this run — anything older was not listed.
+    const stale = await db.collection.findMany({
+      where: { shopId, updatedAt: { lt: runStartedAt } },
+      select: { shopifyCollectionId: true },
+    });
+    if (stale.length > 0) {
+      const ids = stale.map((c) => c.shopifyCollectionId);
+      await db.collection.deleteMany({ where: { shopId, shopifyCollectionId: { in: ids } } });
+      // Membership of a pruned collection has to go with it, or a recommendation
+      // would keep resolving through a collection that no longer exists.
+      await db.collectionProduct.deleteMany({ where: { shopId, collectionId: { in: ids } } });
+      console.log(`collection_sync_pruned ${shopDomain} collections=${stale.length}`);
     }
-    cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
-  } while (cursor);
 
-  // QA D7: prune collections deleted in Shopify (full enumeration completed —
-  // any GraphQL error throws out of the loop before reaching this line).
-  // Mirrors the COLLECTIONS_DELETE webhook (deleteMany on the Collection row).
-  const pruned = await db.collection.deleteMany({
-    where: { shopId, shopifyCollectionId: { notIn: [...seenIds] } },
-  });
-  // Membership of a pruned collection has to go with it, or a recommendation
-  // would keep resolving through a collection that no longer exists.
-  await db.collectionProduct.deleteMany({
-    where: { shopId, collectionId: { notIn: [...seenIds] } },
-  });
-  if (pruned.count > 0) console.log(`collection_sync_pruned ${shopDomain} collections=${pruned.count}`);
-
-  await db.syncState.upsert({
-    where: { shopId },
-    update: { collectionSyncAt: new Date() },
-    create: { shopId, collectionSyncAt: new Date() },
-  });
-  await recordEvent(shopId, "collection_synced", { collections: total, members });
+    await db.syncState.upsert({
+      where: { shopId },
+      update: { collectionSyncAt: new Date() },
+      create: { shopId, collectionSyncAt: new Date() },
+    });
+    await recordEvent(shopId, "collection_synced", { collections: total, members });
+  } catch (error) {
+    // Visible in /admin → Logs, not only in the queue's job output.
+    logError("collection_sync_error", graphqlErrorMessage(error), { shopId });
+    throw error;
+  }
 }
 
 // ── Discounts ───────────────────────────────────────────────────────────────

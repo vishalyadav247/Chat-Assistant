@@ -490,6 +490,7 @@ async function main(): Promise<void> {
     ok("carries availability {status,message,ttl}", typeof c.availability?.status === "string" && typeof c.availability?.message === "string" && Number.isFinite(c.availability?.ttl), JSON.stringify(c.availability));
     ok("availability.message has no unresolved merge field", !String(c.availability?.message ?? "").includes("{{"), String(c.availability?.message));
     ok("carries showBranding flag", typeof c.showBranding === "boolean");
+    ok("brandingUrl points at the App Store listing (footer link)", /^https:\/\/apps\.shopify\.com\/[a-z0-9-]+$/.test(String(c.brandingUrl)), String(c.brandingUrl));
     ok("carries aiAvailable flag", typeof c.aiAvailable === "boolean");
     ok("carries featuredFaqs array", Array.isArray(c.featuredFaqs));
     // The widget hides the whole FAQ block when the shop has no PUBLISHED FAQ,
@@ -497,8 +498,8 @@ async function main(): Promise<void> {
     // reads as broken rather than unconfigured (2026-09-09).
     ok("carries faqAvailable", typeof c.faqAvailable === "boolean", String(c.faqAvailable));
     ok(
-      "faqAvailable agrees with the FAQs actually published",
-      c.faqAvailable === (await db.faq.count({ where: { shopId: shopA.id, status: "published" } })) > 0,
+      "faqAvailable agrees with the featured FAQs actually published",
+      c.faqAvailable === (await db.faq.count({ where: { shopId: shopA.id, status: "published", featured: true } })) > 0,
       `faqAvailable=`,
     );
     ok("carries campaigns array", Array.isArray(c.campaigns));

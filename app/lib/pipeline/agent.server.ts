@@ -42,6 +42,7 @@ import {
   UNRELATED_TASK_NOTE,
 } from "./prompts";
 import type { Trace } from "./trace.server";
+import { activeLookupTables, lookupTableRows, type LookupTable } from "../lookup/lookup-search.server";
 
 // AI agent mode (spec 24). The model reads the whole conversation and looks
 // facts up with tools; code implements every tool, scopes it to the shop and
@@ -300,8 +301,67 @@ export function productsNamedIn(
 
 // ── Tool schemas ────────────────────────────────────────────────────────────
 
-function toolDefinitions(config: ShopConfig, actions: ChatAction[]): ToolDefinition[] {
+/** One line per lookup table for the tool description (spec 28). */
+function describeLookupTable(t: LookupTable): string {
+  const filters = [
+    ...t.ranges.map((r) => `${r.name} (a number)`),
+    ...t.columns
+      .filter((c) => c.role === "filter")
+      .map((c) =>
+        c.numeric
+          ? `${c.name} (a number)`
+          : `${c.name} (e.g. ${c.samples.slice(0, 6).join(", ")}${c.distinct > 6 ? `; ${c.distinct > 5000 ? "5000+" : c.distinct} values` : ""})`,
+      ),
+  ];
+  const shown = t.columns.filter((c) => c.role === "info").map((c) => c.name);
+  const link = t.columns.find((c) => c.role.startsWith("link_"));
+  return [
+    `- "${t.name}": ${t.description}`,
+    `  Filters: ${filters.join("; ")}.`,
+    shown.length > 0 ? `  Also shows: ${shown.slice(0, 15).join(", ")}.` : "",
+    link ? `  Rows link to catalogue products (by ${link.name}).` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function toolDefinitions(config: ShopConfig, actions: ChatAction[], tables: LookupTable[] = []): ToolDefinition[] {
   const tools: ToolDefinition[] = [];
+  if (tables.length > 0) {
+    // Spec 28 — merchant data tables, filtered exactly. Deliberately generic:
+    // what a table is FOR comes only from the merchant's own description and
+    // column names, never from wording written here.
+    const filterNames = [
+      ...new Set(tables.flatMap((t) => [...t.ranges.map((r) => r.name), ...t.columns.filter((c) => c.role === "filter").map((c) => c.name)])),
+    ];
+    tools.push({
+      name: "lookup_table",
+      description:
+        "Find rows in this store's own data tables by exact values — use it whenever the shopper's request can be answered from a table's columns (see each table's purpose below), before searching the catalogue. Pass only values the shopper actually gave (their words are matched to the table's values, tolerating case, punctuation and small typos). If the result has narrow_by, ask the shopper for that detail instead of guessing. Recommend only what the rows say; when rows have a product, show it with show_products.\nTables:\n" +
+        tables.map(describeLookupTable).join("\n"),
+      parameters: {
+        type: "object",
+        properties: {
+          table: { type: "string", enum: tables.map((t) => t.name) },
+          filters: {
+            type: "array",
+            description: "Column = value pairs from the shopper's message and the conversation.",
+            items: {
+              type: "object",
+              properties: {
+                column: { type: "string", enum: filterNames },
+                value: { type: "string" },
+              },
+              required: ["column", "value"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["table", "filters"],
+        additionalProperties: false,
+      },
+    });
+  }
   if (config.settings.learn.products) {
     tools.push(
       {
@@ -450,7 +510,11 @@ export async function* agentLane(args: {
   const excludeOutOfStock = config.settings.recommendationRules.excludeOutOfStock;
   const minMeaningScore = config.guardrails?.minMeaningScore ?? 0.3;
   const widgetActions = availableActions(config.widget);
-  const tools = toolDefinitions(config, widgetActions);
+  const lookupTables = await activeLookupTables(shopId).catch((error) => {
+    logError("lookup_tables_load_error", error, { shopId });
+    return [] as LookupTable[];
+  });
+  const tools = toolDefinitions(config, widgetActions, lookupTables);
   const learnProducts = config.settings.learn.products;
   const policy = agentPolicy(config.guardrails?.bannedTopics ?? [], config.persona?.scope ?? "", { learnProducts });
 
@@ -458,6 +522,7 @@ export async function* agentLane(args: {
     name: config.settings.storeInfo.name || config.shopName,
     currency: config.currency,
     catalog: await catalogOverview(shopId, learnProducts).catch(() => null),
+    tables: lookupTables.map((t) => ({ name: t.name, description: t.description })),
   });
 
   const messages: AgentMessage[] = [
@@ -1077,13 +1142,38 @@ export async function* agentLane(args: {
         declined = kind;
         return { ok: true, note: "The store's own message will be shown. Do not reply." };
       }
+      case "lookup_table": {
+        if (lookupTables.length === 0) return { error: "No data tables are available." };
+        const filters = (Array.isArray(input.filters) ? input.filters : [])
+          .map((f) => f as { column?: unknown; value?: unknown })
+          .map((f) => ({ column: String(f.column ?? ""), value: String(f.value ?? "") }));
+        const result = await lookupTableRows(shopId, String(input.table ?? ""), filters, {
+          tables: lookupTables,
+          linkProducts: config.settings.learn.products,
+        });
+        const { linkedProducts, ...forModel } = result;
+        for (const [gid, title] of linkedProducts) {
+          // Rows name the exact product — the strongest match there is.
+          retrieved.set(gid, { title, tier: "best" });
+          if (!searchOrder.includes(gid)) searchOrder.push(gid);
+        }
+        facts.push(
+          `looked up ${result.table} (${filters.map((f) => `${f.column}=${f.value}`).join(", ")}): ${result.matched_rows} rows${linkedProducts.size > 0 ? `, products ${[...linkedProducts.values()].slice(0, 4).join(", ")}` : ""}`,
+        );
+        trace.step("agent_lookup_table", `Lookup ${result.table}`, result.matched_rows === 0 ? "miss" : "hit", {
+          filters,
+          matched: result.matched_rows,
+          products: [...linkedProducts.values()].slice(0, 4),
+        });
+        return forModel;
+      }
       case "cannot_answer": {
         // "I don't know" is a conclusion from the store's data, not a first
         // move: the model gave up on "does the moonstone bracelet help with
         // hormonal balance?" without opening the product whose description
         // answers it. Refused until something was looked up this turn.
         const lookedAnything = preloaded.length > 0 || toolsUsed.some((t) =>
-          ["search_products", "get_product", "search_store_info", "get_discounts"].includes(t),
+          ["search_products", "get_product", "search_store_info", "get_discounts", "lookup_table"].includes(t),
         );
         if (!lookedAnything) {
           return {

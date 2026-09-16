@@ -257,6 +257,8 @@ export function agentStoreContext(store: {
   name: string;
   currency: string;
   catalog: { productCount: number; collections: string[]; productTypes: string[] } | null;
+  /** Spec 28 lookup tables the lookup_table tool can query. */
+  tables?: { name: string; description: string }[];
 }): string {
   const lines = [`Store: ${store.name.trim() || "this store"}.`, `Prices are in ${store.currency}.`];
   if (store.catalog) {
@@ -270,6 +272,11 @@ export function agentStoreContext(store: {
       if (store.catalog.productTypes.length > 0) parts.push(`product types and tags: ${store.catalog.productTypes.join(", ")}`);
       lines.push(`Catalogue overview (what the store sells): ${parts.join("; ")}.`);
     }
+  }
+  if (store.tables && store.tables.length > 0) {
+    lines.push(
+      `Store data tables (look rows up with lookup_table before searching the catalogue when a question involves them): ${store.tables.map((t) => `${t.name} — ${t.description}`).join("; ")}.`,
+    );
   }
   return lines.join(" ");
 }

@@ -45,6 +45,13 @@ export type QuotaDimension =
   // store connecting all of its legal policies. Every plan connects them all.
   | "crawl_pages"
   | "file_uploads"
+  // Largest CSV a Custom knowledge upload may be, in MB (2026-09-16, user:
+  // "the size of csv should be plan specific"). A CSV counts against
+  // file_uploads like any file; PDF/TXT/JSON keep the flat 2MB cap. 0 = no CSV.
+  | "csv_upload_mb"
+  // Total rows across a shop's lookup tables (spec 28 — structured CSVs the AI
+  // filters exactly — any tabular data). Each table is also one file upload.
+  | "lookup_rows"
   | "metafields_enabled" // product/variant metafields opted into AI training (spec 07)
   | "team_seats" // team members (excluding the owner) who can log into the web app (spec 18)
   | "active_campaigns" // simultaneously ACTIVE proactive campaigns (spec 12)
@@ -89,6 +96,8 @@ export const QUOTA_DIMENSIONS: QuotaDimension[] = [
   "faqs",
   "crawl_pages",
   "file_uploads",
+  "csv_upload_mb",
+  "lookup_rows",
   "metafields_enabled",
   "team_seats",
   "active_campaigns",

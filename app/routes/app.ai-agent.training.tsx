@@ -3,6 +3,7 @@ import { useLoaderData, useNavigate, useRouteError, useSearchParams } from "reac
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { z } from "zod";
 import db from "../db.server";
+import { SHOWABLE_PRODUCT } from "../lib/search/showable";
 import type { Prisma } from "@prisma/client";
 import {
   getQuota,
@@ -28,6 +29,7 @@ import {
 import {
   convertLegacyPagesSources,
   createSource,
+  csvByteCap,
   deleteSource,
   fetchShopPolicies,
   listSources,
@@ -58,6 +60,8 @@ import { TrainingCollectionsTab } from "../components/TrainingCollectionsTab";
 import { TrainingContentTab } from "../components/TrainingContentTab";
 import { TrainingDiscountsTab } from "../components/TrainingDiscountsTab";
 import { TrainingKnowledgeTab } from "../components/TrainingKnowledgeTab";
+import { createTableSource, tableMetadata, updateTableSource } from "../lib/lookup/lookup-import.server";
+import { COLUMN_ROLES, MAX_TABLE_COLUMNS, TABLE_DESCRIPTION_MAX, type ColumnRole } from "../lib/lookup/lookup-shared";
 import { requireShopAccess } from "../lib/access.server";
 import { routeError } from "../lib/ui/route-error";
 import { APP_NAME } from "./app";
@@ -84,6 +88,10 @@ export interface ProductRow {
   tags: string[];
   status: string;
   learnEnabled: boolean;
+  /** Why the AI can't learn this product whatever its switch says (draft,
+   *  archived, not on the Online Store) — the SHOWABLE_PRODUCT rule the
+   *  dashboard and the chat use. null = learnable. */
+  notLearnable: string | null;
 }
 
 export interface CollectionRow {
@@ -148,6 +156,12 @@ export interface SourceRow {
   detail: string | null;
   /** A connected policy that was deleted/emptied in Shopify. */
   removedInShopify: boolean;
+  /** Lookup tables only (spec 28): what the Edit table modal shows. */
+  table?: {
+    description: string;
+    columns: Array<{ key: string; name: string; role: ColumnRole; samples: string[]; numeric: boolean }>;
+    ranges: Array<{ name: string }>;
+  };
 }
 
 export interface Meter {
@@ -213,6 +227,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           tags: true,
           status: true,
           learnEnabled: true,
+          publishedOnline: true,
         },
       }),
       db.collection.findMany({
@@ -313,7 +328,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     lastSyncedAt: s.lastSyncedAt ? s.lastSyncedAt.toISOString() : null,
     error: typeof meta(s).error === "string" ? (meta(s).error as string) : null,
     detail:
-      s.type === "file"
+      s.type === "file" || s.type === "table"
         ? typeof meta(s).filename === "string" && meta(s).filename !== s.name
           ? (meta(s).filename as string)
           : null
@@ -321,6 +336,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           ? s.url
           : null,
     removedInShopify: meta(s).removedInShopify === true,
+    ...(s.type === "table"
+      ? (() => {
+          const t = tableMetadata(s.metadata);
+          return {
+            table: {
+              description: t.description,
+              columns: t.columns.map((c) => ({ key: c.key, name: c.name, role: c.role, samples: c.samples.slice(0, 5), numeric: c.numeric })),
+              ranges: t.ranges.map((r) => ({ name: r.name })),
+            },
+          };
+        })()
+      : {}),
   }));
 
   // Both limits count SOURCES — each URL source is one page
@@ -335,9 +362,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       currency: shop?.currency ?? "USD",
     },
     products: {
-      rows: products as ProductRow[],
+      rows: products.map(({ publishedOnline, ...p }): ProductRow => ({
+        ...p,
+        notLearnable: productNotLearnable(p.status, publishedOnline),
+      })),
       total: products.length,
-      learned: products.filter((p) => p.learnEnabled).length,
+      // Same rule as the dashboard (SHOWABLE_PRODUCT): a draft, archived or
+      // unpublished product is not learned, whatever its switch says.
+      learned: products.filter((p) => p.learnEnabled && !productNotLearnable(p.status, p.publishedOnline)).length,
     },
     // Manage metafields modal (spec 07): catalog rows + plan cap on enabled ones.
     metafields: {
@@ -398,8 +430,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       quotas: {
         crawlPages: { used: crawlUsed, quota: getQuota(plan, "crawl_pages") },
         fileUploads: {
-          used: knowledgeSources.filter((s) => s.type === "file").length,
+          // A lookup table is an uploaded file too (spec 28).
+          used: knowledgeSources.filter((s) => s.type === "file" || s.type === "table").length,
           quota: getQuota(plan, "file_uploads"),
+        },
+        lookupRows: {
+          used: knowledgeSources.filter((s) => s.type === "table").reduce((sum, s) => sum + s.chunkCount, 0),
+          quota: getQuota(plan, "lookup_rows"),
         },
       },
       // No policy limit — just how many are connected.
@@ -436,6 +473,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       },
       metafieldsNext: nextPlanNameForQuota(plan, "metafields_enabled"),
       fileUploadsNext: nextPlanNameForQuota(plan, "file_uploads"),
+      // CSV size is plan-specific (csv_upload_mb, 2026-09-16); bytes, already
+      // clamped to the server ceiling, so the picker checks the enforced number.
+      csvMaxBytes: csvByteCap(plan),
+      csvUploadNext: nextPlanNameForQuota(plan, "csv_upload_mb"),
+      lookupRowsNext: nextPlanNameForQuota(plan, "lookup_rows"),
       crawlPagesNext: nextPlanNameForQuota(plan, "crawl_pages"),
     },
   };
@@ -451,6 +493,13 @@ const urlPayloadSchema = z.object({
   url: urlSourceSchema.shape.url,
   reCrawlWeekly: z.boolean().default(false),
   status: statusEnum.default("active"),
+});
+
+const tablePayloadSchema = z.object({
+  title: z.string().trim().min(1, "Give the table a title").max(200),
+  description: z.string().trim().min(1, "Say what the table is for").max(TABLE_DESCRIPTION_MAX),
+  filename: z.string().trim().min(1).max(200),
+  roles: z.array(z.enum(COLUMN_ROLES as [ColumnRole, ...ColumnRole[]])).min(1).max(MAX_TABLE_COLUMNS),
 });
 
 const filePayloadSchema = z.object({
@@ -509,6 +558,14 @@ async function connectedPolicyTypes(shopId: string): Promise<string[]> {
     }
   }
   return [...out];
+}
+
+/** Why a product can't be learned (see SHOWABLE_PRODUCT), or null. */
+function productNotLearnable(status: string, publishedOnline: boolean): string | null {
+  const s = status.toLowerCase();
+  if (s !== SHOWABLE_PRODUCT.status) return s === "archived" ? "Archived in Shopify" : s === "draft" ? "Draft in Shopify" : "Not active in Shopify";
+  if (!publishedOnline) return "Not on the Online Store";
+  return null;
 }
 
 function friendlyError(error: unknown): string {
@@ -985,10 +1042,34 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
             }
           : { intent, ok: true, message: "File added — indexing in the background" };
       }
+      case "source-add-table": {
+        // Spec 28 — multipart: the browser gzips the CSV before posting it.
+        const file = formData.get("file");
+        if (!(file instanceof Blob)) return { intent, ok: false, error: "Choose a CSV file." };
+        const payload = tablePayloadSchema.parse(json("payload"));
+        await createTableSource(shopId, {
+          ...payload,
+          bytes: Buffer.from(await file.arrayBuffer()),
+          gzipped: str("encoding") === "gzip",
+        });
+        return { intent, ok: true, message: "Table added — importing rows in the background" };
+      }
       case "source-update": {
         const id = str("id");
         const source = await db.dataSource.findFirst({ where: { id, shopId } });
         if (!source) return { intent, ok: false, error: "Source not found" };
+        if (source.type === "table") {
+          const payload = z
+            .object({
+              name: z.string().trim().min(1).max(200),
+              description: z.string().trim().min(1).max(TABLE_DESCRIPTION_MAX),
+              roles: z.record(z.string().regex(/^c\d+$/), z.enum(COLUMN_ROLES as [ColumnRole, ...ColumnRole[]])),
+              status: statusEnum,
+            })
+            .parse(json("payload"));
+          await updateTableSource(shopId, id, payload);
+          return { intent, ok: true, message: "Table updated" };
+        }
         const oldMeta = { ...((source.metadata ?? {}) as Record<string, unknown>) };
         if (source.type === "url") {
           const payload = urlPayloadSchema.parse(json("payload"));

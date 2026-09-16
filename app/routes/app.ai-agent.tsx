@@ -4,6 +4,7 @@ import { useFetcher, useLoaderData, useNavigate, useOutlet, useRouteError } from
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
+import { SHOWABLE_PRODUCT } from "../lib/search/showable";
 import { invalidateShopConfig } from "../lib/config/shop-config.server";
 import { loadShopSettings } from "../lib/settings/save.server";
 import { ProgressTrack } from "../components/ui/Progress";
@@ -60,7 +61,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     await Promise.all([
       db.shop.findUnique({ where: { id: shopId }, select: { aiEnabled: true } }),
       db.unresolvedQuestion.count({ where: { shopId, status: "pending" } }),
-      db.product.count({ where: { shopId, learnEnabled: true } }),
+      // Drafts, archived and unpublished products are never learned (QA-U2 rule).
+      db.product.count({ where: { shopId, ...SHOWABLE_PRODUCT } }),
       db.dataSource.findMany({
         where: { shopId, status: { not: "suggested" }, type: { not: "faq" } },
         select: { chunkCount: true },

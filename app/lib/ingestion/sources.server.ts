@@ -19,6 +19,19 @@ import { logError } from "../log.server";
 
 export const CSV_ROW_CAP = 50;
 export const FILE_BYTE_CAP = 2 * 1024 * 1024; // 2MB
+/**
+ * Hard ceiling on the plan's csv_upload_mb, whatever /admin/plans says. The
+ * file travels base64 inside the form post (~1.4x), and nginx caps request
+ * bodies at 25M (DEPLOYMENT.md); every chunk is also embedded and inserted in
+ * one ingest transaction.
+ */
+export const CSV_MB_CEILING = 10;
+
+/** Bytes a CSV upload may be on this plan (0 = CSV not included). */
+export function csvByteCap(plan: string): number {
+  const mb = Math.min(Math.max(getQuota(plan, "csv_upload_mb"), 0), CSV_MB_CEILING);
+  return mb * 1024 * 1024;
+}
 
 export class QuotaError extends Error {
   constructor(
@@ -181,10 +194,18 @@ export async function createSource(
       // No "file_upload" feature gate —
       // the file_uploads QUOTA below is the only cap, on every plan.
       const limit = getQuota(plan, "file_uploads");
-      const used = await db.dataSource.count({ where: { shopId, type: "file" } });
+      // A lookup table (spec 28) is an uploaded file too.
+      const used = await db.dataSource.count({ where: { shopId, type: { in: ["file", "table"] } } });
       if (used >= limit) throw new QuotaError("file_uploads", used, limit);
-      if (parsed.bytes.byteLength > FILE_BYTE_CAP) {
-        throw new Error("file too large (max 2MB)");
+      if (fileKind(parsed.name, parsed.mime) === "csv") {
+        // CSV size is the plan's csv_upload_mb (2026-09-16), not the flat cap.
+        const cap = csvByteCap(plan);
+        if (cap === 0) throw new UnsupportedFileError("CSV upload isn't included in your plan");
+        if (parsed.bytes.byteLength > cap) {
+          throw new FileTooLargeError(`CSV too large — your plan allows up to ${cap / (1024 * 1024)}MB`);
+        }
+      } else if (parsed.bytes.byteLength > FILE_BYTE_CAP) {
+        throw new FileTooLargeError("file too large (max 2MB)");
       }
       const { text, parseError } = await extractFileText(parsed.name, parsed.mime, parsed.bytes);
       // A file type we can never parse must not become a stored "error" row:
@@ -258,6 +279,9 @@ export async function deleteSource(shopId: string, sourceId: string): Promise<bo
   if (!source) return false;
   await db.$transaction([
     db.knowledge.deleteMany({ where: { shopId, dataSourceId: sourceId } }),
+    // Spec 28 lookup tables keep rows + the uploaded file instead of chunks.
+    db.lookupRow.deleteMany({ where: { shopId, dataSourceId: sourceId } }),
+    db.lookupFile.deleteMany({ where: { shopId, dataSourceId: sourceId } }),
     db.dataSource.deleteMany({ where: { id: sourceId, shopId } }),
   ]);
   return true;
@@ -717,13 +741,41 @@ async function extractFileText(
       const { text, parseError } = await extractPdfText(bytes);
       return parseError ? { parseError } : { text };
     }
+    case "csv": {
+      const text = csvToText(bytes.toString("utf-8"));
+      if (!text) return { parseError: "CSV needs a header row and at least one data row" };
+      return { text };
+    }
     case "docx":
       // Still deferred (spec 04 delta): DOCX needs its own unzip+XML parser.
       // Rejected at upload so it can't consume the file_uploads quota.
-      return { parseError: "DOCX isn't supported — upload a .pdf, .txt or .json" };
+      return { parseError: "DOCX isn't supported — upload a .pdf, .txt, .json or .csv" };
     default:
-      return { parseError: "unsupported file type (.pdf .txt .json only)" };
+      return { parseError: "unsupported file type (.pdf .txt .json .csv only)" };
   }
+}
+
+/**
+ * CSV → one text record per row, "Header: value" per non-empty cell, records
+ * separated by a blank line so chunkText() prefers to split between rows. The
+ * first row is the header (a knowledge CSV is a table — size charts, specs,
+ * store locations); a blank header cell becomes "Column N". Repeating the
+ * header on every row costs bytes but keeps each chunk self-describing, which
+ * is what retrieval needs once a table is split across chunks.
+ */
+export function csvToText(csv: string): string {
+  const records = splitCsv(csv.charCodeAt(0) === 0xfeff ? csv.slice(1) : csv); // Excel writes a BOM
+  if (records.length < 2) return "";
+  const header = records[0].map((cell, i) => cell.trim() || `Column ${i + 1}`);
+  const rows: string[] = [];
+  for (const record of records.slice(1)) {
+    const lines = record
+      .map((cell, i) => [header[i] ?? `Column ${i + 1}`, cell.replace(/\s+/g, " ").trim()] as const)
+      .filter(([, value]) => value !== "")
+      .map(([name, value]) => `${name}: ${value}`);
+    if (lines.length > 0) rows.push(lines.join("\n"));
+  }
+  return rows.join("\n\n");
 }
 
 /** File kinds this build can actually turn into text. Anything else is
@@ -731,6 +783,14 @@ async function extractFileText(
  *  A PDF is parseable in principle, so a failure here (scanned, encrypted,
  *  corrupt) is a real error worth storing and showing, not a rejection. */
 const PARSEABLE_KINDS = new Set(["txt", "json", "pdf"]);
+
+/** Upload rejected because it is over its size cap (not a bug/failure). */
+export class FileTooLargeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FileTooLargeError";
+  }
+}
 
 /** Upload rejected because the format is not supported (not a bug/failure). */
 export class UnsupportedFileError extends Error {
@@ -740,9 +800,12 @@ export class UnsupportedFileError extends Error {
   }
 }
 
-function fileKind(name: string, mime: string): "txt" | "json" | "pdf" | "docx" | "unknown" {
+function fileKind(name: string, mime: string): "txt" | "json" | "pdf" | "csv" | "docx" | "unknown" {
   const ext = name.toLowerCase().split(".").pop() ?? "";
   const m = mime.toLowerCase();
+  // Before txt: some browsers report a .csv as text/plain. Windows with Excel
+  // installed reports application/vnd.ms-excel, so the extension decides.
+  if (ext === "csv" || m.startsWith("text/csv")) return "csv";
   if (ext === "txt" || m.startsWith("text/plain")) return "txt";
   if (ext === "json" || m.includes("application/json")) return "json";
   if (ext === "pdf" || m.includes("application/pdf")) return "pdf";

@@ -100,6 +100,7 @@ Budget: a normal turn ≈ 2 LLM chat calls + 1–2 embedding calls + a few DB/Sh
 | 20 | `20-mobile-responsive.md` | Mobile responsiveness: 768px breakpoint, web-shell drawer nav, inbox pane switching, touch reordering (desktop unchanged) |
 | 21 | `21-logging-observability.md` | Operator error/warning log (`app_logs`) + `/admin/logs`: cross-tenant triage window, 14-day retention, PII-safe write seam |
 | 22 | `22-pages-blogs-sync.md` | Pages & Blogs Training tabs: Admin-API mirror of store pages + blog articles, per-row/master AI learn, pages_synced / articles_synced plan limits, RAG bridge; Website URL reduced to single page |
+| 28 | `28-lookup-tables.md` | Lookup tables: merchant CSVs (product finder, vehicle fitment, size/spec tables) stored as rows, filtered exactly by the agent's `lookup_table` tool, rows linked to products by SKU/handle/title; `lookup_rows` plan limit (Plus 200,000) |
 
 ## Suggested build order (after Phase 0 foundation)
 
