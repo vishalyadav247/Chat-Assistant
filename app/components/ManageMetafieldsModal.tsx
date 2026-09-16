@@ -63,6 +63,8 @@ export function ManageMetafieldsModal(props: {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");
   const [limitDismissed, setLimitDismissed] = useState(false);
+  /** Multi-select for bulk enable/disable (owner 2026-09-16). */
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const enabledCount = rows.filter((r) => r.enabled).length;
   const atLimit = props.quota > 0 && enabledCount >= props.quota;
@@ -84,6 +86,30 @@ export function ManageMetafieldsModal(props: {
           `${r.namespace}.${r.key}`.toLowerCase().includes(needle)),
     );
   }, [supportedRows, tab, q, status]);
+
+  // Selection follows what is on screen: switching tab or filter clears rows
+  // the merchant can no longer see, so a bulk action can never hit them.
+  const visibleIds = useMemo(() => visible.map((r) => r.id), [visible]);
+  useEffect(() => {
+    setSelected((prev) => {
+      const next = new Set([...prev].filter((id) => visibleIds.includes(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [visibleIds]);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
+  const toggleAll = () =>
+    setSelected(allVisibleSelected ? new Set() : new Set(visibleIds));
+  const toggleOne = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const bulk = (enabled: boolean) => {
+    submit("metafield-bulk-toggle", { ids: [...selected].join(","), enabled: enabled ? "true" : "false" });
+    setSelected(new Set());
+  };
 
   return (
     <BrowseModalShell
@@ -177,6 +203,29 @@ export function ManageMetafieldsModal(props: {
           />
         </s-grid>
 
+        {selected.size > 0 ? (
+          <s-box padding="small-200" background="subdued" borderRadius="base">
+            <s-stack direction="inline" gap="small-200" alignItems="center">
+              <s-text type="strong">{selected.size} selected</s-text>
+              <s-button
+                disabled={pendingIntent === "metafield-bulk-toggle"}
+                onClick={() => bulk(true)}
+              >
+                Enable learning
+              </s-button>
+              <s-button
+                disabled={pendingIntent === "metafield-bulk-toggle"}
+                onClick={() => bulk(false)}
+              >
+                Disable learning
+              </s-button>
+              <s-button variant="tertiary" onClick={() => setSelected(new Set())}>
+                Clear
+              </s-button>
+            </s-stack>
+          </s-box>
+        ) : null}
+
         {visible.length === 0 ? (
           <s-box padding="large">
             <s-stack gap="small-200" alignItems="center">
@@ -190,20 +239,39 @@ export function ManageMetafieldsModal(props: {
         ) : (
           <s-table>
             <s-table-header-row>
+              <s-table-header>
+                <s-checkbox
+                  accessibilityLabel="Select all metafields"
+                  checked={allVisibleSelected}
+                  indeterminate={selected.size > 0 && !allVisibleSelected}
+                  onChange={() => toggleAll()}
+                />
+              </s-table-header>
               <s-table-header>Metafield</s-table-header>
               <s-table-header>Used in</s-table-header>
-              <s-table-header>Status</s-table-header>
+              <s-table-header>Learning</s-table-header>
             </s-table-header-row>
             <s-table-body>
               {visible.map((row) => (
                 <s-table-row key={row.id}>
                   <s-table-cell>
-                    <s-stack gap="small-500">
-                      <s-text type="strong">{row.name}</s-text>
-                      <s-text color="subdued">
-                        {row.namespace}.{row.key} · {typeLabel(row.type)}
-                      </s-text>
-                    </s-stack>
+                    <s-checkbox
+                      accessibilityLabel={`Select ${row.name}`}
+                      checked={selected.has(row.id)}
+                      onChange={() => toggleOne(row.id)}
+                    />
+                  </s-table-cell>
+                  <s-table-cell>
+                    {/* Capped so the name column can't squeeze "Used in" and
+                        "Learning" out of the row (owner 2026-09-16). */}
+                    <div style={{ maxWidth: 320 }}>
+                      <s-stack gap="small-500">
+                        <s-text type="strong">{row.name}</s-text>
+                        <s-text color="subdued">
+                          {row.namespace}.{row.key} · {typeLabel(row.type)}
+                        </s-text>
+                      </s-stack>
+                    </div>
                   </s-table-cell>
                   <s-table-cell>
                     <s-text tone="neutral">

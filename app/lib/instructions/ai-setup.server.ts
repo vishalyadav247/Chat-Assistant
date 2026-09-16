@@ -2,7 +2,9 @@ import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import db from "../../db.server";
 import { DEFAULT_BRAND_VOICE, DEFAULT_GUARDRAILS, DEFAULT_PERSONA, LEGACY_INSTALL_FALLBACK } from "../ai-defaults";
+import { runtimeConfig } from "../admin/runtime-config.server";
 import { invalidateShopConfig } from "../config/shop-config.server";
+import { embedTexts } from "../embeddings/embedding.server";
 import { hashText } from "../ingestion/metafields.server";
 import { syncStoreInfoKnowledge } from "../ingestion/knowledge-ingest.server";
 import { getLlmProvider } from "../llm/index.server";
@@ -527,13 +529,59 @@ export async function runAiSetup(shopDomain: string, opts: { force?: boolean } =
 const escapeHtml = (value: string) =>
   value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
+const normQuestion = (q: string) => q.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+
+/** Two questions mean the same thing at or above this cosine similarity. */
+export const DUPLICATE_QUESTION_SCORE = 0.86;
+
+/** Embeddings are unit vectors, so the dot product IS the cosine. */
+const cosine = (a: number[], b: number[]) => {
+  let dot = 0;
+  for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
+  return dot;
+};
+
+/**
+ * Duplicate check over question MEANING. One embedding call covers the shop's
+ * existing questions and this run's suggestions; without embeddings it falls
+ * back to exact text matching, so a failure never blocks drafts.
+ */
+async function questionVectors(shopId: string, existing: string[], candidates: string[]) {
+  const texts = [...new Set([...existing, ...candidates])];
+  let vectors: number[][] | null = null;
+  if (texts.length > 0 && runtimeConfig().openaiApiKey) {
+    vectors = await embedTexts(texts, { shopId }).catch((error: unknown) => {
+      logWarn("ai_setup_faq_dedupe_skipped", error instanceof Error ? error.message : String(error), { shopId });
+      return null;
+    });
+  }
+  const byText = new Map<string, number[]>();
+  if (vectors) texts.forEach((text, i) => byText.set(text, vectors![i]));
+  const taken = existing.map((q) => ({ text: normQuestion(q), vector: byText.get(q) }));
+  return {
+    isDuplicate(question: string): boolean {
+      const norm = normQuestion(question);
+      const vector = byText.get(question);
+      return taken.some(
+        (t) => t.text === norm || Boolean(vector && t.vector && cosine(vector, t.vector) >= DUPLICATE_QUESTION_SCORE),
+      );
+    },
+    remember(question: string): void {
+      taken.push({ text: normQuestion(question), vector: byText.get(question) });
+    },
+  };
+}
+
 /**
  * Draft FAQs (never published — they don't reach shoppers or knowledge until
- * the merchant answers and publishes them). Every suggestion is created, with
- * no duplicate filtering (owner rule 2026-09-16): at first install the shop has
- * no FAQs anyway, and on a rewrite the merchant reviews the drafts and
- * publishes or deletes them. Stops at the plan's FAQ quota; answers citing
- * facts that are not in the store's data are dropped.
+ * the merchant answers and publishes them).
+ *
+ * A suggestion is skipped when the shop already has a question that MEANS the
+ * same thing, compared by embedding rather than wording (owner 2026-09-16: two
+ * rewrites produced 20 drafts, "How can I contact Ankastra?" next to "How can I
+ * contact you?"). Existing FAQs of any status count, and so do the drafts
+ * created earlier in the same run. Stops at the plan's FAQ quota; answers
+ * citing facts that are not in the store's data are dropped.
  */
 async function createFaqDrafts(
   shopId: string,
@@ -544,19 +592,22 @@ async function createFaqDrafts(
   try {
     const { ensureDefaultCategory } = await import("../faq/faq.server");
     const { getQuota } = await import("../billing/plans.server");
-    const [categoryId, existingCount, shop, max] = await Promise.all([
+    const [categoryId, existing, shop, max] = await Promise.all([
       ensureDefaultCategory(shopId),
-      db.faq.count({ where: { shopId } }),
+      db.faq.findMany({ where: { shopId }, select: { question: true } }),
       db.shop.findUnique({ where: { id: shopId }, select: { plan: true } }),
       db.faq.aggregate({ where: { shopId }, _max: { position: true } }),
     ]);
     const quota = getQuota(shop?.plan ?? "free", "faqs");
+    const candidates = drafts.filter((d) => d.question.trim());
+    const seen = await questionVectors(shopId, existing.map((f) => f.question), candidates.map((d) => d.question));
     let position = max._max.position ?? 0;
-    let count = existingCount;
+    let count = existing.length;
     let created = 0;
-    for (const draft of drafts) {
+    for (const draft of candidates) {
       if (count >= quota) break;
-      if (!draft.question.trim()) continue;
+      if (seen.isDuplicate(draft.question)) continue;
+      seen.remember(draft.question);
       const answer = draft.answer ? factGuard(draft.answer, facts).text : "";
       await db.faq.create({
         data: {

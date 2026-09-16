@@ -559,6 +559,76 @@
     return wrap;
   }
 
+  /**
+   * Carousel of product cards (owner 2026-09-16). One card sits fully in view
+   * with ~75% of the next showing, so it reads as "there is more to the right";
+   * arrows and dots appear only with 2+ products, and native scroll-snap keeps
+   * swipe/drag working on touch.
+   */
+  function productCarousel(track, count) {
+    if (count < 2) return track;
+    var frame = el("div", "cw-carousel");
+    frame.appendChild(track);
+
+    var step = function () {
+      var card = track.querySelector(".cw-card");
+      var gap = 10;
+      return card ? card.getBoundingClientRect().width + gap : track.clientWidth;
+    };
+    // One chevron asset, mirrored by CSS for "previous".
+    var arrow = function (dir, label) {
+      var b = el("button", "cw-car-arrow cw-car-arrow--" + dir, { type: "button", "aria-label": label });
+      svg(b, ICONS.chev);
+      b.addEventListener("click", function () {
+        track.scrollBy({ left: dir === "next" ? step() : -step(), behavior: "smooth" });
+      });
+      return b;
+    };
+    var prev = arrow("prev", "Previous product");
+    var next = arrow("next", "Next product");
+    frame.appendChild(prev);
+    frame.appendChild(next);
+
+    var dots = el("div", "cw-car-dots", { role: "tablist", "aria-label": "Product" });
+    var buttons = [];
+    for (var i = 0; i < count; i++) {
+      (function (index) {
+        var dot = el("button", "cw-car-dot", { type: "button", role: "tab", "aria-label": "Product " + (index + 1) });
+        dot.addEventListener("click", function () {
+          track.scrollTo({ left: index * step(), behavior: "smooth" });
+        });
+        dots.appendChild(dot);
+        buttons.push(dot);
+      })(i);
+    }
+    frame.appendChild(dots);
+
+    var sync = function () {
+      var index = Math.round(track.scrollLeft / Math.max(1, step()));
+      if (index > count - 1) index = count - 1;
+      if (index < 0) index = 0;
+      for (var j = 0; j < buttons.length; j++) {
+        var on = j === index;
+        buttons[j].className = "cw-car-dot" + (on ? " cw-car-dot--on" : "");
+        buttons[j].setAttribute("aria-selected", on ? "true" : "false");
+      }
+      // An arrow that cannot move anything is hidden rather than dead.
+      var max = track.scrollWidth - track.clientWidth - 2;
+      prev.hidden = track.scrollLeft <= 2;
+      next.hidden = track.scrollLeft >= max;
+    };
+    var frameId = 0;
+    track.addEventListener("scroll", function () {
+      if (frameId) return;
+      frameId = requestAnimationFrame(function () {
+        frameId = 0;
+        sync();
+      });
+    });
+    setTimeout(sync, 0);
+    return frame;
+  }
+
   /** Product cards row. cb: {onView(card), onAdd(card)}. */
   function productCards(cards, currency, cb) {
     var wrap = el("div", "cw-cards", { role: "list" });
@@ -627,7 +697,7 @@
       item.appendChild(body);
       wrap.appendChild(item);
     });
-    return wrap;
+    return productCarousel(wrap, cards.length);
   }
 
   /** Message input bar. cb.onSend(text).

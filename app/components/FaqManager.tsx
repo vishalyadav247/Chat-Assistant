@@ -347,6 +347,41 @@ export function FaqManager(props: {
               : "No FAQs match your filters."
           }
           onRowClick={(row) => openEditFaq(row.faq, row.categoryId)}
+          // Multi-select (owner 2026-09-16): products and collections had bulk
+          // actions, FAQs had none — deleting a batch of AI drafts meant one
+          // row at a time.
+          bulkActions={(ids, clear) => (
+            <>
+              <s-button
+                disabled={pendingIntent === "faq-bulk-status"}
+                onClick={() => {
+                  submit("faq-bulk-status", { ids: ids.join(","), status: "published" });
+                  clear();
+                }}
+              >
+                Publish
+              </s-button>
+              <s-button
+                disabled={pendingIntent === "faq-bulk-status"}
+                onClick={() => {
+                  submit("faq-bulk-status", { ids: ids.join(","), status: "draft" });
+                  clear();
+                }}
+              >
+                Unpublish
+              </s-button>
+              <s-button
+                tone="critical"
+                disabled={pendingIntent === "faq-bulk-delete"}
+                onClick={() => {
+                  submit("faq-bulk-delete", { ids: ids.join(",") });
+                  clear();
+                }}
+              >
+                Delete
+              </s-button>
+            </>
+          )}
           toolbar={
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               <div style={{ width: 170 }}>

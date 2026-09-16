@@ -165,21 +165,20 @@ function StepAction(props: {
 }) {
   const { step } = props;
 
-  // Store info stays clickable once done: "Completed" + the Review button.
+  // A completed step shows "Completed" and nothing else (owner 2026-09-16):
+  // the Review button that used to stay on the store-info step invited a
+  // re-edit of work already done. Instructions remain reachable from the menu.
+  if (step.state === "done") {
+    return <Completed />;
+  }
+
   if (step.action.kind === "revisit") {
     const href = step.action.href;
     return (
-      <s-stack direction="inline" gap="small-200" alignItems="center">
-        {step.state === "done" ? <Completed /> : null}
-        <s-button variant="primary" onClick={() => props.onNavigate(href)}>
-          {step.actionLabel}
-        </s-button>
-      </s-stack>
+      <s-button variant="primary" onClick={() => props.onNavigate(href)}>
+        {step.actionLabel}
+      </s-button>
     );
-  }
-
-  if (step.state === "done") {
-    return <Completed />;
   }
 
   let button: React.ReactNode;

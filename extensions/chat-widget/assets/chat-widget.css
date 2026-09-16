@@ -410,16 +410,27 @@
 .cw-typing span:nth-child(3) { animation-delay: 0.4s; }
 @keyframes cw-blink { 0%, 80%, 100% { opacity: 0.3; } 40% { opacity: 1; } }
 
-/* Product cards */
-.cw-cards { display: flex; gap: 10px; overflow-x: auto; padding: 2px 2px 6px; scrollbar-width: thin; scrollbar-color: transparent transparent; }
-.cw-cards:hover { scrollbar-color: #c9c9d2 transparent; }
-.cw-cards::-webkit-scrollbar { height: 6px; }
-.cw-cards::-webkit-scrollbar-track { background: transparent; }
-.cw-cards::-webkit-scrollbar-thumb { background: transparent; border-radius: 8px; }
-.cw-cards:hover::-webkit-scrollbar-thumb { background: #c9c9d2; }
+/* Product cards — carousel (owner 2026-09-16): one card fully visible with
+   ~75% of the next showing, so "there is more" is obvious. Scroll-snap keeps
+   swipe and drag native; the arrows and dots drive the same scroll. */
+.cw-carousel { position: relative; }
+.cw-cards {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 2px 2px 6px;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.cw-cards::-webkit-scrollbar { display: none; }
 .cw-card {
   flex: none;
-  width: 158px;
+  scroll-snap-align: start;
+  /* one full card + 75% of the next, minus the gap between them */
+  width: calc((100% - 10px) / 1.75);
+  max-width: 200px;
+  min-width: 140px;
   background: var(--cw-surface);
   border-radius: 5px;
   box-shadow: var(--cw-shadow-sm);
@@ -466,6 +477,46 @@
   overflow: hidden;
 }
 .cw-card-p { font-size: 12.5px; font-weight: 700; color: var(--cw-ink-strong); }
+/* Carousel controls. `.cw-root` scope beats the `.cw-root button` reset — the
+   trap already documented on .cw-launcher / .cw-send / .cw-card-add. */
+.cw-root .cw-car-arrow {
+  position: absolute;
+  top: calc(50% - 26px);
+  transform: translateY(-50%);
+  z-index: 2;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--cw-surface);
+  color: var(--cw-ink-strong);
+  box-shadow: 0 1px 6px rgba(15, 18, 34, 0.18);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0.94;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.cw-root .cw-car-arrow:hover { opacity: 1; }
+.cw-root .cw-car-arrow[hidden] { display: none; }
+.cw-car-arrow--prev { left: 2px; }
+.cw-car-arrow--prev svg { transform: rotate(180deg); }
+.cw-car-arrow--next { right: 2px; }
+.cw-car-dots { display: flex; justify-content: center; gap: 5px; padding: 2px 0 4px; }
+.cw-root .cw-car-dot {
+  width: 6px;
+  height: 6px;
+  padding: 0;
+  border-radius: 999px;
+  background: var(--cw-border-strong);
+  cursor: pointer;
+  transition: width 0.25s ease, background 0.25s ease;
+}
+.cw-root .cw-car-dot--on { width: 16px; background: linear-gradient(135deg, var(--cw1), var(--cw2)); }
+@media (prefers-reduced-motion: reduce) {
+  .cw-cards { scroll-behavior: auto; }
+  .cw-root .cw-car-dot, .cw-root .cw-car-arrow { transition: none; }
+}
 /* One action now, so it spans the card instead of sharing the row. */
 .cw-card-actions { display: flex; gap: 6px; margin-top: auto; padding-top: 6px; }
 .cw-btn {

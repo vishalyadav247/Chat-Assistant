@@ -56,6 +56,8 @@ const MAX_TOOL_CALLS_PER_ROUND = 4;
 /** After this long, the next round is the answer round (no more tool calls). */
 const TURN_BUDGET_MS = 15_000;
 const MAX_CARDS = 4;
+/** A recommendation shows at least this many cards when the search found that many. */
+const MIN_RECOMMENDED_CARDS = 2;
 /** Shortest title fragment a partial product-name match may use. */
 const MIN_PARTIAL_TITLE = 5;
 const SEARCH_LIMIT = 8;
@@ -491,6 +493,8 @@ export async function* agentLane(args: {
   const retrieved = new Map<string, { title: string; tier: "best" | "possible" | "detail" }>();
   /** Store information was already attached to a search result this turn. */
   let storeInfoAttached = false;
+  /** Products this turn's searches returned, best first. */
+  const searchOrder: string[] = [];
   let cards: ProductCard[] = [];
   const actions: ChatAction[] = [];
   let cannotAnswer = false;
@@ -718,6 +722,9 @@ export async function* agentLane(args: {
           if (!retrieved.has(c.shopifyProductId)) {
             retrieved.set(c.shopifyProductId, { title: c.title, tier: bestIds.has(c.id) ? "best" : "possible" });
           }
+          // Ranked order of this turn's results, so a reply that would show a
+          // single card can be topped up with the next best match.
+          if (!searchOrder.includes(c.shopifyProductId)) searchOrder.push(c.shopifyProductId);
         }
         // A buying question can hinge on a store rule the catalogue doesn't
         // hold ("can I buy 60 yoga mats?" → wholesale policy; "wide fit?" →
@@ -911,6 +918,22 @@ export async function* agentLane(args: {
             if (!keep) weaker.push(retrieved.get(g)?.title ?? g);
             return keep;
           });
+        }
+        // Never a lone card when the search found another good match (owner
+        // 2026-09-16): one product on screen reads as "that's all we have".
+        // Top up from the ranked results, best first — but only for a
+        // RECOMMENDATION: a question about one named product ("is the Aurora
+        // lamp in stock?", which opens that product's details) still answers
+        // with that product alone.
+        // Only from the search's TOP relevance tier: "show me black bracelets"
+        // must not gain a Rose Quartz card just to reach two. One strong match
+        // and nothing else close still shows one card.
+        const recommending = toolsUsed.includes("search_products") && !toolsUsed.includes("get_product");
+        if (recommending && gids.length < MIN_RECOMMENDED_CARDS) {
+          for (const gid of searchOrder) {
+            if (gids.length >= MIN_RECOMMENDED_CARDS) break;
+            if (!gids.includes(gid) && retrieved.get(gid)?.tier === "best") gids.push(gid);
+          }
         }
         gids = gids.slice(0, MAX_CARDS);
         const rows = await deps.cardsForShopifyIds(shopId, gids, excludeOutOfStock);

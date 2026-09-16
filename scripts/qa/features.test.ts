@@ -4075,9 +4075,11 @@ async function dashboardSetup(ctx: { db: any }): Promise<void> {
       ? await db.knowledge.findMany({ where: { shopId: C, dataSourceId: bridge.id }, select: { body: true } })
       : [];
     ok(
-      "DS10 saving store info completes the step (button stays: Review) and embeds it as the store_info source",
+      // Owner 2026-09-16: a completed step shows "Completed" only — the Review
+      // button is gone, so the label is the not-done label.
+      "DS10 saving store info completes the step (no Review button) and embeds it as the store_info source",
       infoStep?.state === "done" &&
-        infoStep?.actionLabel === "Review" &&
+        infoStep?.actionLabel === "Add store info" &&
         infoStep?.action.kind === "revisit" &&
         bridge?.status === "active" &&
         bridgeChunks.some((k: any) => k.body.includes("Zorblax Crystals")),

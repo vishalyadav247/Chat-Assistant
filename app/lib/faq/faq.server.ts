@@ -353,6 +353,30 @@ export async function deleteFaq(shopId: string, faqId: string): Promise<boolean>
   return result.count > 0;
 }
 
+/** Bulk delete from the FAQ table's selection (owner 2026-09-16). Shop-scoped; one knowledge rebuild. */
+export async function deleteFaqs(shopId: string, faqIds: string[]): Promise<number> {
+  requireShopId(shopId);
+  const ids = [...new Set(faqIds.filter(Boolean))].slice(0, 500);
+  if (ids.length === 0) return 0;
+  const result = await db.faq.deleteMany({ where: { id: { in: ids }, shopId } });
+  if (result.count > 0) await syncFaqKnowledgeSafe(shopId);
+  return result.count;
+}
+
+/**
+ * Bulk publish / unpublish. Publishing is what puts an FAQ in front of shoppers
+ * and into the AI's knowledge, so the plan's FAQ quota is not re-checked here
+ * (the rows already exist) but the knowledge bridge is rebuilt once.
+ */
+export async function setFaqsStatus(shopId: string, faqIds: string[], status: "published" | "draft"): Promise<number> {
+  requireShopId(shopId);
+  const ids = [...new Set(faqIds.filter(Boolean))].slice(0, 500);
+  if (ids.length === 0) return 0;
+  const result = await db.faq.updateMany({ where: { id: { in: ids }, shopId }, data: { status } });
+  if (result.count > 0) await syncFaqKnowledgeSafe(shopId);
+  return result.count;
+}
+
 export async function setFaqFeatured(
   shopId: string,
   faqId: string,

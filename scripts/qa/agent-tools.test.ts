@@ -705,17 +705,31 @@ async function run(db: Db, A: string, B: string, ctx: Ctx): Promise<void> {
     const possible = (search?.results ?? []).filter((r) => r.match === "possible").map((r) => r.title);
     const shown = w.cards.map((c) => c.title).filter((x) => six.includes(x));
     const show = results(w, "show_products")[0]?.result as { left_out?: string[] } | undefined;
+    // Owner 2026-09-16: a recommendation never shows ONE card while the search
+    // found another match, so weak picks are dropped only down to the minimum
+    // of two — the rest are reported back to the model as left_out.
     ok(
       "AT-2.4d",
-      "strong + weak picks → only the strong ones become cards; the weak ones are reported as left_out",
-      best.length === 0 || (shown.every((x) => !possible.includes(x)) && possible.filter((x) => six.slice(0, 5).includes(x)).every((x) => show?.left_out?.includes(x))),
+      "strong + weak picks → the strong ones lead, weaker ones are left out (at least 2 cards)",
+      best.length === 0 ||
+        (shown.length >= Math.min(2, six.slice(0, 5).length) &&
+          best.filter((x) => six.slice(0, 5).includes(x)).every((x) => shown.includes(x)) &&
+          (show?.left_out ?? []).every((x) => possible.includes(x))),
       `best=${best.join(",")} possible=${possible.join(",")} shown=${shown.join(",")} left_out=${show?.left_out?.join(",")}`,
     );
   });
 
   await kase("AT-2.5", async () => {
+    // A single pick after a search is topped up to two from the ranked results
+    // (owner 2026-09-16), then merchant companions fill what is left.
     const withSearch = await turn(A, `qa-xsell-search a lamp please ${TS}`, [[call(["search_products", { query: "lamp" }])], [call(["show_products", { products: ["Aurora Lamp"] }])], [say("This one.")]]);
-    ok("AT-2.5a", "fresh search + 1 pick → merchant cross-sell companions appended", withSearch.cards.map((c) => c.title).join(",") === "Aurora Lamp,Shade Companion,Bulb Pack", withSearch.cards.map((c) => c.title).join(","));
+    const xsellTitles = withSearch.cards.map((c) => c.title);
+    ok(
+      "AT-2.5a",
+      "fresh search + 1 pick → a second product from the search, then cross-sell companions",
+      xsellTitles[0] === "Aurora Lamp" && xsellTitles.length >= 3 && xsellTitles.includes("Shade Companion"),
+      xsellTitles.join(","),
+    );
     const three = await turn(A, `qa-xsell-three three lamps ${TS}`, [
       [call(["get_product", { product: "Aurora Lamp" }], ["get_product", { product: "Borealis Lamp" }], ["get_product", { product: "Comet Lamp" }], ["search_products", { query: "lamp" }])],
       [call(["show_products", { products: ["Aurora Lamp", "Borealis Lamp", "Comet Lamp"] }])],
@@ -727,7 +741,12 @@ async function run(db: Db, A: string, B: string, ctx: Ctx): Promise<void> {
     await setSettings(A, { recommendationRules: { excludeOutOfStock: true, crossSellEnabled: false } });
     try {
       const off = await turn(A, `qa-xsell-off a lamp please ${TS}`, [[call(["search_products", { query: "lamp" }])], [call(["show_products", { products: ["Aurora Lamp"] }])], [say("This one.")]]);
-      ok("AT-2.5d", "crossSellEnabled OFF → no companions even under a search", off.cards.map((c) => c.title).join(",") === "Aurora Lamp", off.cards.map((c) => c.title).join(","));
+      ok(
+        "AT-2.5d",
+        "crossSellEnabled OFF → no companions (the second card is a search result, not a companion)",
+        off.cards.every((c) => c.title !== "Shade Companion" && c.title !== "Bulb Pack") && off.cards[0].title === "Aurora Lamp",
+        off.cards.map((c) => c.title).join(","),
+      );
     } finally {
       await setSettings(A, null);
     }

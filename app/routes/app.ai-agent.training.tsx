@@ -595,6 +595,41 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
           metafields: await listMetafieldDefinitions(shopId),
         };
       }
+      case "metafield-bulk-toggle": {
+        // Same rules as the single toggle (owner 2026-09-16: metafields needed
+        // the multi-select products and FAQs have): supported types only, plan
+        // cap enforced server-side, one re-embed job for the whole batch.
+        const enabled = str("enabled") === "true";
+        const ids = [...new Set(str("ids").split(",").map((id) => id.trim()).filter(Boolean))].slice(0, 200);
+        const candidates = await db.productMetafieldDefinition.findMany({ where: { id: { in: ids }, shopId } });
+        const usable = enabled ? candidates.filter((row) => isSupportedMetafieldType(row.type)) : candidates;
+        const changing = usable.filter((row) => row.enabled !== enabled);
+        let applied = changing;
+        if (enabled && changing.length > 0) {
+          const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
+          const limit = getQuota(shop?.plan ?? "free", "metafields_enabled");
+          const used = await db.productMetafieldDefinition.count({ where: { shopId, enabled: true } });
+          const room = Math.max(0, limit - used);
+          applied = changing.slice(0, room);
+          if (room === 0) throw new QuotaError("metafields_enabled", used, limit);
+        }
+        if (applied.length > 0) {
+          await db.productMetafieldDefinition.updateMany({
+            where: { id: { in: applied.map((row) => row.id) }, shopId },
+            data: { enabled },
+          });
+          await enqueue(JOBS.metafieldApply, { shopId });
+        }
+        const skipped = changing.length - applied.length;
+        return {
+          intent,
+          ok: true,
+          message:
+            `${applied.length} metafield${applied.length === 1 ? "" : "s"} ${enabled ? "enabled — the AI is learning them in the background" : "disabled"}` +
+            (skipped > 0 ? ` · ${skipped} skipped (plan limit reached)` : ""),
+          metafields: await listMetafieldDefinitions(shopId),
+        };
+      }
       case "sync-discounts":
         await enqueueSync(JOBS.discountSync, shopDomain);
         return { intent, ok: true, message: "Discount sync started" };
@@ -812,6 +847,21 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<TrainingA
         return ok
           ? { intent, ok: true, message: "FAQ deleted" }
           : { intent, ok: false, error: "FAQ not found" };
+      }
+      case "faq-bulk-delete": {
+        const { deleteFaqs } = await import("../lib/faq/faq.server");
+        const removed = await deleteFaqs(shopId, str("ids").split(",").map((id) => id.trim()));
+        return { intent, ok: true, message: `${removed} FAQ${removed === 1 ? "" : "s"} deleted` };
+      }
+      case "faq-bulk-status": {
+        const { setFaqsStatus } = await import("../lib/faq/faq.server");
+        const status = str("status") === "published" ? "published" : "draft";
+        const changed = await setFaqsStatus(shopId, str("ids").split(",").map((id) => id.trim()), status);
+        return {
+          intent,
+          ok: true,
+          message: `${changed} FAQ${changed === 1 ? "" : "s"} ${status === "published" ? "published" : "moved to draft"}`,
+        };
       }
       case "faq-feature":
         await setFaqFeatured(shopId, str("id"), str("featured") === "true");

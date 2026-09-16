@@ -182,7 +182,8 @@ export type ChecklistAction =
   /** Runs every catalogue/content sync from the dashboard (step 1). */
   | { kind: "sync" }
   /** Like navigate, but the button stays after the step is done (store info:
-   *  "Completed" + Review), because revisiting is the point. */
+   *  the step links back to a page the merchant may want to revisit. A DONE
+   *  step shows only "Completed" — no Review button (owner 2026-09-16). */
   | { kind: "revisit"; href: string };
 
 export interface ChecklistStep {
@@ -401,7 +402,7 @@ export async function setupChecklist(
             "Tell your AI about your store — what you sell, where you're based and how shoppers can reach you.",
           state: settings.storeInfo.about.trim() ? "done" : "todo",
           action: { kind: "revisit", href: "/app/ai-agent/instructions#store-info" },
-          actionLabel: settings.storeInfo.about.trim() ? "Review" : "Add store info",
+          actionLabel: "Add store info",
         },
     {
       id: "chatbox",

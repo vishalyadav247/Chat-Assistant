@@ -244,9 +244,14 @@ async function main(): Promise<void> {
         forced.kept.every((f: string) => f === "fallbackMessage"),
       `kept=${forced.status === "done" ? forced.kept.join(",") : "?"}`,
     );
-    // Owner rule 2026-09-16: never filter FAQ drafts — the merchant reviews
-    // them, publishes what they want and deletes the rest.
-    ok("AS-6d", "every suggested question is drafted again, duplicates included", (await db.faq.count({ where: { shopId: shopA.id, status: "draft" } })) === 4);
+    // Owner rule 2026-09-16 (revised): a rewrite must not pile up drafts that
+    // ask the same thing — "Do you ship internationally?" already exists.
+    ok(
+      "AS-6d",
+      "a question the shop already has is not drafted again",
+      (await db.faq.count({ where: { shopId: shopA.id, status: "draft" } })) === 3,
+      `drafts=${await db.faq.count({ where: { shopId: shopA.id, status: "draft" } })}`,
+    );
     const settingsAfterForce = await settingsOf(shopA.id);
     ok("AS-6e", "the run records what it rewrote, for the merchant's banner", settingsAfterForce.aiSetup.applied.includes("role") && settingsAfterForce.aiSetup.replacedAll === true, JSON.stringify(settingsAfterForce.aiSetup.applied));
     // The automatic (install) run still protects merchant text.
