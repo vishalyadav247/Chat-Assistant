@@ -20,6 +20,8 @@ Re-baselined 2026-09-11 to the matrix the operator had set in `/admin/plans` (us
 | FAQs (manual + CSV import) | 10 | 50 | 150 | 250 |
 | URL sources (one page each) | 5 | 15 | 15 | 50 |
 | File uploads | 2 | 5 | 5 | 25 |
+| CSV upload size, MB (`csv_upload_mb`, 2026-09-16; server ceiling 10) — reference-text CSVs | 1 | 2 | 5 | 10 |
+| Lookup-table rows (`lookup_rows`, spec 28, total across tables; each table is also a file upload) | 1,000 | 10,000 | 50,000 | 200,000 |
 | Curated answers | 5 | 15 | 25 | 50 |
 | App recommendation rules | 5 | 10 | 25 | 50 |
 | Team seats | 1 | 5 | 5 | 10 |

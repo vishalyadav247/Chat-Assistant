@@ -30,12 +30,17 @@ export function useTrainingFetcher(onResult?: (result: TrainingActionResult) => 
   const submit = (intent: string, fields: Record<string, string> = {}) => {
     fetcher.submit({ intent, ...fields }, { method: "post" });
   };
+  /** Multipart post, for file uploads (lookup tables, spec 28). */
+  const submitForm = (intent: string, form: FormData) => {
+    form.set("intent", intent);
+    fetcher.submit(form, { method: "post", encType: "multipart/form-data" });
+  };
 
   const busy = fetcher.state !== "idle";
   // Intent currently in flight — lets each button show its own spinner.
   const pendingIntent = busy ? String(fetcher.formData?.get("intent") ?? "") : "";
 
-  return { fetcher, submit, busy, pendingIntent };
+  return { fetcher, submit, submitForm, busy, pendingIntent };
 }
 
 /**

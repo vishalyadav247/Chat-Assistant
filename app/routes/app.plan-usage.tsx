@@ -106,6 +106,14 @@ const QUOTA_BULLET: Record<QuotaDimension, (def: PlanDefinition) => string | nul
         ? "1 URL source"
         : `${n(d.quotas.crawl_pages)} URL sources`,
   file_uploads: (d) => `PDF / document upload (${amount(d.quotas.file_uploads)} files)`,
+  csv_upload_mb: (d) =>
+    d.quotas.csv_upload_mb <= 0 ? null : `CSV knowledge files up to ${n(d.quotas.csv_upload_mb)}MB`,
+  lookup_rows: (d) =>
+    d.quotas.lookup_rows <= 0
+      ? null
+      : isUnlimitedQuota(d.quotas.lookup_rows)
+        ? "Unlimited lookup-table rows"
+        : `Lookup tables up to ${n(d.quotas.lookup_rows)} rows`,
   metafields_enabled: () => null,
   team_seats: (d) =>
     d.quotas.team_seats <= 1

@@ -72,7 +72,7 @@ export function TrainingProductsTab(props: {
         (row) =>
           (!statusFilter ||
             (statusFilter === "active" ? row.status === "active" : row.status !== "active")) &&
-          (!learnFilter || row.learnEnabled === (learnFilter === "on")),
+          (!learnFilter || (row.learnEnabled && !row.notLearnable) === (learnFilter === "on")),
       ),
     [props.rows, statusFilter, learnFilter],
   );
@@ -254,19 +254,32 @@ export function TrainingProductsTab(props: {
               {
                 key: "learn",
                 title: "AI Learn",
-                render: (row) => (
-                  <s-switch
-                    label={`Learn ${row.title}`}
-                    labelAccessibilityVisibility="exclusive"
-                    checked={row.learnEnabled}
-                    onInput={(e) =>
-                      submit("product-learn", {
-                        id: row.id,
-                        enabled: e.currentTarget.checked ? "true" : "false",
-                      })
-                    }
-                  />
-                ),
+                render: (row) =>
+                  row.notLearnable ? (
+                    // The AI never uses a draft, archived or unpublished product,
+                    // so its switch can't claim otherwise (same count as the dashboard).
+                    <s-stack direction="inline" gap="small-300" alignItems="center">
+                      <s-switch
+                        label={`Learn ${row.title}`}
+                        labelAccessibilityVisibility="exclusive"
+                        checked={false}
+                        disabled
+                      />
+                      <s-text color="subdued">{row.notLearnable}</s-text>
+                    </s-stack>
+                  ) : (
+                    <s-switch
+                      label={`Learn ${row.title}`}
+                      labelAccessibilityVisibility="exclusive"
+                      checked={row.learnEnabled}
+                      onInput={(e) =>
+                        submit("product-learn", {
+                          id: row.id,
+                          enabled: e.currentTarget.checked ? "true" : "false",
+                        })
+                      }
+                    />
+                  ),
               },
               // No view/eye action column (user, 2026-09-11): clicking the
               // row already opens the view modal.

@@ -510,6 +510,7 @@ entry points pin the old engine because they assert router lanes: `pipeline-hard
 | `scripts/qa/perf-queries.test.ts` | L | no |
 | `scripts/qa/features.test.ts` | E, I, Q | no |
 | `scripts/qa/human-mode.test.ts` | G (HS1–HS11, AI off = human support) | no |
+| `scripts/qa/lookup-tables.test.ts` | LT1–LT43 — spec 28 lookup tables: CSV parsing, role guess, plan row limits (200,000-row fitment file on Plus, refused on Pro), import, exact/typo/prefix/range matching, narrow_by, SKU product links, edits, tenancy, delete + cleanupShop | no |
 | `scripts/qa/routing.test.ts` | J | **yes** |
 | `scripts/qa/auth-sessions.test.ts` | K | **yes** |
 | `scripts/qa/ui-embedded.test.ts` | R | **yes** |

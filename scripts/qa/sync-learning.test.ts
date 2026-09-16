@@ -82,6 +82,10 @@ const page = (nodes: unknown[]) => ({ pageInfo: { hasNextPage: false, endCursor:
 let productPageCostLimit: number | null = null;
 /** Number of product page calls to answer with Shopify's THROTTLED error (rate limit). */
 let throttleProductPages = 0;
+/** Number of collection-sync calls (list or membership) answered with THROTTLED. */
+let throttleCollectionCalls = 0;
+/** When set, the collections list is paged this many at a time (cursor = offset). */
+let collectionPageSize: number | null = null;
 const productPageSizes: number[] = [];
 
 function gql(domain: string, query: string, vars: Record<string, any>): unknown {
@@ -110,6 +114,16 @@ function gql(domain: string, query: string, vars: Record<string, any>): unknown 
     return { data: { products: { pageInfo: { hasNextPage: hasNext, endCursor: hasNext ? String(next) : null }, nodes: slice } } };
   }
   if (query.includes("MetafieldDefinitions")) return { data: { metafieldDefinitions: page(vars.ownerType === "PRODUCT" ? s.defs.product : s.defs.variant) } };
+  if ((query.includes("CatalogSyncCollectionProducts") || query.includes("CatalogSyncCollections(")) && throttleCollectionCalls > 0) {
+    throttleCollectionCalls--;
+    return { errors: [{ message: "Throttled", extensions: { code: "THROTTLED" } }] };
+  }
+  if (query.includes("CatalogSyncCollections(") && collectionPageSize !== null) {
+    const from = vars.cursor ? Number(vars.cursor) : 0;
+    const next = from + collectionPageSize;
+    const hasNext = next < s.collections.length;
+    return { data: { collections: { pageInfo: { hasNextPage: hasNext, endCursor: hasNext ? String(next) : null }, nodes: s.collections.slice(from, next) } } };
+  }
   if (query.includes("CatalogSyncCollectionProducts")) return { data: { collection: { products: page((s.members[vars.id] ?? []).map((id) => ({ id }))) } } };
   if (query.includes("CatalogSyncCollections")) return { data: { collections: page(s.collections) } };
   if (query.includes("CatalogSyncDiscountNode")) return { data: { discountNode: s.discounts.find((d) => d.id === vars.id) ?? null } };
@@ -811,10 +825,8 @@ async function main(): Promise<void> {
       const members = await db.collectionProduct.findMany({ where: { shopId: A, collectionId: COL }, select: { shopifyProductId: true } });
       ok("SL-CO-1b", "membership mirrored from the Admin API", members.length === 2, `members=${members.length}`);
       const fresh = await one(A, "what collections do you have", "search_store_info", { question: "What collections do you have?" });
-      ok("SL-CO-1c", "a new collection arrives learn-off (spec 07 default) and is not listed until learned", !(fresh.r?.collections ?? []).includes("Moon Rituals Collection"), JSON.stringify(fresh.r?.collections));
-      await db.collection.updateMany({ where: { shopId: A, shopifyCollectionId: COL }, data: { learnEnabled: true } }); // merchant's per-row Learn switch
-      const info = await one(A, "what collections do you have", "search_store_info", { question: "What collections do you have?" });
-      ok("SL-CO-1c2", "learned → search_store_info lists the collection", (info.r?.collections ?? []).includes("Moon Rituals Collection"), JSON.stringify(info.r?.collections));
+      // 2026-09-16 (owner): new collections are learned by default, like products, pages and articles.
+      ok("SL-CO-1c", "a new collection arrives learned and is listed straight away", (fresh.r?.collections ?? []).includes("Moon Rituals Collection"), JSON.stringify(fresh.r?.collections));
       stubs[DOMAIN_A].members[COL] = [gid(7101)];
       await webhook(collectionsRoute, "collections/update", DOMAIN_A, { id: 7301, admin_graphql_api_id: COL, title: "Moon Rites Collection", body_html: "" });
       const info2 = await one(A, "what collections do you have", "search_store_info", { question: "What collections do you have?" });
@@ -831,6 +843,50 @@ async function main(): Promise<void> {
       const gone = await one(A, "what collections do you have", "search_store_info", { question: "What collections do you have?" });
       ok("SL-CO-1g", "collections/delete → job ran; row + membership gone; not listed", del.ran.includes(JOBS.collectionDelete) && (await db.collectionProduct.count({ where: { shopId: A, collectionId: COL } })) === 0 && !(gone.r?.collections ?? []).some((c: string) => c.startsWith("Moon Rit")), JSON.stringify(gone.r?.collections));
     });
+
+    await kase("SL-CO-2 full collection sync on a busy install: rate limits, chunks, learn default, prune", async () => {
+      const col = (n: number) => ({ id: `gid://shopify/Collection/74${n}`, title: `Sync Collection ${n}`, description: "", productsCount: { count: 1 }, ruleSet: null });
+      stubs[DOMAIN_A].collections = [col(1), col(2), col(3), col(4), col(5)];
+      for (const c of stubs[DOMAIN_A].collections) stubs[DOMAIN_A].members[c.id] = [gid(7101)];
+      await db.collection.create({ data: { shopId: A, shopifyCollectionId: "gid://shopify/Collection/7499", title: "Deleted in Shopify" } });
+      await db.collection.create({ data: { shopId: A, shopifyCollectionId: col(1).id, title: "Kept choice", learnEnabled: false } });
+      await new Promise((r) => setTimeout(r, 20)); // pre-existing rows are older than the run
+
+      const queued: any[] = [];
+      const realSend = (global as any).pgBossGlobal.boss.send;
+      // Captured only — the loop below runs them, and they must not reach the
+      // shared stub queue a later webhook case inspects.
+      (global as any).pgBossGlobal.boss.send = async (name: string, data: any) => {
+        queued.push({ name, data });
+        return "qa-captured";
+      };
+      throttleCollectionCalls = 2;
+      collectionPageSize = 2;
+      try {
+        await catalog.fullCollectionSync(DOMAIN_A, { budgetMs: 0 });
+        const first = queued.find((j) => j.name === "collection-sync");
+        ok("SL-CO-2a", "THROTTLED answers are waited out; an out-of-time run queues a continuation with its cursor", throttleCollectionCalls === 0 && Boolean(first?.data?.cursor) && Boolean(first?.data?.runStartedAt), JSON.stringify(first?.data));
+        let guard = 0;
+        while (queued.some((j) => j.name === "collection-sync") && guard++ < 20) {
+          const job = queued.find((j) => j.name === "collection-sync");
+          queued.splice(queued.indexOf(job), 1);
+          const { shopDomain, ...resume } = job.data;
+          await catalog.fullCollectionSync(shopDomain, { ...resume, budgetMs: 0 });
+        }
+      } finally {
+        (global as any).pgBossGlobal.boss.send = realSend;
+        throttleCollectionCalls = 0;
+        collectionPageSize = null;
+      }
+      const rows = await db.collection.findMany({ where: { shopId: A, shopifyCollectionId: { startsWith: "gid://shopify/Collection/74" } }, select: { shopifyCollectionId: true, learnEnabled: true } });
+      const state = await db.syncState.findUnique({ where: { shopId: A } });
+      ok("SL-CO-2b", "every collection synced across the chunks, sync stamped", rows.length === 5 && Boolean(state?.collectionSyncAt), `rows=${rows.length}`);
+      ok("SL-CO-2c", "new collections are learned; an existing row keeps the merchant's choice", rows.filter((r) => r.shopifyCollectionId !== col(1).id).every((r) => r.learnEnabled) && rows.find((r) => r.shopifyCollectionId === col(1).id)?.learnEnabled === false);
+      ok("SL-CO-2d", "a collection no longer in Shopify is pruned after the last chunk", (await db.collection.count({ where: { shopId: A, shopifyCollectionId: "gid://shopify/Collection/7499" } })) === 0);
+      await db.collection.deleteMany({ where: { shopId: A, shopifyCollectionId: { startsWith: "gid://shopify/Collection/74" } } });
+      await db.collectionProduct.deleteMany({ where: { shopId: A, collectionId: { startsWith: "gid://shopify/Collection/74" } } });
+      stubs[DOMAIN_A].collections = [];
+    }, 120_000);
 
     // ═══ 3b. DISCOUNTS ═══════════════════════════════════════════════════════
     const disc = (n: number, o: { title: string; code?: string; status?: string; startsAt?: string | null; endsAt?: string | null; auto?: boolean }) => ({

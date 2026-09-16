@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import db from "../../db.server";
 import { embedTexts, toSqlVector } from "../embeddings/embedding.server";
@@ -44,6 +45,9 @@ export function chunkText(text: string, options: ChunkOptions = {}): string[] {
 
 export const FAQ_SOURCE_NAME = "Store FAQs";
 
+/** Chunks per INSERT — ~200 × a 1536-float vector literal keeps a statement ~4MB. */
+const INSERT_BATCH = 200;
+
 interface Doc {
   topic: string;
   body: string;
@@ -64,6 +68,11 @@ export async function ingestSource(shopId: string, sourceId: string): Promise<In
   const source = await db.dataSource.findFirst({ where: { id: sourceId, shopId } });
   if (!source) {
     throw new Error(`knowledge-ingest: source ${sourceId} not found for shop`);
+  }
+  if (source.type === "table") {
+    // Spec 28 — lookup tables are rows, not embedded chunks.
+    const { importLookupTable } = await import("../lookup/lookup-import.server");
+    return importLookupTable(shopId, source.id);
   }
   const meta = { ...((source.metadata ?? {}) as Record<string, unknown>) };
   // The merchant's off switch survives every rebuild state: knowledge search
@@ -121,16 +130,22 @@ export async function ingestSource(shopId: string, sourceId: string): Promise<In
           SELECT pg_advisory_xact_lock(hashtext(${shopId}), hashtext(${`knowledge:${source.id}`}))
         `);
         await tx.knowledge.deleteMany({ where: { shopId, dataSourceId: source.id } });
-        for (let i = 0; i < chunks.length; i++) {
-          const row = await tx.knowledge.create({
-            data: { shopId, dataSourceId: source.id, topic: chunks[i].topic, body: chunks[i].body },
-          });
-          if (vectors) {
-            await tx.$executeRaw(Prisma.sql`
-              UPDATE "knowledge" SET "embedding" = ${toSqlVector(vectors[i])}::vector
-              WHERE "id" = ${row.id} AND "shopId" = ${shopId}
-            `);
-          }
+        // One INSERT per batch (row + embedding together). It was a create
+        // plus a raw UPDATE per chunk — fine for a web page, but a plan-sized
+        // CSV makes thousands of chunks and that many round trips could
+        // outlast the transaction timeout.
+        for (let i = 0; i < chunks.length; i += INSERT_BATCH) {
+          const batch = chunks.slice(i, i + INSERT_BATCH);
+          const ids = batch.map(() => randomUUID());
+          const topics = batch.map((c) => c.topic);
+          const bodies = batch.map((c) => c.body);
+          const embeddings = batch.map((_, j) => (vectors ? toSqlVector(vectors[i + j]) : null));
+          await tx.$executeRaw(Prisma.sql`
+            INSERT INTO "knowledge" ("id", "shopId", "dataSourceId", "topic", "body", "embedding")
+            SELECT u.id, ${shopId}, ${source.id}, u.topic, u.body, u.embedding::vector
+            FROM unnest(${ids}::text[], ${topics}::text[], ${bodies}::text[], ${embeddings}::text[])
+              AS u(id, topic, body, embedding)
+          `);
         }
         await tx.dataSource.updateMany({
           where: { id: source.id, shopId },

@@ -47,6 +47,8 @@ const QUOTA_LABELS: Record<QuotaDimension, string> = {
   faqs: "FAQs",
   crawl_pages: "URL sources",
   file_uploads: "File uploads",
+  csv_upload_mb: "CSV upload size (MB)",
+  lookup_rows: "Lookup table rows",
   metafields_enabled: "Metafields enabled for AI",
   team_seats: "Team seats",
   active_campaigns: "Active proactive campaigns",
@@ -68,6 +70,8 @@ const DATA_SOURCE_DIMENSIONS: QuotaDimension[] = [
   "faqs",
   "crawl_pages",
   "file_uploads",
+  "csv_upload_mb",
+  "lookup_rows",
 ];
 
 const QUOTA_GRID: React.CSSProperties = {

@@ -1741,9 +1741,17 @@
   }
 
   // ── footer ───────────────────────────────────────────────────────────────
-  function footer(showBranding) {
+  // "ChatConvert" links to the App Store listing (url from widget config).
+  function footer(showBranding, url) {
     var foot = el("div", "cw-foot");
-    foot.textContent = "Powered by ChatConvert";
+    foot.textContent = "Powered by ";
+    if (url && /^https:\/\/apps\.shopify\.com\//.test(url)) {
+      var a = el("a", null, { href: url, target: "_blank", rel: "noopener" });
+      a.textContent = "ChatConvert";
+      foot.appendChild(a);
+    } else {
+      foot.appendChild(document.createTextNode("ChatConvert"));
+    }
     if (!showBranding) foot.style.display = "none";
     return foot;
   }

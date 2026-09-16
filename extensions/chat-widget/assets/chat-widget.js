@@ -846,7 +846,7 @@
     ui.inputBar.style.display = "none";
     panel.appendChild(ui.inputBar);
 
-    panel.appendChild(R.footer(config.showBranding));
+    panel.appendChild(R.footer(config.showBranding, config.brandingUrl));
 
     // The home-indicator inset is dead space once the keyboard covers it — it
     // lifts the composer off the top of the keys by ~34px, which reads as the

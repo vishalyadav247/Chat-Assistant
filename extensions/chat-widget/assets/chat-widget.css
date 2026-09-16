@@ -990,6 +990,7 @@ textarea.cw-inp { resize: vertical; min-height: 64px; font-family: inherit; line
 
 /* ── Footer ────────────────────────────────────────────────────────────── */
 .cw-foot { text-align: center; font-size: 10.5px; color: var(--cw-muted-2); padding: 8px; background: var(--cw-surface); flex: none; }
+.cw-foot a { color: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
 
 /* Focus visibility + reduced motion */
 .cw-root :focus-visible { outline: 2px solid var(--cw1); outline-offset: 1px; }

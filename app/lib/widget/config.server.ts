@@ -4,6 +4,8 @@ import { aiAllowed } from "../billing/usage.server";
 import { activeCampaignsForWidget, type WidgetCampaign } from "../campaigns/campaigns.server";
 import { getShopConfig } from "../config/shop-config.server";
 import { sanitizeHtml } from "../sanitize.server";
+import { runtimeConfig } from "../admin/runtime-config.server";
+import { DEFAULT_APP_STORE_HANDLE } from "../review";
 import { resolveChatAvatar } from "./chat-avatar.server";
 import {
   availabilityTtlSeconds,
@@ -37,9 +39,11 @@ export type WidgetConfigPayload =
       currency: string;
       /** true → render "Powered by ChatConvert" footer. */
       showBranding: boolean;
+      /** App Store listing the footer's "ChatConvert" links to. */
+      brandingUrl: string;
       featuredFaqs: WidgetFeaturedFaq[];
-      /** The shop has at least one PUBLISHED FAQ. The widget hides the whole FAQ
-       *  block when false, whatever the Chatbox setting says. */
+      /** The shop has at least one FEATURED published FAQ. The widget hides the
+       *  whole FAQ block when false, whatever the Chatbox setting says. */
       faqAvailable: boolean;
       aiAvailable: boolean;
       shopDomain: string;
@@ -98,17 +102,13 @@ export async function buildWidgetConfig(
     ? !config.widget.appearance.removeBranding
     : true;
 
-  const [faqs, publishedFaqCount, categories, allowed, campaigns] = await Promise.all([
+  const [faqs, categories, allowed, campaigns] = await Promise.all([
     db.faq.findMany({
       where: { shopId, status: "published", featured: true },
       orderBy: { position: "asc" },
       take: 8,
       select: { id: true, question: true, answerHtml: true, categoryId: true },
     }),
-    // Whether the shop has ANY published FAQ, not just featured ones: the
-      // widget search can reach non-featured answers, so keying the block on
-      // `featuredFaqs` alone would hide a working search.
-    db.faq.count({ where: { shopId, status: "published" } }),
     db.faqCategory.findMany({
       where: { shopId, status: "published" },
       select: { id: true, name: true },
@@ -167,6 +167,9 @@ export async function buildWidgetConfig(
       config.widget.welcomeMessage.trim() || config.persona?.welcomeMessage?.trim() || "",
     currency: config.currency,
     showBranding,
+    // The effective listing handle (Admin → Settings, env, then the built-in
+    // slug) — the same one every other App Store link uses.
+    brandingUrl: `https://apps.shopify.com/${runtimeConfig().appStoreHandle || DEFAULT_APP_STORE_HANDLE}`,
     // Defense in depth: sanitize merchant HTML at serve time (widget injects
     // via innerHTML); write paths (07/09) sanitize on save as well.
     featuredFaqs: faqs.map((f) => ({
@@ -175,10 +178,11 @@ export async function buildWidgetConfig(
       answerHtml: sanitizeHtml(f.answerHtml),
       category: (f.categoryId && categoryName.get(f.categoryId)) || null,
     })),
-    // The merchant can switch FAQs on in Chatbox settings before writing any.
-    // Until then the block rendered as an empty search box over "No results",
-    // which reads as broken rather than unconfigured.
-    faqAvailable: publishedFaqCount > 0,
+    // The block shows only with at least one FEATURED published FAQ (owner,
+    // 2026-09-16). Published-but-none-featured used to keep the search (QA
+    // D14) and the shopper saw an empty search box over "No featured questions
+    // yet" — the same look as having no FAQs. Matches the Chatbox preview.
+    faqAvailable: faqs.length > 0,
     aiAvailable: config.aiEnabled && allowed,
     shopDomain,
     survey: config.settings.survey,
