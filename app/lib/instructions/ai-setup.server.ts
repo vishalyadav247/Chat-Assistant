@@ -26,9 +26,18 @@ import { requireShopId } from "../tenancy.server";
 //      A merchant's edit is never overwritten.
 //   3. All-or-nothing — invalid output twice leaves every field as it was.
 
+/**
+ * Model that writes the instructions. One call per store, so quality matters
+ * more than price here (a chat model runs thousands of times a day; this runs
+ * once). Override with AI_SETUP_MODEL to try a stronger model without a code
+ * change — it does not affect chat replies.
+ */
 export const AI_SETUP_MODEL = "gpt-4.1";
+export const setupModel = () => (process.env.AI_SETUP_MODEL || "").trim() || AI_SETUP_MODEL;
 /** Minimum time between two requested runs for one shop (Regenerate button). */
 export const AI_SETUP_COOLDOWN_MS = 10 * 60 * 1000;
+/** Waits for collections/discounts/pages/blogs; after this many tries, products alone are enough. */
+const WAIT_FOR_CONTENT_ATTEMPTS = 5;
 const POLICY_CHARS = 3_000;
 const PAGE_CHARS = 2_500;
 const MAX_FAQ_DRAFTS = 10;
@@ -309,7 +318,7 @@ async function generate(shopId: string, data: string): Promise<AiSetupOutput> {
           { role: "user", content: aiSetupUser(data) },
         ],
         { shopId, purpose: "setup" },
-        { model: AI_SETUP_MODEL, temperature: 0.2, maxTokens: 3000, jsonObject: true, pinnedParams: true },
+        { model: setupModel(), temperature: 0.2, maxTokens: 3000, jsonObject: true, pinnedParams: true },
       );
       return aiSetupOutputSchema.parse(JSON.parse(raw));
     } catch (error) {
@@ -338,8 +347,14 @@ export type AiSetupResult =
   | { status: "waiting" | "skipped" | "error"; reason: string };
 
 /**
- * Generate and apply the instructions for one shop. `force` rewrites again
- * after a previous run (still only AI-owned fields). Never throws.
+ * Generate and apply the instructions for one shop.
+ *
+ * `force` is the merchant pressing "Rewrite from my store": it replaces EVERY
+ * field, including text they wrote themselves (owner decision 2026-09-16 — a
+ * rewrite that silently kept every hand-written field looked like nothing had
+ * happened). The automatic run at install never does that: it only fills
+ * fields that are empty, still at the install default, or still hold the text
+ * AI wrote last time.
  */
 export async function runAiSetup(shopDomain: string, opts: { force?: boolean } = {}): Promise<AiSetupResult> {
   const shop = await db.shop.findUnique({ where: { domain: shopDomain }, select: { id: true, uninstalledAt: true } });
@@ -349,7 +364,10 @@ export async function runAiSetup(shopDomain: string, opts: { force?: boolean } =
   try {
     const [settingsRow, syncState] = await Promise.all([
       db.shopSettings.findUnique({ where: { shopId }, select: { settings: true } }),
-      db.syncState.findUnique({ where: { shopId }, select: { productSyncAt: true } }),
+      db.syncState.findUnique({
+        where: { shopId },
+        select: { productSyncAt: true, collectionSyncAt: true, discountSyncAt: true, pageSyncAt: true, articleSyncAt: true, status: true },
+      }),
     ]);
     const settings = shopSettingsSchema.parse(settingsRow?.settings ?? {});
     if (settings.aiSetup.status === "done" && !opts.force) return { status: "skipped", reason: "already done" };
@@ -358,7 +376,22 @@ export async function runAiSetup(shopDomain: string, opts: { force?: boolean } =
     if (settings.aiSetup.status === "running" && Number.isFinite(runningSince) && Date.now() - runningSince < 15 * 60 * 1000) {
       return { status: "skipped", reason: "already running" };
     }
-    if (!syncState?.productSyncAt) return { status: "waiting", reason: "products not synced yet" };
+    // The instructions are written FROM the store's data, so the first install
+    // must finish syncing it first (owner rule 2026-09-16): products, and the
+    // collections / discounts / pages / blogs queued beside them. A sync still
+    // running counts as unfinished. Pages and blogs can legitimately never
+    // arrive (missing scope, no content), so the wait gives up after
+    // WAIT_FOR_CONTENT_ATTEMPTS tries and runs with what is there.
+    const patient = (settings.aiSetup.attempts ?? 0) < WAIT_FOR_CONTENT_ATTEMPTS;
+    const missing = [
+      !syncState?.productSyncAt && "products",
+      syncState?.status === "running" && "products (still running)",
+      patient && !syncState?.collectionSyncAt && "collections",
+      patient && !syncState?.discountSyncAt && "discounts",
+      patient && !syncState?.pageSyncAt && "pages",
+      patient && !syncState?.articleSyncAt && "blog articles",
+    ].filter(Boolean) as string[];
+    if (missing.length > 0) return { status: "waiting", reason: `waiting for ${missing.join(", ")}` };
 
     await saveAiSetupState(shopId, { status: "running", requestedAt: new Date().toISOString(), error: "" });
     const policiesConnected = await connectPolicies(shopId, shopDomain);
@@ -403,7 +436,7 @@ export async function runAiSetup(shopDomain: string, opts: { force?: boolean } =
     const kept: SetupField[] = [];
     for (const field of Object.keys(proposed) as SetupField[]) {
       const { current, next } = proposed[field];
-      if (!next.trim() || !aiOwns(field, current, hashes)) {
+      if (!next.trim() || (!opts.force && !aiOwns(field, current, hashes))) {
         kept.push(field);
         continue;
       }
@@ -432,9 +465,12 @@ export async function runAiSetup(shopDomain: string, opts: { force?: boolean } =
         status: "done",
         generatedAt: new Date().toISOString(),
         reviewedAt: "",
-        model: AI_SETUP_MODEL,
+        model: setupModel(),
         hashes,
         conflicts: output.conflicts,
+        applied,
+        kept,
+        replacedAll: Boolean(opts.force),
         attempts: 0,
         error: "",
       },
@@ -490,12 +526,14 @@ export async function runAiSetup(shopDomain: string, opts: { force?: boolean } =
 
 const escapeHtml = (value: string) =>
   value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-const normQuestion = (q: string) => q.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 
 /**
  * Draft FAQs (never published — they don't reach shoppers or knowledge until
- * the merchant answers and publishes them). Skips questions the shop already
- * has; stops at the plan's FAQ quota. Answers citing unsupported facts are dropped.
+ * the merchant answers and publishes them). Every suggestion is created, with
+ * no duplicate filtering (owner rule 2026-09-16): at first install the shop has
+ * no FAQs anyway, and on a rewrite the merchant reviews the drafts and
+ * publishes or deletes them. Stops at the plan's FAQ quota; answers citing
+ * facts that are not in the store's data are dropped.
  */
 async function createFaqDrafts(
   shopId: string,
@@ -506,22 +544,19 @@ async function createFaqDrafts(
   try {
     const { ensureDefaultCategory } = await import("../faq/faq.server");
     const { getQuota } = await import("../billing/plans.server");
-    const [categoryId, existing, shop, max] = await Promise.all([
+    const [categoryId, existingCount, shop, max] = await Promise.all([
       ensureDefaultCategory(shopId),
-      db.faq.findMany({ where: { shopId }, select: { question: true } }),
+      db.faq.count({ where: { shopId } }),
       db.shop.findUnique({ where: { id: shopId }, select: { plan: true } }),
       db.faq.aggregate({ where: { shopId }, _max: { position: true } }),
     ]);
     const quota = getQuota(shop?.plan ?? "free", "faqs");
-    const seen = new Set(existing.map((f) => normQuestion(f.question)));
     let position = max._max.position ?? 0;
-    let count = existing.length;
+    let count = existingCount;
     let created = 0;
     for (const draft of drafts) {
       if (count >= quota) break;
-      const key = normQuestion(draft.question);
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
+      if (!draft.question.trim()) continue;
       const answer = draft.answer ? factGuard(draft.answer, facts).text : "";
       await db.faq.create({
         data: {
@@ -556,6 +591,12 @@ export function reviewedAiSetup(
     if (value === undefined || fieldHash(value) === hash) hashes[field] = hash;
   }
   return { ...aiSetup, hashes, reviewedAt: new Date().toISOString() };
+}
+
+/** The merchant read the AI-written instructions and is happy — clears the review notice. */
+export async function markAiSetupReviewed(shopId: string): Promise<void> {
+  requireShopId(shopId);
+  await saveAiSetupState(shopId, { reviewedAt: new Date().toISOString() });
 }
 
 /** Queue a run (install, Regenerate). Rate-limited per shop; returns whether it was queued. */

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useFetcher } from "react-router";
+import { useFetcher, useRevalidator } from "react-router";
 import { useAppBridge } from "../lib/ui/surface";
 import type { GeneralData, InstructionsActionResult } from "../routes/app.ai-agent.instructions";
 import { SaveBar } from "./SaveBar";
@@ -143,7 +143,7 @@ export function InstructionsGeneralTab(props: { initial: GeneralData }) {
     const result = regenerateFetcher.data;
     if (regenerateFetcher.state !== "idle" || !result || result.intent !== "ai-setup-regenerate") return;
     if (result.ok) {
-      shopify.toast.show("Rewriting your instructions from your store data — refresh in about a minute");
+      shopify.toast.show("Writing your instructions from your store — this takes about a minute");
     } else {
       shopify.toast.show(result.error ?? "Couldn't start — try again", { isError: true });
     }
@@ -154,6 +154,53 @@ export function InstructionsGeneralTab(props: { initial: GeneralData }) {
   const needsReview = aiWritten && !aiSetup.reviewedAt;
   const inProgress = aiSetup.status === "pending" || aiSetup.status === "running";
 
+  // While a run is in progress the page reloads itself, so the merchant sees
+  // the new instructions (and what changed) without wondering whether it
+  // finished — the first version only showed a "refresh in a minute" toast.
+  const revalidator = useRevalidator();
+  useEffect(() => {
+    if (!inProgress) return;
+    const timer = setInterval(() => {
+      if (revalidator.state === "idle") revalidator.revalidate();
+    }, 5_000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inProgress]);
+
+  // A finished run reports what it rewrote; the form still holds the old text
+  // until the page reloads, so re-seed it from the freshly loaded values.
+  const loadedSignature = JSON.stringify(props.initial);
+  useEffect(() => {
+    const next = toForm(props.initial);
+    setSaved(next);
+    setForm((prev) => (JSON.stringify(prev) === JSON.stringify(saved) ? next : prev));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadedSignature]);
+
+  // "Reviewed" is normally set by saving General; a merchant who has nothing to
+  // change needs a way to clear the notice without a pointless save.
+  const dismissFetcher = useFetcher<InstructionsActionResult>();
+  const dismissing = dismissFetcher.state !== "idle";
+
+  const generatedLabel = (() => {
+    const at = new Date(aiSetup.generatedAt);
+    if (!aiSetup.generatedAt || Number.isNaN(at.getTime())) return "";
+    return ` on ${at.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}`;
+  })();
+
+  const fieldLabels: Record<string, string> = {
+    storeInfo: "Store info",
+    role: "Role",
+    brandVoice: "Tone",
+    behaviours: "Behaviours",
+    scope: "Store scope",
+    offTopicMessage: "Off-topic message",
+    fallbackMessage: "Fallback message",
+    bannedTopics: "Banned topics",
+    language: "Language",
+  };
+  const names = (fields: string[]) => fields.map((f) => fieldLabels[f] ?? f).join(", ");
+
   return (
     <s-stack gap="base">
       <SaveBar dirty={dirty} saving={saving} onSave={save} onDiscard={discard} />
@@ -162,9 +209,21 @@ export function InstructionsGeneralTab(props: { initial: GeneralData }) {
         <s-banner tone="info" heading="Your assistant's instructions were written from your store">
           <s-stack gap="small-200">
             <s-paragraph>
-              We used your Shopify store details, policies, pages and catalogue. They&apos;re live now — review them and
-              press Save to confirm. Anything you change is never rewritten.
+              Written from your Shopify store details, policies, pages and catalogue{generatedLabel} and already saved —
+              your assistant is using them now. Read them through and edit anything that isn&apos;t right, or dismiss this
+              notice.
             </s-paragraph>
+            {aiSetup.applied.length > 0 ? (
+              <s-paragraph>
+                <s-text type="strong">Rewritten:</s-text> {names(aiSetup.applied)}.
+                {aiSetup.kept.length > 0 ? ` Left as they were: ${names(aiSetup.kept)}.` : ""}
+              </s-paragraph>
+            ) : (
+              <s-paragraph>
+                <s-text type="strong">Nothing was changed.</s-text> The store data didn&apos;t give enough to write
+                these fields, so your current instructions were kept.
+              </s-paragraph>
+            )}
             {aiSetup.conflicts.length > 0 ? (
               <s-stack gap="small-100">
                 <s-text type="strong">Your store data disagrees with itself — fix it in Shopify so the assistant is consistent:</s-text>
@@ -177,10 +236,20 @@ export function InstructionsGeneralTab(props: { initial: GeneralData }) {
             ) : null}
             {aiSetup.faqDrafts > 0 ? (
               <s-paragraph>
-                {aiSetup.faqDrafts} FAQ draft{aiSetup.faqDrafts === 1 ? "" : "s"} added in Training → FAQs — answer and
-                publish the ones you want shoppers to see.
+                {aiSetup.faqDrafts} FAQ draft{aiSetup.faqDrafts === 1 ? "" : "s"} added in Training → FAQs — publish the
+                ones you want shoppers to see and delete the rest. Drafts are never shown to shoppers.
               </s-paragraph>
             ) : null}
+            <s-stack direction="inline" gap="small-200">
+              <s-button
+                variant="secondary"
+                loading={dismissing}
+                disabled={dismissing}
+                onClick={() => dismissFetcher.submit({ intent: "ai-setup-reviewed" }, { method: "post" })}
+              >
+                I&apos;ve reviewed these
+              </s-button>
+            </s-stack>
           </s-stack>
         </s-banner>
       ) : null}
@@ -193,8 +262,10 @@ export function InstructionsGeneralTab(props: { initial: GeneralData }) {
       <s-section heading="Write from my store">
         <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="center">
           <s-paragraph color="subdued">
-            Rewrite store info, role, tone, behaviours, scope and messages from your Shopify store data. Fields you have
-            edited yourself are kept.
+            Writes store info, role, tone, behaviours, scope and messages from your Shopify store details, policies,
+            pages and catalogue. This <s-text type="strong">replaces what is in these fields</s-text>, including text
+            you wrote — your FAQs, products and other settings are untouched.
+            {aiWritten ? ` Last written${generatedLabel}.` : ""}
           </s-paragraph>
           <s-button
             icon="wand"

@@ -59,6 +59,10 @@ export interface GeneralData {
     reviewedAt: string;
     conflicts: string[];
     faqDrafts: number;
+    /** Fields the last run rewrote / left as they were, and whether it replaced merchant text. */
+    applied: string[];
+    kept: string[];
+    replacedAll: boolean;
   };
 }
 
@@ -174,6 +178,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       reviewedAt: settings.aiSetup.reviewedAt,
       conflicts: settings.aiSetup.conflicts,
       faqDrafts: settings.aiSetup.faqDrafts,
+      applied: settings.aiSetup.applied,
+      kept: settings.aiSetup.kept,
+      replacedAll: settings.aiSetup.replacedAll,
     },
   };
 
@@ -210,6 +217,13 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<Instructi
     switch (intent) {
       case "save-general": {
         await saveGeneralInstructions(shopId, payload);
+        return { ok: true, intent };
+      }
+      case "ai-setup-reviewed": {
+        // "I've reviewed these" — the instructions are already saved and live,
+        // so the notice must be clearable without a pointless re-save.
+        const { markAiSetupReviewed } = await import("../lib/instructions/ai-setup.server");
+        await markAiSetupReviewed(shopId);
         return { ok: true, intent };
       }
       case "ai-setup-regenerate": {

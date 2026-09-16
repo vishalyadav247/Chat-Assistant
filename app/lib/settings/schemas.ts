@@ -200,6 +200,11 @@ export const aiSetupSchema = z.object({
   conflicts: z.array(z.string().max(300)).max(10).catch([]),
   /** FAQ drafts created by the last run. */
   faqDrafts: z.number().int().min(0).catch(0),
+  /** Fields the last run rewrote, and fields it left alone (shown to the merchant). */
+  applied: z.array(z.string().max(40)).max(20).catch([]),
+  kept: z.array(z.string().max(40)).max(20).catch([]),
+  /** The last run replaced the merchant's own text (Rewrite button) rather than only defaults. */
+  replacedAll: z.boolean().catch(false),
   /** Wait-for-sync attempts of the current run. */
   attempts: z.number().int().min(0).catch(0),
   error: z.string().max(300).catch(""),

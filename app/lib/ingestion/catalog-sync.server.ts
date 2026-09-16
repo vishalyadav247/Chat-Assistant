@@ -395,8 +395,16 @@ async function allProductIds(
   }
 }
 
-/** The first GraphQL error message (the client wraps them), else the error text. */
+/**
+ * The first GraphQL error message (the client wraps them), else the error text.
+ * A raw Response (the Admin client throws one for 401/403/404) stringifies to
+ * "[object Response]", which told an operator nothing — its status is reported.
+ */
 function graphqlErrorMessage(error: unknown): string {
+  if (error instanceof Response) {
+    const hint = error.status === 401 || error.status === 403 ? " — the store's access token is no longer valid (reinstall the app)" : "";
+    return `Shopify returned HTTP ${error.status}${hint}`;
+  }
   const e = error as { body?: { errors?: { graphQLErrors?: { message?: string }[] } }; message?: string };
   return e?.body?.errors?.graphQLErrors?.[0]?.message?.split("\n")[0] ?? e?.message ?? String(error);
 }

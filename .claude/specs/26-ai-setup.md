@@ -51,6 +51,27 @@ This feature does the same for every store, once, right after install.
      stop at the plan's FAQ quota. Drafts never reach shoppers or knowledge.
    - `settings.aiSetup = { status: done, generatedAt, model, hashes, conflicts, faqDrafts, reviewedAt: "" }`.
      Events `ai_setup_completed` / `ai_setup_error` / `ai_setup_facts_removed`.
+### Rewrite vs the automatic run (owner decision 2026-09-16)
+
+- **"Rewrite from my store" (force) replaces EVERY field**, including text the merchant wrote. The
+  first version kept every hand-written field, so a merchant who had filled the fields in saw
+  "nothing happened" (production ankastra: `applied 0 field(s)`, all 9 kept).
+- **The automatic run at install still never overwrites merchant text** — only empty fields, install
+  defaults, or text AI wrote last time (`hashes`).
+- Each run records `applied`, `kept` and `replacedAll` in `settings.aiSetup`, and the banner names
+  the fields it rewrote; the page revalidates every 5 s while a run is pending/running, so the
+  merchant sees the result instead of a "refresh in a minute" toast.
+- FAQ drafts also skip NEAR-duplicates (`similarQuestion`: ≥ 80% of meaningful words shared), so
+  "How can I contact Ankastra?" is not added next to the merchant's "How can I contact you?".
+
+### Model and cost
+
+`AI_SETUP_MODEL` (env) overrides the default `gpt-4.1` for this one call — it never affects chat
+replies. The collected data is bounded by shape, not catalogue size: ≤ 8 policies × 3,000 chars,
+≤ 4 pages × 2,500 chars, 20 collections, 15 types, 30 tags, 30 example titles, 10 discount titles.
+A 10,000-product store therefore costs the same as a 50-product store: ≈ 3–6k input + 1.5k output
+tokens, **about $0.02–0.05 per run**.
+
 3. **Merchant**:
    - Instructions → General banner: "written from your store — review", listing the conflicts found in
      the store's own data and the FAQ draft count.

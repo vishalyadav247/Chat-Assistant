@@ -179,8 +179,15 @@ async function main(): Promise<void> {
     bossSent.length = 0;
     await setup.aiSetupJob({ shopDomain: DOMAIN_A });
     ok("AS-3b", "the job re-queues itself with a delay while waiting", bossSent.some((s) => s.name === "ai-setup" && (s.options as { startAfter?: number })?.startAfter === 180));
+    ok("AS-3d", "after enough attempts it stops waiting for pages/blogs and runs on what synced", /WAIT_FOR_CONTENT_ATTEMPTS/.test(readFileSync("app/lib/instructions/ai-setup.server.ts", "utf-8")));
+    // Products synced, the rest of the install sync still running: setup waits
+    // (owner rule 2026-09-16 — instructions are written FROM the store's data).
     await db.syncState.create({ data: { shopId: shopA.id, productSyncAt: new Date() } });
-    await db.syncState.create({ data: { shopId: shopB.id, productSyncAt: new Date() } });
+    const halfway = await setup.runAiSetup(DOMAIN_A);
+    ok("AS-3c", "products alone is not enough — it waits for the rest of the first sync", halfway.status === "waiting" && /collections|pages/.test(halfway.reason), JSON.stringify(halfway));
+    const synced = { productSyncAt: new Date(), collectionSyncAt: new Date(), discountSyncAt: new Date(), pageSyncAt: new Date(), articleSyncAt: new Date(), status: "idle" };
+    await db.syncState.update({ where: { shopId: shopA.id }, data: synced });
+    await db.syncState.create({ data: { shopId: shopB.id, ...synced } });
 
     console.log("\n[AS-4] first run applies AI-owned fields");
     setupPrompts.length = 0;
@@ -220,12 +227,37 @@ async function main(): Promise<void> {
     });
     const reviewed = await settingsOf(shopA.id);
     ok("AS-6a", "saving General marks the setup reviewed and drops the edited field's hash", reviewed.aiSetup.reviewedAt !== "" && !reviewed.aiSetup.hashes.role && Boolean(reviewed.aiSetup.hashes.scope));
+    // Owner decision 2026-09-16: the Rewrite button replaces EVERY field,
+    // merchant text included — a rewrite that kept every hand-written field
+    // looked like nothing had happened.
     nextSetupOutputs = [JSON.stringify({ ...GOOD, role: "You are the NEW AI role.", scope: "Lamps, lighting and bulbs", faqDrafts: [{ question: "Do you ship internationally?", answer: null }] })];
     const forced = await setup.runAiSetup(DOMAIN_A, { force: true });
     const personaA2 = await db.persona.findUnique({ where: { shopId: shopA.id } });
-    ok("AS-6b", "forced rewrite keeps the merchant's role", personaA2?.role === "You are Maya, the merchant's own words." && forced.status === "done" && forced.kept.includes("role"), JSON.stringify(forced));
-    ok("AS-6c", "…and rewrites the field still holding AI text", personaA2?.scope === "Lamps, lighting and bulbs");
-    ok("AS-6d", "a duplicate FAQ question is not created twice", (await db.faq.count({ where: { shopId: shopA.id } })) === 3);
+    ok("AS-6b", "Rewrite (force) replaces the merchant's own role too", personaA2?.role === "You are the NEW AI role." && forced.status === "done" && forced.applied.includes("role"), JSON.stringify(forced));
+    // Only a field the model left empty (here: the fallback, whose invented
+    // email the fact guard removed) is ever skipped by a forced rewrite.
+    ok(
+      "AS-6c",
+      "…and every other field the model wrote",
+      personaA2?.scope === "Lamps, lighting and bulbs" &&
+        forced.status === "done" &&
+        forced.kept.every((f: string) => f === "fallbackMessage"),
+      `kept=${forced.status === "done" ? forced.kept.join(",") : "?"}`,
+    );
+    // Owner rule 2026-09-16: never filter FAQ drafts — the merchant reviews
+    // them, publishes what they want and deletes the rest.
+    ok("AS-6d", "every suggested question is drafted again, duplicates included", (await db.faq.count({ where: { shopId: shopA.id, status: "draft" } })) === 4);
+    const settingsAfterForce = await settingsOf(shopA.id);
+    ok("AS-6e", "the run records what it rewrote, for the merchant's banner", settingsAfterForce.aiSetup.applied.includes("role") && settingsAfterForce.aiSetup.replacedAll === true, JSON.stringify(settingsAfterForce.aiSetup.applied));
+    // The automatic (install) run still protects merchant text.
+    await db.persona.updateMany({ where: { shopId: shopA.id }, data: { role: "Merchant role again." } });
+    await db.shopSettings.update({
+      where: { shopId: shopA.id },
+      data: { settings: shopSettingsSchema.parse({ ...settingsAfterForce, aiSetup: { ...settingsAfterForce.aiSetup, status: "none" } }) as never },
+    });
+    nextSetupOutputs = [JSON.stringify({ ...GOOD, role: "Automatic run role.", faqDrafts: [] })];
+    const auto = await setup.runAiSetup(DOMAIN_A);
+    ok("AS-6f", "the automatic run never replaces merchant text", (await db.persona.findUnique({ where: { shopId: shopA.id } }))?.role === "Merchant role again." && auto.status === "done" && auto.kept.includes("role"), JSON.stringify(auto));
 
     console.log("\n[AS-7] invalid model output twice → nothing written");
     nextSetupOutputs = ["not json", "{\"role\": 5}"];
