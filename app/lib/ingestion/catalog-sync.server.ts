@@ -28,9 +28,16 @@ import { syncProductPassages } from "./product-passages.server";
 // Every product + variant metafield is stored (Product.metafields) so the
 // Manage metafields modal can enable/disable without another Shopify call.
 
+// Page size is a variable: Shopify rejects any single query whose REQUESTED
+// cost exceeds 1,000 points, and nested variant/product metafield connections
+// made a 100-product page cost 1,190 — every production product sync failed
+// from 2026-09-08 ("Query cost is 1190, which exceeds the single query max cost
+// limit"). Pages start at PRODUCT_PAGE_SIZE and halve automatically on that error.
+const PRODUCT_PAGE_SIZE = 50;
+const PRODUCT_PAGE_MIN = 5;
 const PRODUCTS_QUERY = `#graphql
-  query CatalogSyncProducts($cursor: String) {
-    products(first: 100, after: $cursor) {
+  query CatalogSyncProducts($cursor: String, $first: Int!) {
+    products(first: $first, after: $cursor) {
       pageInfo { hasNextPage endCursor }
       nodes {
         id
@@ -137,7 +144,28 @@ interface SyncedProduct {
   metafields?: StoredMetafield[];
 }
 
-export async function fullCatalogSync(shopDomain: string): Promise<void> {
+/**
+ * A catalogue of any size syncs in RESUMABLE CHUNKS (owner rule 2026-09-15:
+ * product sync may be slow, but it must not error, and a store may have 10,000
+ * products). The queue expires a job after 15 minutes and then retries it from
+ * the beginning, so a long run could never finish: each run now works for at
+ * most CHUNK_BUDGET_MS, then queues a continuation with its cursor. Deletions
+ * are reconciled once, after the LAST chunk.
+ */
+const CHUNK_BUDGET_MS = 5 * 60 * 1000;
+
+export interface CatalogSyncChunk {
+  /** Shopify page cursor to resume from (null = start). */
+  cursor?: string | null;
+  /** Products already written by earlier chunks of this run. */
+  processed?: number;
+  /** Continuation chunks of one logical sync, for logging. */
+  chunk?: number;
+  /** Time budget for this run before it continues in a new job (tests pass a small value). */
+  budgetMs?: number;
+}
+
+export async function fullCatalogSync(shopDomain: string, resume: CatalogSyncChunk = {}): Promise<void> {
   const shopId = await existingShopId(shopDomain);
   if (!shopId) return;
   await db.syncState.upsert({
@@ -159,16 +187,33 @@ export async function fullCatalogSync(shopDomain: string): Promise<void> {
     // metaobject shared by many products is fetched once per run.
     const enabledMetafields = await loadEnabledMetafields(shopId);
     const metaobjectCache = new Map<string, string>();
-    let cursor: string | null = null;
-    let total = 0;
+    let cursor: string | null = resume.cursor ?? null;
+    let total = resume.processed ?? 0;
     let capped = false;
-    // Every Shopify id seen in this run — rows not in this set were deleted in
-    // Shopify while a webhook was missed and are pruned after a COMPLETE run.
-    const seenIds = new Set<string>();
+    const startedAt = Date.now();
 
+    let pageSize = PRODUCT_PAGE_SIZE;
+    let throttledRetries = 0;
     do {
-      const response = await admin.graphql(PRODUCTS_QUERY, { variables: { cursor } });
+      let response: Awaited<ReturnType<typeof admin.graphql>> | null = null;
+      while (!response) {
+        try {
+          response = await admin.graphql(PRODUCTS_QUERY, { variables: { cursor, first: pageSize } });
+        } catch (error) {
+          if (isThrottledError(error) && throttledRetries < THROTTLE_MAX_RETRIES) {
+            // Rate limit (points bucket empty): wait for it to refill, then retry the same page.
+            throttledRetries++;
+            await sleep(THROTTLE_BACKOFF_MS * throttledRetries);
+            continue;
+          }
+          if (!isQueryCostError(error) || pageSize <= PRODUCT_PAGE_MIN) throw error;
+          pageSize = Math.max(PRODUCT_PAGE_MIN, Math.floor(pageSize / 2));
+          logWarn("catalog_sync_page_shrunk", `query cost limit — retrying with ${pageSize} products per page`, { shopId });
+        }
+      }
+      throttledRetries = 0;
       const body = (await response.json()) as {
+        extensions?: ShopifyCostExtensions;
         data: {
           products: {
             pageInfo: { hasNextPage: boolean; endCursor: string | null };
@@ -248,9 +293,23 @@ export async function fullCatalogSync(shopDomain: string): Promise<void> {
         metaobjectCache,
       );
       await upsertProducts(shopId, products);
-      for (const product of products) seenIds.add(product.shopifyProductId);
       total += products.length;
       cursor = !capped && page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+      // Out of time for this run: hand the cursor to a continuation job so a
+      // 10,000-product catalogue finishes across as many chunks as it needs,
+      // instead of being killed by the queue's job expiry.
+      if (cursor && Date.now() - startedAt > (resume.budgetMs ?? CHUNK_BUDGET_MS)) {
+        const chunk = (resume.chunk ?? 0) + 1;
+        await db.syncState.update({ where: { shopId }, data: { productCount: total } });
+        const { enqueue } = await import("../jobs/queue.server");
+        const { JOBS } = await import("../jobs/handlers.server");
+        await enqueue(JOBS.catalogSync, { shopDomain, cursor, processed: total, chunk } satisfies CatalogSyncChunk & { shopDomain: string });
+        logWarn("catalog_sync_continues", `chunk ${chunk}: ${total} products so far`, { shopId });
+        return;
+      }
+      // Pace large catalogues: if the next page would not fit in the points
+      // bucket, wait until it has refilled instead of being throttled.
+      if (cursor) await waitForQueryBudget(body.extensions);
     } while (cursor);
 
     // QA D7: reconcile deletions. Only after a full, uncapped enumeration —
@@ -259,10 +318,16 @@ export async function fullCatalogSync(shopDomain: string): Promise<void> {
     // Mirrors deleteProductFromWebhook (the Product row is the only table the
     // delete webhook touches — embeddings live on the row itself).
     if (!capped) {
-      const pruned = await db.product.deleteMany({
-        where: { shopId, shopifyProductId: { notIn: [...seenIds] } },
-      });
-      if (pruned.count > 0) console.log(`catalog_sync_pruned ${shopDomain} products=${pruned.count}`);
+      // Ids only — one cheap query per 250 products, so reconciliation works
+      // for a 10,000-product catalogue without holding a run-long id set in
+      // memory across continuation chunks.
+      const liveIds = await allProductIds(admin);
+      if (liveIds) {
+        const pruned = await db.product.deleteMany({
+          where: { shopId, shopifyProductId: { notIn: [...liveIds] } },
+        });
+        if (pruned.count > 0) console.log(`catalog_sync_pruned ${shopDomain} products=${pruned.count}`);
+      }
     }
 
     await db.syncState.update({
@@ -280,12 +345,98 @@ export async function fullCatalogSync(shopDomain: string): Promise<void> {
       logError("metafield_definitions_sync_error", error, { shopDomain }),
     );
   } catch (error) {
+    const message = graphqlErrorMessage(error);
     await db.syncState.update({
       where: { shopId },
-      data: { status: "error", errorMessage: String(error).slice(0, 500) },
+      data: { status: "error", errorMessage: message.slice(0, 500) },
     });
+    // Visible in /admin → Logs: the 2026-09 failure only lived in pg-boss job
+    // output, so every store's product sync failed for a week unnoticed.
+    logError("catalog_sync_error", message, { shopId });
     throw error;
   }
+}
+
+const PRODUCT_IDS_QUERY = `#graphql
+  query CatalogSyncProductIds($cursor: String) {
+    products(first: 250, after: $cursor) {
+      pageInfo { hasNextPage endCursor }
+      nodes { id }
+    }
+  }
+`;
+
+/**
+ * Every product id in the shop (ids only — 250 per page). Returns null when the
+ * enumeration could not be completed: deletions are then left alone rather than
+ * pruning products that simply were not listed.
+ */
+async function allProductIds(
+  admin: Awaited<ReturnType<typeof unauthenticated.admin>>["admin"],
+): Promise<Set<string> | null> {
+  const ids = new Set<string>();
+  let cursor: string | null = null;
+  try {
+    do {
+      const response = await admin.graphql(PRODUCT_IDS_QUERY, { variables: { cursor } });
+      const body = (await response.json()) as {
+        extensions?: ShopifyCostExtensions;
+        data?: { products?: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: { id: string }[] } };
+      };
+      const page = body.data?.products;
+      if (!page) return null;
+      for (const node of page.nodes) ids.add(node.id);
+      cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+      if (cursor) await waitForQueryBudget(body.extensions);
+    } while (cursor);
+    return ids;
+  } catch {
+    return null;
+  }
+}
+
+/** The first GraphQL error message (the client wraps them), else the error text. */
+function graphqlErrorMessage(error: unknown): string {
+  const e = error as { body?: { errors?: { graphQLErrors?: { message?: string }[] } }; message?: string };
+  return e?.body?.errors?.graphQLErrors?.[0]?.message?.split("\n")[0] ?? e?.message ?? String(error);
+}
+
+function isQueryCostError(error: unknown): boolean {
+  return /max cost limit|exceeds the single query/i.test(graphqlErrorMessage(error));
+}
+
+// ── Rate limit pacing ───────────────────────────────────────────────────────
+// Shopify's GraphQL Admin API spends points from a bucket that refills at
+// `restoreRate` points per second. A page needs `requestedQueryCost` points
+// available before it runs; when the bucket is short, the call is throttled.
+const THROTTLE_MAX_RETRIES = 6;
+const THROTTLE_BACKOFF_MS = 2_000;
+/** Never wait longer than this for one page (a misreported bucket must not stall a job). */
+const MAX_BUDGET_WAIT_MS = 30_000;
+
+interface ShopifyCostExtensions {
+  cost?: {
+    requestedQueryCost?: number;
+    throttleStatus?: { currentlyAvailable?: number; restoreRate?: number };
+  };
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function isThrottledError(error: unknown): boolean {
+  return /throttled/i.test(graphqlErrorMessage(error)) || /THROTTLED/.test(JSON.stringify((error as { body?: unknown })?.body ?? ""));
+}
+
+/** Wait until the bucket holds enough points for another page like the last one. */
+export async function waitForQueryBudget(extensions: ShopifyCostExtensions | undefined): Promise<number> {
+  const cost = extensions?.cost;
+  const needed = cost?.requestedQueryCost ?? 0;
+  const available = cost?.throttleStatus?.currentlyAvailable;
+  const rate = cost?.throttleStatus?.restoreRate ?? 0;
+  if (!needed || available === undefined || available >= needed || rate <= 0) return 0;
+  const waitMs = Math.min(MAX_BUDGET_WAIT_MS, Math.ceil(((needed - available) / rate) * 1000) + 250);
+  await sleep(waitMs);
+  return waitMs;
 }
 
 export async function upsertProductFromWebhook(shopDomain: string, payload: unknown): Promise<void> {
@@ -461,7 +612,20 @@ async function upsertProducts(shopId: string, products: SyncedProduct[]): Promis
     forPassages.push({ id: row.id, title: row.title, description: row.description });
   }
 
-  await embedProducts(shopId, toEmbed);
+  // An embedding outage must not fail the sync (the rows are already correct)
+  // AND must not be forgotten: contentHash is what tells the next run "this
+  // product is unchanged", so it is cleared for the rows whose vector never
+  // arrived — the next sync embeds them again instead of leaving them
+  // unsearchable forever.
+  try {
+    await embedProducts(shopId, toEmbed);
+  } catch (error) {
+    logError("catalog_sync_embed_error", error, { shopId, products: toEmbed.length });
+    await db.product.updateMany({
+      where: { shopId, id: { in: toEmbed.map((e) => e.id) } },
+      data: { contentHash: "" },
+    });
+  }
   // Spec 25: passages for long descriptions — rebuilt only when the description
   // changed (the sync checks its own source hash), and never fails the sync.
   await syncProductPassages(shopId, forPassages);

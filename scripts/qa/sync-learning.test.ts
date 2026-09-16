@@ -78,13 +78,37 @@ const stubs: Record<string, ShopStub> = { [DOMAIN_A]: emptyStub(), [DOMAIN_B]: e
 const crawl = new Map<string, string | Error>();
 const page = (nodes: unknown[]) => ({ pageInfo: { hasNextPage: false, endCursor: null }, nodes });
 
+/** When set, a products page larger than this is rejected like Shopify's 1,000-point query cost limit. */
+let productPageCostLimit: number | null = null;
+/** Number of product page calls to answer with Shopify's THROTTLED error (rate limit). */
+let throttleProductPages = 0;
+const productPageSizes: number[] = [];
+
 function gql(domain: string, query: string, vars: Record<string, any>): unknown {
   const s = stubs[domain];
+  if (query.includes("CatalogSyncProducts(")) productPageSizes.push(Number(vars.first));
+  if (query.includes("CatalogSyncProducts(") && throttleProductPages > 0) {
+    throttleProductPages--;
+    return { errors: [{ message: "Throttled", extensions: { code: "THROTTLED" } }] };
+  }
+  if (query.includes("CatalogSyncProducts(") && productPageCostLimit !== null && Number(vars.first) > productPageCostLimit) {
+    return { errors: [{ message: "Query cost is 1190, which exceeds the single query max cost limit (1000).\n\nSee https://shopify.dev/docs/api/usage/rate-limits" }] };
+  }
   if (query.includes("CatalogSyncProductMetafields")) {
     const p = s.products.find((n) => n.id === vars.id);
     return { data: { product: p ? { metafields: p.metafields, variants: { nodes: p.variants.nodes.map((v: any) => ({ title: v.title, metafields: v.metafields })) } } : null } };
   }
-  if (query.includes("CatalogSyncProducts")) return { data: { products: page(s.products) } };
+  if (query.includes("CatalogSyncProductIds")) return { data: { products: page(s.products.map((p: any) => ({ id: p.id }))) } };
+  if (query.includes("CatalogSyncProducts")) {
+    // Paged when the caller asks for fewer products than the stub holds, so
+    // continuation chunks (cursor handoff) can be exercised.
+    const first = Number(vars.first) || s.products.length;
+    const from = vars.cursor ? Number(vars.cursor) : 0;
+    const slice = s.products.slice(from, from + first);
+    const next = from + first;
+    const hasNext = next < s.products.length;
+    return { data: { products: { pageInfo: { hasNextPage: hasNext, endCursor: hasNext ? String(next) : null }, nodes: slice } } };
+  }
   if (query.includes("MetafieldDefinitions")) return { data: { metafieldDefinitions: page(vars.ownerType === "PRODUCT" ? s.defs.product : s.defs.variant) } };
   if (query.includes("CatalogSyncCollectionProducts")) return { data: { collection: { products: page((s.members[vars.id] ?? []).map((id) => ({ id }))) } } };
   if (query.includes("CatalogSyncCollections")) return { data: { collections: page(s.collections) } };
@@ -483,6 +507,69 @@ async function main(): Promise<void> {
       ok("SL-PR-1h", "every synced product has a vector", Number(withVec[0]?.n) === 10, `embedded=${withVec[0]?.n}`);
       await db.product.updateMany({ where: { shopId: A, shopifyProductId: gid(7109) }, data: { learnEnabled: false } });
     });
+
+    await kase("SL-PR-1q query cost limit → smaller pages, sync still completes", async () => {
+      // Production 2026-09-08…15: every product sync failed with "Query cost is
+      // 1190, which exceeds the single query max cost limit (1000)".
+      productPageCostLimit = 20;
+      productPageSizes.length = 0;
+      try {
+        await catalog.fullCatalogSync(DOMAIN_A);
+      } finally {
+        productPageCostLimit = null;
+      }
+      const state = await db.syncState.findUnique({ where: { shopId: A } });
+      ok("SL-PR-1qa", "the first page asks for at most 50 products", productPageSizes[0] <= 50, `sizes=${productPageSizes.join(",")}`);
+      ok("SL-PR-1qb", "a cost-limit error halves the page size until it fits", productPageSizes.includes(12) && productPageSizes.at(-1)! <= 20, `sizes=${productPageSizes.join(",")}`);
+      ok("SL-PR-1qc", "the sync completes (status idle, all products kept)", state?.status === "idle" && (await db.product.count({ where: { shopId: A } })) === 10, `status=${state?.status} error=${state?.errorMessage}`);
+    });
+
+    await kase("SL-PR-1r rate limit → waits and retries, sync still completes", async () => {
+      throttleProductPages = 2;
+      const startedAt = Date.now();
+      try {
+        await catalog.fullCatalogSync(DOMAIN_A);
+      } finally {
+        throttleProductPages = 0;
+      }
+      const state = await db.syncState.findUnique({ where: { shopId: A } });
+      ok("SL-PR-1ra", "two THROTTLED answers are waited out and the sync completes", state?.status === "idle" && (await db.product.count({ where: { shopId: A } })) === 10, `status=${state?.status} error=${state?.errorMessage}`);
+      ok("SL-PR-1rb", "it actually slowed down (backoff before each retry)", Date.now() - startedAt >= 5_000, `${Date.now() - startedAt}ms`);
+      const waited = await catalog.waitForQueryBudget({ cost: { requestedQueryCost: 600, throttleStatus: { currentlyAvailable: 100, restoreRate: 1000 } } });
+      const none = await catalog.waitForQueryBudget({ cost: { requestedQueryCost: 600, throttleStatus: { currentlyAvailable: 900, restoreRate: 50 } } });
+      ok("SL-PR-1rc", "a short points bucket waits for the refill; a full one does not wait", waited >= 500 && waited < 2_000 && none === 0, `waited=${waited} none=${none}`);
+    }, 120_000);
+
+    await kase("SL-PR-1s a big catalogue syncs in resumable chunks (10k-safe)", async () => {
+      // The queue kills a job after 15 minutes; a run that is out of time must
+      // hand its cursor to a continuation job instead of being restarted.
+      const queued: any[] = [];
+      const realSend = (global as any).pgBossGlobal.boss.send;
+      (global as any).pgBossGlobal.boss.send = async (name: string, data: any, opts: any) => {
+        queued.push({ name, data });
+        return realSend(name, data, opts);
+      };
+      productPageCostLimit = 5; // forces 5-product pages, so 10 products need several
+      try {
+        await catalog.fullCatalogSync(DOMAIN_A, { budgetMs: 0 });
+        const first = queued.find((j) => j.name === "catalog-sync");
+        ok("SL-PR-1sa", "a run out of time queues a continuation with its cursor", Boolean(first?.data?.cursor) && first.data.processed > 0, JSON.stringify(first?.data));
+        // Drain the continuations the way the worker would.
+        let guard = 0;
+        while (queued.some((j) => j.name === "catalog-sync") && guard++ < 50) {
+          const job = queued.find((j) => j.name === "catalog-sync");
+          queued.splice(queued.indexOf(job), 1);
+          await catalog.fullCatalogSync(DOMAIN_A, { cursor: job.data.cursor, processed: job.data.processed, chunk: job.data.chunk, budgetMs: 0 });
+        }
+        const state = await db.syncState.findUnique({ where: { shopId: A } });
+        ok("SL-PR-1sb", "the chunks finish the catalogue: every product stored, status idle", (await db.product.count({ where: { shopId: A } })) === 10 && state?.status === "idle" && state.productCount === 10, `count=${await db.product.count({ where: { shopId: A } })} status=${state?.status} productCount=${state?.productCount}`);
+      } finally {
+        (global as any).pgBossGlobal.boss.send = realSend;
+        productPageCostLimit = null;
+        // The continuations this case queued must not leak into later cases.
+        for (let i = sentJobs.length - 1; i >= 0; i--) if (sentJobs[i].name === "catalog-sync") sentJobs.splice(i, 1);
+      }
+    }, 120_000);
 
     await kase("SL-PR-2 search_products / get_product / show_products reflect the sync", async () => {
       const s = await one(A, "show me moonglow bracelets", "search_products", { query: "moonglow bracelet" });

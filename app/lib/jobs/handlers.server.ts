@@ -3,6 +3,7 @@ import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
 import {
   fullCatalogSync,
+  type CatalogSyncChunk,
   fullCollectionSync,
   fullDiscountSync,
   upsertProductFromWebhook,
@@ -72,8 +73,14 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
     });
   }
 
-  await boss.work<ShopJob>(JOBS.catalogSync, async ([job]) => {
-    await fullCatalogSync(job.data.shopDomain);
+  // Resumable: a chunk that runs out of time queues its own continuation with
+  // the cursor it reached, so a 10,000-product catalogue finishes in pieces.
+  await boss.work<ShopJob & CatalogSyncChunk>(JOBS.catalogSync, async ([job]) => {
+    await fullCatalogSync(job.data.shopDomain, {
+      cursor: job.data.cursor ?? null,
+      processed: job.data.processed ?? 0,
+      chunk: job.data.chunk ?? 0,
+    });
   });
 
   await boss.work<ShopJob>(JOBS.collectionSync, async ([job]) => {
