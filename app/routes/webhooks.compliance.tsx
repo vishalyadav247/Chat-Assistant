@@ -22,23 +22,34 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         break;
       }
       const shopId = shopRow.id;
-      const p = payload as { customer?: { email?: string } };
+      // Payload (shopify.dev, verified 2026-09-14): customer { id, email, phone }.
+      // Keep all three so the export matches contacts exactly like customer
+      // redact does (QA-C4) — a logged-in contact may have no email at all.
+      const p = payload as { customer?: { email?: string; id?: number | string; phone?: string } };
       const customerEmail = (p.customer?.email ?? "").trim();
-      if (!customerEmail) {
-        // Nothing to match a contact on — an empty-email DataRequest row would
-        // be unfulfillable. Log (no PII) so the SLA clock is still visible.
-        logWarn("customers_data_request_missing_email", undefined, { shopId });
+      const shopifyCustomerId =
+        p.customer?.id !== undefined && p.customer?.id !== null && String(p.customer.id).trim()
+          ? String(p.customer.id).trim()
+          : null;
+      const customerPhone = (p.customer?.phone ?? "").trim() || null;
+      if (!customerEmail && !shopifyCustomerId && !customerPhone) {
+        // Nothing to match a contact on. Log (no PII) so the SLA clock is visible.
+        logWarn("customers_data_request_missing_identity", undefined, { shopId });
         break;
       }
       // Review m2: Shopify redelivers on timeout — don't stack duplicate
-      // pending requests for the same customer (no dedicated id column;
-      // a recent pending row for the same email is the same request).
+      // pending requests for the same customer: a recent pending row with the
+      // same email or customer id is the same request.
       const recent = await db.dataRequest.findFirst({
         where: {
           shopId,
-          customerEmail,
           status: "pending",
           requestedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+          OR: [
+            ...(customerEmail ? [{ customerEmail }] : []),
+            ...(shopifyCustomerId ? [{ shopifyCustomerId }] : []),
+            ...(!customerEmail && !shopifyCustomerId && customerPhone ? [{ customerPhone }] : []),
+          ],
         },
       });
       if (!recent) {
@@ -46,6 +57,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           data: {
             shopId,
             customerEmail,
+            shopifyCustomerId,
+            customerPhone,
             dueAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30-day SLA
           },
         });
@@ -53,11 +66,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       break;
     }
     case "CUSTOMERS_REDACT": {
-      const p = payload as { customer?: { email?: string; id?: number } };
+      const p = payload as { customer?: { email?: string; id?: number; phone?: string } };
       await enqueue(JOBS.customerRedact, {
         shopDomain: shop,
         customerEmail: p.customer?.email,
         customerId: p.customer?.id ? String(p.customer.id) : undefined,
+        customerPhone: p.customer?.phone,
       });
       break;
     }

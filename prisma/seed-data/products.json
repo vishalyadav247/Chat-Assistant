@@ -38,5 +38,8 @@
   { "title": "Canvas Weekender Bag", "type": "bag", "price": 68, "stock": 11, "description": "water-resistant canvas weekender duffel with shoe pocket" },
   { "title": "Wool Blend Overcoat", "type": "jacket", "price": 145, "stock": 6, "description": "tailored wool-blend overcoat, warm and formal" },
   { "title": "Kids Dinosaur Hoodie", "type": "kids", "price": 27, "stock": 19, "description": "soft cotton kids hoodie with dinosaur print" },
-  { "title": "Smart LED Desk Lamp", "type": "electronics", "price": 44, "stock": 16, "description": "dimmable LED desk lamp with USB charging port and timer" }
+  { "title": "Smart LED Desk Lamp", "type": "electronics", "price": 44, "stock": 16, "description": "dimmable LED desk lamp with USB charging port and timer" },
+  { "title": "Black Onyx Beaded Bracelet", "type": "bracelet", "price": 32, "stock": 15, "description": "polished 8 mm black onyx beads on a stretch cord, a grounding stone for focus and confidence" },
+  { "title": "Rose Quartz Beaded Bracelet", "type": "bracelet", "price": 30, "stock": 12, "description": "soft pink rose quartz beads on a stretch cord, the stone of love, harmony and self-care. Style tips: pairs beautifully with black, white or beige outfits. Care: wipe with a soft dry cloth and keep it overnight on a selenite plate or next to a clear quartz crystal to recharge" },
+  { "title": "Selenite Crystal Bracelet", "type": "bracelet", "price": 28, "stock": 10, "description": "white selenite crystal beads for calm and mental clarity; keep it dry" }
 ]

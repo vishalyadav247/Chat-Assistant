@@ -42,6 +42,28 @@ Responsive: collapse Details ≤1240, Filters ≤1040 per design.
 4. **contact_methods destination**: message + contact method chips (from 06 settings).
 5. Human resolves → Resolve button → sys message, mode back to `ai`, status resolved; survey trigger (16) may fire.
 
+### Human-support mode (2026-09-11, user decision)
+A shop that has NOT activated the AI agent runs chat as a **human channel** — implicit, no
+separate setting: `aiEnabled=false` (and not Test AI) makes the pipeline flip each
+conversation to `mode="human"` on its FIRST turn instead of dead-ending on the offline
+message. One system waiting message is sent — **merchant-editable** (2026-09-11, user request:
+`shopSettingsSchema.humanModeMessage`, edited in **Settings → Chatbox** ("Human support
+mode" card, saved with the tab's normal SaveBar; the AI Agent page's off-banner links
+there). Placement settled after two rejected homes the same day (user): NOT the Human
+handover tab ("handover is a different setting") and NOT an inline card on the AI Agent
+page ("not looking good") — a banner link + Settings is the pattern. Blank → the
+pipeline's default "our team is helping other customers right
+now — we'll connect you with an agent shortly"; sourceLayer `human` — deliberately NOT
+`handover`, which the analytics rollup counts), the
+team is notified via the same `notifyShopperMessage` dispatch, and every later turn takes
+the existing human-mode branch (AI dormant, Inbox replies reach the widget via its
+5-second human-mode polling). Inbox list shows a green **Human** tag for
+`mode=human && !handover` (Handover keeps its own tag; zero schema change). Everything
+else — FAQs, order tracking, contact methods, starters, pre-chat, surveys, chat
+availability — is AI-independent and unchanged. The usage-cap case (`aiAllowed` false with
+AI activated) deliberately keeps the offline message: a quota running out must not flood
+the team with live chats. These conversations never tick the AI conversation meter.
+
 ### Auto-resolution
 Settings (16): auto-resolve after N minutes/hours/days of inactivity → status resolved + sys message + survey trigger.
 

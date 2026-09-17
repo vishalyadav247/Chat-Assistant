@@ -28,7 +28,6 @@ import {
   conversationSeries,
   csatSummary,
   exportAnalyticsCsv,
-  exportConversationsCsv,
   recommendationFunnel,
   resolutionBreakdown,
   responsePerformance,
@@ -54,7 +53,7 @@ import { APP_NAME } from "./app";
 // KPI card (spec 13 shared component), conversations-over-time line chart
 // (Human vs AI, own range), resolution donut, CSAT, recommendation funnel,
 // response performance, top questions, unanswered mini-card, CSV exports
-// (Plus gate "exports"; design gap — the export button lives in the header).
+// (every plan, no gate; design gap — the export button lives in the header).
 // All aggregates read shop-scoped MetricsDaily rollups; isTest excluded.
 
 function isDashboardRange(value: string | null): value is DashboardRange {
@@ -101,12 +100,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     perf,
     questions,
     pendingQuestions,
-    exportsAllowed: hasFeature(plan, "exports"),
     unansweredAllowed: hasFeature(plan, "unanswered_analytics"),
     // Plan signals (spec 15). The range list is what this plan may read; the
     // selector locks the rest instead of quietly returning a shorter window.
     planSignals: {
-      exports: hasFeature(plan, "exports") ? null : requiredPlanName("exports"),
       unanswered: hasFeature(plan, "unanswered_analytics")
         ? null
         : requiredPlanName("unanswered_analytics"),
@@ -130,12 +127,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const csv = await exportAnalyticsCsv(shopId, range);
       return { intent, filename: `analytics-${range}-${stamp}.csv`, csv, locked: false };
     }
-    if (intent === "export-conversations") {
-      const csv = await exportConversationsCsv(shopId);
-      return { intent, filename: `conversations-${stamp}.csv`, csv, locked: false };
-    }
   } catch (error) {
-    // Server-side plan gate (spec 15): exports are Plus-only when enforced.
+    // There is no plan gate on exports — kept as a safety net in
+    // case a gate ever returns to the export path.
     if (error instanceof PlanGateError) {
       return { intent, filename: "", csv: "", locked: true };
     }
@@ -162,7 +156,7 @@ export default function AnalyticsPage() {
     processedExport.current = result;
     if (!result.intent.startsWith("export-")) return;
     if (result.locked) {
-      shopify.toast.show("CSV exports are available on the Plus plan", { isError: true });
+      shopify.toast.show("This export isn't available on your current plan", { isError: true });
       return;
     }
     const blob = new Blob([String.fromCharCode(0xfeff) + result.csv], {
@@ -180,38 +174,32 @@ export default function AnalyticsPage() {
   }, [exportFetcher.state, exportFetcher.data, shopify]);
 
   const exporting = exportFetcher.state !== "idle";
-  const runExport = (intent: "export-analytics" | "export-conversations") => {
-    if (!data.exportsAllowed) {
-      // Gated visual (Plus): the server enforces too — this just short-circuits.
-      shopify.toast.show("CSV exports are available on the Plus plan", { isError: true });
-      return;
-    }
+  const runExport = (intent: "export-analytics") => {
     exportFetcher.submit({ intent, range: data.chartRange }, { method: "post" });
   };
 
   return (
     <s-page heading={APP_NAME}>
-      <s-button
-        slot="primary-action"
-        variant="primary"
-        disabled={exporting}
-        onClick={() => runExport("export-analytics")}
-      >
-        {data.exportsAllowed ? "Export CSV" : "Export CSV (Plus)"}
-      </s-button>
-      <s-button
-        slot="secondary-actions"
-        disabled={exporting}
-        onClick={() => runExport("export-conversations")}
-      >
-        {data.exportsAllowed ? "Export conversations" : "Export conversations (Plus)"}
-      </s-button>
-
       <s-stack gap="base">
-        <s-heading>Analytics</s-heading>
+        {/* Export CSV sits opposite the section heading rather than in the page
+            header's primary-action slot (user, 2026-09-10): it exports THIS
+            page's report for the selected range, so it belongs with the report.
+            "Export conversations" moved to /app/inbox for the same reason. */}
+        <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">
+          <s-heading>Analytics</s-heading>
+          <s-button
+            variant="primary"
+            disabled={exporting}
+            onClick={() => runExport("export-analytics")}
+          >
+            Export CSV
+          </s-button>
+        </s-stack>
         <DashboardOverview
           metrics={data.metrics}
-          range={data.range}
+          range={data.metrics.range}
+          allowedRanges={data.planSignals.ranges}
+          rangeNextPlan={data.planSignals.rangeNextPlan}
           reloading={revalidator.state !== "idle"}
           onRangeChange={(range) =>
             setSearchParams((params) => {

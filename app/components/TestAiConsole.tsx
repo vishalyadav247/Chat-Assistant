@@ -3,18 +3,17 @@ import { useFetcher } from "react-router";
 import type { TraceStep, TraceSummary } from "../lib/pipeline/trace-types";
 import type { ReviewSourceData, TestActionResult } from "../routes/app.ai-agent.test";
 import { CHAT_CARD_CSS, ChatProductCards } from "./ChatProductCards";
-import { TurnInspector } from "./TurnInspector";
-import { BRAND, INK, SCROLLBAR_CSS, SPACE } from "./ui/tokens";
+import { BRAND, INK, SCROLLBAR_CSS } from "./ui/tokens";
 
 // Test AI console (spec 08, design ai-agent.html #viewTest). Streams the real
 // pipeline via POST /api/test-chat and parses the SSE frames from the fetch
 // stream inline (the storefront widget has its own parser in extensions/ —
 // admin code cannot import extension assets, so this tiny parser is local).
-// Each reply carries two kinds of evidence. The decision trace arrives on the
-// stream itself (a "trace" frame behind "done", api.test-chat.tsx) and shows
-// every layer the pipeline walked; the saved Message row is fetched through the
-// route action ("source" intent) and shows what was actually persisted. Both
-// render in the Turn inspector below the console.
+// MERCHANT preview, not a debugger (user decision 2026-09-14 — the developer
+// Turn inspector moved to Admin → Debug): each reply shows a plain-words
+// "Answered from" line built from the saved Message row's sourceLayer, which
+// names the training surface to fix when an answer disappoints — plus the
+// feedback faces. The endpoint no longer streams a "trace" frame (QA-U5).
 
 interface ProductCardData {
   shopifyProductId: string;
@@ -29,6 +28,7 @@ type Frame =
   | { type: "token"; text: string }
   | { type: "message"; text: string }
   | { type: "cards"; cards: ProductCardData[] }
+  | { type: "actions"; actions: { key: string; label: string; screen: string }[] }
   | { type: "done"; outcome: string; conversationId: string }
   | { type: "trace"; steps: TraceStep[]; summary: TraceSummary }
   | { type: "error"; message: string };
@@ -39,15 +39,251 @@ interface ChatEntry {
   text: string;
   streaming?: boolean;
   cards?: ProductCardData[];
+  /** In-widget buttons this reply offers the shopper (order tracking, contact,
+   *  help). Shown here so the merchant sees what a shopper would see; they are
+   *  inert in the console, which has no widget panel to open. */
+  actions?: { key: string; label: string; screen: string }[];
   source?: ReviewSourceData | null;
-  /** The shopper message this turn answered — the inspector's header. */
-  question?: string;
-  /** Decision trace for this turn (Test AI only; arrives behind the done frame). */
-  trace?: TraceStep[];
-  traceSummary?: TraceSummary;
   feedback?: number;
   seeded?: boolean; // welcome bubble — no review source / feedback
 }
+
+/** sourceLayer → what a MERCHANT should read, and where to improve it. */
+const SOURCE_LABELS: Record<string, string> = {
+  curated: "Curated answer",
+  recommendation: "App recommendation rule",
+  buy: "Product search",
+  buy_browse: "Product search",
+  detail: "Product details",
+  question: "Store info & FAQs",
+  rag_fallback: "Fallback — no matching info found",
+  clarify: "Clarifying question",
+  chat: "Small talk",
+  banned: "Blocked topic",
+  // QA-U3: layers the pipeline writes that had no label (raw text showed).
+  off_topic: "Outside store topics",
+  order_status: "Order tracking",
+  handover: "Human handover",
+  cap: "AI unavailable",
+  human: "Human support mode",
+};
+
+/** Blocked turns save as `banned_${layer}` (keyword / meaning / router /
+ *  moderation) — one merchant-facing type (QA-U3). */
+export function sourceKey(layer: string): string {
+  return layer.startsWith("banned_") ? "banned" : layer;
+}
+
+function sourceLabel(layer: string | null): string | null {
+  if (!layer) return null;
+  return SOURCE_LABELS[sourceKey(layer)] ?? layer.replace(/_/g, " ");
+}
+
+const NON_ENGLISH_WORDS = new Set([
+  "hola", "gracias", "quiero", "busco", "tienen", "envío", "precio", "dónde", "cuánto",
+  "cuál", "cual", "qué", "política", "politica", "devoluciones", "envíos",
+  "bonjour", "merci", "cherche", "avez", "livraison", "combien", "où",
+  "hallo", "danke", "suche", "haben", "versand", "viel",
+  "namaste", "kya", "chahiye", "mujhe", "kitna", "aap",
+]);
+
+/**
+ * The merchant is testing in another language (QA-U4). The old "3+ non-ASCII
+ * letters" test fired on accented English ("café résumé"). Now: 3+ letters from
+ * a non-Latin script, or a clearly non-English word from the languages the
+ * persona supports (es / fr / de / Hindi in Latin script).
+ */
+export function looksNonEnglish(message: string): boolean {
+  const letters = message.match(/\p{L}/gu) ?? [];
+  if (letters.filter((ch) => !/\p{Script=Latin}/u.test(ch)).length >= 3) return true;
+  if (/[¿¡]/.test(message)) return true; // Spanish-only punctuation
+  const words = message.toLowerCase().match(/\p{L}+/gu) ?? [];
+  return words.some((w) => NON_ENGLISH_WORDS.has(w));
+}
+
+// ── Training missions (user request 2026-09-14: "make it a gaming
+// experience") ──────────────────────────────────────────────────────────────
+// Six guided challenges that auto-complete from what the pipeline actually
+// did — playful on the surface, but each one walks the merchant through
+// testing a REAL coverage area (products, store info, curated answers,
+// conversation memory, languages, the fallback). Progress + score persist
+// per browser; "Reset" starts a new chat but keeps the game going.
+
+interface Mission {
+  key: string;
+  emoji: string;
+  title: string;
+  hint: string;
+  /** Clicking the mission sends this message (missions without one are
+   *  completed by HOW the merchant chats, not by a canned line). */
+  sample?: string;
+  points: number;
+}
+
+const MISSIONS: Mission[] = [
+  {
+    key: "product",
+    emoji: "🛍️",
+    title: "Get a product recommendation",
+    hint: "Ask for something to buy — complete when product cards appear.",
+    sample: "I'm looking for a gift — what do you recommend?",
+    points: 15,
+  },
+  {
+    key: "policy",
+    emoji: "📦",
+    title: "Ask a store question",
+    hint: "Shipping, returns, policies — answered from your store info.",
+    sample: "What is your return policy?",
+    points: 15,
+  },
+  {
+    key: "curated",
+    emoji: "⭐",
+    title: "Hit a curated answer",
+    hint: "Ask something you wrote a curated answer for — word it your way.",
+    points: 20,
+  },
+  {
+    key: "memory",
+    emoji: "🧠",
+    title: "Hold a real conversation",
+    hint: "Ask 4+ messages in one chat — follow-ups test the AI's memory.",
+    points: 15,
+  },
+  {
+    key: "polyglot",
+    emoji: "🌍",
+    title: "Switch languages mid-chat",
+    hint: "Write in any other language — the AI should follow you.",
+    sample: "¿Cuál es su política de devoluciones?",
+    points: 20,
+  },
+  {
+    key: "stump",
+    emoji: "🕵️",
+    title: "Try to stump it",
+    hint: "Ask something your store can't answer. Finding a gap is a WIN — add it to your FAQs.",
+    sample: "Do you sell helicopters?",
+    points: 15,
+  },
+];
+
+const LEVELS: { at: number; name: string }[] = [
+  { at: 0, name: "Rookie tester" },
+  { at: 30, name: "AI trainer" },
+  { at: 60, name: "Prompt pro" },
+  { at: 100, name: "AI whisperer" },
+];
+
+const GAME_KEY = "chatconvert-test-ai-game";
+
+interface GameState {
+  done: Record<string, boolean>;
+  score: number;
+  seenSources: string[];
+}
+
+function loadGame(): GameState {
+  try {
+    const raw = localStorage.getItem(GAME_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<GameState>;
+      return {
+        done: parsed.done ?? {},
+        score: typeof parsed.score === "number" ? parsed.score : 0,
+        seenSources: Array.isArray(parsed.seenSources) ? parsed.seenSources : [],
+      };
+    }
+  } catch {
+    /* private mode */
+  }
+  return { done: {}, score: 0, seenSources: [] };
+}
+
+function levelFor(score: number): { name: string; next: number | null; pct: number } {
+  let current = LEVELS[0];
+  let next: { at: number; name: string } | null = null;
+  for (const level of LEVELS) {
+    if (score >= level.at) current = level;
+    else {
+      next = level;
+      break;
+    }
+  }
+  if (!next) return { name: current.name, next: null, pct: 100 };
+  const span = next.at - current.at;
+  return {
+    name: current.name,
+    next: next.at,
+    pct: Math.min(100, Math.round(((score - current.at) / span) * 100)),
+  };
+}
+
+const CONFETTI_EMOJI = ["🎉", "✨", "🎊", "⭐", "🥳", "💜"];
+
+// Widget-style composer + gradient-header reset (2026-09-14). CSS classes
+// because :hover / :focus-within can't be inline styles.
+const COMPOSER_CSS = `
+.cc-composer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 5px 5px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--s-color-border, #d4d4d4);
+  background: var(--s-color-bg-surface-secondary, #f7f7f8);
+  transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
+}
+.cc-composer:focus-within {
+  background: var(--s-color-bg, #fff);
+  border-color: ${BRAND.accent};
+  box-shadow: 0 0 0 3px rgba(109, 59, 245, 0.16);
+}
+.cc-composer input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font: inherit;
+  font-size: 13.5px;
+  padding: 7px 0;
+}
+.cc-composer input:disabled { opacity: .6; }
+.cc-sendbtn {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: ${BRAND.gradient};
+  box-shadow: 0 2px 8px rgba(109, 59, 245, 0.35);
+  transition: transform .12s ease, box-shadow .12s ease, opacity .12s ease;
+}
+.cc-sendbtn:hover:not(:disabled) { transform: scale(1.06); box-shadow: 0 3px 12px rgba(109, 59, 245, 0.45); }
+.cc-sendbtn:active:not(:disabled) { transform: scale(.97); }
+.cc-sendbtn:disabled { opacity: .4; cursor: default; box-shadow: none; }
+.cc-testreset {
+  border: 1px solid rgba(255, 255, 255, .4);
+  background: rgba(255, 255, 255, .14);
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color .15s ease;
+}
+.cc-testreset:hover { background: rgba(255, 255, 255, .26); }
+`;
 
 const CANNED_CHIPS = [
   "What are your best sellers?",
@@ -98,10 +334,51 @@ export function TestAiConsole(props: {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [faqOpen, setFaqOpen] = useState(false);
-  // Which reply the Turn inspector is showing. Set automatically to the newest
-  // reply as its trace lands, so the panel always reflects the last thing sent.
-  const [inspectId, setInspectId] = useState("");
   const conversationIdRef = useRef<string>("");
+
+  // Training-missions game (2026-09-14). Loaded after mount so SSR and the
+  // first client render agree (localStorage is browser-only).
+  const [game, setGame] = useState<GameState>({ done: {}, score: 0, seenSources: [] });
+  const [confetti, setConfetti] = useState(false);
+  const userTurnsRef = useRef(0);
+  useEffect(() => setGame(loadGame()), []);
+  useEffect(() => {
+    try {
+      localStorage.setItem(GAME_KEY, JSON.stringify(game));
+    } catch {
+      /* private mode */
+    }
+  }, [game]);
+
+  const completeMission = (key: string) => {
+    setGame((prev) => {
+      if (prev.done[key]) return prev;
+      const mission = MISSIONS.find((m) => m.key === key);
+      const next = {
+        ...prev,
+        done: { ...prev.done, [key]: true },
+        score: prev.score + (mission?.points ?? 10),
+      };
+      if (MISSIONS.every((m) => next.done[m.key])) {
+        setConfetti(true);
+        setTimeout(() => setConfetti(false), 2600);
+      }
+      return next;
+    });
+  };
+
+  const recordSource = (layer: string | null) => {
+    if (!layer) return;
+    setGame((prev) =>
+      prev.seenSources.includes(sourceKey(layer))
+        ? prev
+        : { ...prev, seenSources: [...prev.seenSources, sourceKey(layer)] },
+    );
+    if (layer === "curated") completeMission("curated");
+    if (layer === "question") completeMission("policy");
+    // QA-U4: a clarifying question is not a knowledge gap — only the fallback is.
+    if (layer === "rag_fallback") completeMission("stump");
+  };
   const pendingSourceRef = useRef<string>("");
   const bodyRef = useRef<HTMLDivElement>(null);
 
@@ -116,6 +393,8 @@ export function TestAiConsole(props: {
     const source = sourceFetcher.data.ok ? (sourceFetcher.data.source ?? null) : null;
     setEntries((prev) => prev.map((e) => (e.id === entryId ? { ...e, source } : e)));
     pendingSourceRef.current = "";
+    recordSource(source?.sourceLayer ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceFetcher.state, sourceFetcher.data]);
 
   useEffect(() => {
@@ -138,9 +417,13 @@ export function TestAiConsole(props: {
     setEntries((prev) => [
       ...prev,
       { id: uid(), role: "user", text: message },
-      { id: botId, role: "bot", text: "", streaming: true, question: message },
+      { id: botId, role: "bot", text: "", streaming: true },
     ]);
     setSending(true);
+    // Mission detection on the merchant's own message + conversation length.
+    userTurnsRef.current += 1;
+    if (userTurnsRef.current >= 4) completeMission("memory");
+    if (looksNonEnglish(message)) completeMission("polyglot");
     let doneConversationId = "";
     try {
       const res = await fetch("/api/test-chat", {
@@ -159,14 +442,14 @@ export function TestAiConsole(props: {
           patchEntry(botId, (e) => ({ ...e, text: e.text ? `${e.text}\n${frame.text}` : frame.text }));
         } else if (frame.type === "cards") {
           patchEntry(botId, { cards: frame.cards });
+          if (frame.cards.length > 0) completeMission("product");
+        } else if (frame.type === "actions") {
+          patchEntry(botId, { actions: frame.actions });
         } else if (frame.type === "done") {
           if (frame.conversationId) {
             conversationIdRef.current = frame.conversationId;
             doneConversationId = frame.conversationId;
           }
-        } else if (frame.type === "trace") {
-          patchEntry(botId, { trace: frame.steps, traceSummary: frame.summary });
-          setInspectId(botId);
         } else if (frame.type === "error") {
           patchEntry(botId, (e) => ({
             ...e,
@@ -202,14 +485,17 @@ export function TestAiConsole(props: {
     setSessionId(newSessionId());
     conversationIdRef.current = "";
     pendingSourceRef.current = "";
-    setInspectId("");
+    userTurnsRef.current = 0; // a fresh chat restarts the memory mission
     setEntries([{ id: "welcome", role: "bot", text: props.welcome, seeded: true }]);
     setInput("");
     setFaqOpen(false);
   };
 
   const giveFeedback = (entryId: string, rating: number) => {
+    const first = entries.find((e) => e.id === entryId)?.feedback == null;
     patchEntry(entryId, { feedback: rating });
+    // Rating replies earns a little score too — honest ratings, any face.
+    if (first) setGame((prev) => ({ ...prev, score: prev.score + 5 }));
     feedbackFetcher.submit(
       { intent: "feedback", rating: String(rating), conversationId: conversationIdRef.current },
       { method: "post" },
@@ -217,37 +503,90 @@ export function TestAiConsole(props: {
   };
 
   const noUserMessages = !entries.some((e) => e.role === "user");
-  const inspected = entries.find((e) => e.id === inspectId) ?? null;
 
   return (
     <s-stack gap="base">
+      {/* Chat left, training-missions game right (user, 2026-09-14: "make it
+          a gaming experience"). cc-split stacks the columns on phones. */}
       <div
         className="cc-split"
         style={{
           display: "grid",
-          gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1.15fr)",
-          gap: SPACE.base,
+          gridTemplateColumns: "minmax(0, 1fr) 300px",
+          gap: 16,
           alignItems: "start",
         }}
       >
-      {/* Chat card */}
+      {/* Chat card — styled like the storefront widget (user, 2026-09-14:
+          gradient header, pill composer, round send button), so the preview
+          FEELS like the thing shoppers use. */}
       <s-box borderWidth="base" borderRadius="base">
         {/* .cc-testchat shortens the card on phones (spec 19, app-mobile.css). */}
-        <style dangerouslySetInnerHTML={{ __html: SCROLLBAR_CSS + CHAT_CARD_CSS }} />
-        <div className="cc-testchat" style={{ display: "flex", flexDirection: "column", height: 560 }}>
+        <style dangerouslySetInnerHTML={{ __html: SCROLLBAR_CSS + CHAT_CARD_CSS + COMPOSER_CSS }} />
+        <div
+          className="cc-testchat"
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            height: 620,
+            overflow: "hidden",
+            borderRadius: 8, // clip the gradient header to the card's corners
+          }}
+        >
           <div
             style={{
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
+              gap: 10,
               padding: "12px 16px",
-              borderBottom: "1px solid var(--s-color-border, #e3e3e3)",
+              background: BRAND.gradient,
+              color: "#fff",
             }}
           >
-            <s-heading>Test your AI</s-heading>
-            <s-button variant="tertiary" accessibilityLabel="Reset conversation" onClick={reset}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+              <span
+                aria-hidden
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: "50%",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 18,
+                  background: "rgba(255,255,255,.18)",
+                  border: "1px solid rgba(255,255,255,.35)",
+                  flexShrink: 0,
+                }}
+              >
+                ✨
+              </span>
+              <span style={{ display: "grid", lineHeight: 1.25, minWidth: 0 }}>
+                <span style={{ fontWeight: 700, fontSize: 14.5 }}>Your AI agent</span>
+                <span style={{ fontSize: 11.5, opacity: 0.85, display: "inline-flex", alignItems: "center", gap: 5 }}>
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 7,
+                      height: 7,
+                      borderRadius: "50%",
+                      background: "#4ade80",
+                      boxShadow: "0 0 0 2.5px rgba(74,222,128,.30)",
+                    }}
+                  />
+                  Test mode · replies use your live data
+                </span>
+              </span>
+            </div>
+            <button
+              type="button"
+              aria-label="Reset conversation"
+              onClick={reset}
+              className="cc-testreset"
+            >
               ↺ Reset
-            </s-button>
+            </button>
           </div>
 
           <div
@@ -322,32 +661,45 @@ export function TestAiConsole(props: {
                   />
                 ) : null}
 
+                {/* What the shopper gets instead of the agent describing a
+                    storefront link that does not exist. Inert here — there is
+                    no widget panel in the console for them to open. */}
+                {entry.actions?.length ? (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                    {entry.actions.map((action) => (
+                      <s-badge key={action.key} tone="info">
+                        {`${action.label} → opens ${action.screen}`}
+                      </s-badge>
+                    ))}
+                  </div>
+                ) : null}
+
                 {entry.role === "bot" && !entry.seeded && !entry.streaming && entry.text ? (
                   <div style={{ marginTop: 6 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <button
-                        type="button"
-                        onClick={() => setInspectId((v) => (v === entry.id ? "" : entry.id))}
-                        style={{
-                          border: "none",
-                          background: "none",
-                          padding: 0,
-                          cursor: "pointer",
-                          font: "inherit",
-                          fontSize: 12,
-                          fontWeight: 600,
-                          color: BRAND.accent,
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 2,
-                        }}
-                      >
-                        {inspectId === entry.id ? "Hide details" : "Why this reply?"}{" "}
-                        <s-icon
-                          type={inspectId === entry.id ? "chevron-up" : "chevron-down"}
-                          size="small"
-                        />
-                      </button>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      {/* Plain-words provenance — tells the merchant WHICH
+                          training surface produced the answer, so a bad reply
+                          points at the thing to improve (curated answer, FAQ,
+                          product data…). The developer trace lives in
+                          Admin → Debug now. */}
+                      {entry.source !== undefined && sourceLabel(entry.source?.sourceLayer ?? null) ? (
+                        <span
+                          style={{
+                            fontSize: 11.5,
+                            fontWeight: 600,
+                            color: INK.muted,
+                            background: "rgba(255,255,255,.85)",
+                            border: `1px solid ${INK.borderSoft}`,
+                            borderRadius: 999,
+                            padding: "2px 9px",
+                          }}
+                        >
+                          Answered from: {sourceLabel(entry.source?.sourceLayer ?? null)}
+                          {entry.source?.productCards?.length
+                            ? ` · ${entry.source.productCards.length} product${entry.source.productCards.length === 1 ? "" : "s"}`
+                            : ""}
+                        </span>
+                      ) : null}
                       <span style={{ display: "inline-flex", gap: 4 }}>
                         {[
                           { rating: 1, face: "🙁" },
@@ -418,62 +770,195 @@ export function TestAiConsole(props: {
 
           <div
             style={{
-              display: "flex",
-              gap: 8,
               padding: 12,
               borderTop: "1px solid var(--s-color-border, #e3e3e3)",
+              background: "var(--s-color-bg, #fff)",
             }}
           >
-            <input
-              type="text"
-              value={input}
-              placeholder="Type your message"
-              aria-label="Message"
-              disabled={sending}
-              onChange={(e) => setInput(e.currentTarget.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  void send(input);
-                }
-              }}
-              style={{
-                flex: 1,
-                padding: "9px 13px",
-                borderRadius: 999,
-                border: "1px solid var(--s-color-border, #d4d4d4)",
-                font: "inherit",
-              }}
-            />
-            <s-button
-              variant="primary"
-              accessibilityLabel="Send message"
-              disabled={sending || !input.trim()}
-              onClick={() => void send(input)}
-            >
-              Send
-            </s-button>
+            <div className="cc-composer">
+              <input
+                type="text"
+                value={input}
+                placeholder={sending ? "The AI is replying…" : "Ask your AI anything…"}
+                aria-label="Message"
+                disabled={sending}
+                onChange={(e) => setInput(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void send(input);
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="cc-sendbtn"
+                aria-label="Send message"
+                disabled={sending || !input.trim()}
+                onClick={() => void send(input)}
+              >
+                {/* Paper plane — inline SVG so it inherits the white ink. */}
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden>
+                  <path
+                    d="M3.5 11.2 20.2 3.9c.7-.3 1.4.4 1.1 1.1l-7.3 16.7c-.3.7-1.3.7-1.6 0l-2.2-5.6a1 1 0 0 0-.6-.6l-5.6-2.2c-.7-.3-.7-1.3 0-1.6z"
+                    fill="currentColor"
+                  />
+                  <path d="m11.3 12.7 4.2-4.2" stroke="rgba(255,255,255,.8)" strokeWidth="1.4" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
           </div>
         </div>
       </s-box>
 
-      {/* Inspector column — always mounted so the panel does not appear and
-          disappear under the cursor; it renders its own idle state. */}
-      <TurnInspector
-        scrollHeight={392}
-        turn={
-          inspected
-            ? {
-                question: inspected.question ?? "",
-                steps: inspected.trace ?? null,
-                summary: inspected.traceSummary ?? null,
-                source: inspected.source,
-              }
-            : null
-        }
+      <GamePanel
+        game={game}
+        confetti={confetti}
+        sending={sending}
+        onMissionClick={(mission) => {
+          if (mission.sample && !game.done[mission.key]) void send(mission.sample);
+        }}
       />
       </div>
     </s-stack>
+  );
+}
+
+/** Score, level, missions checklist and discovered answer types. */
+function GamePanel(props: {
+  game: GameState;
+  confetti: boolean;
+  sending: boolean;
+  onMissionClick: (mission: Mission) => void;
+}) {
+  const { game } = props;
+  const level = levelFor(game.score);
+  const doneCount = MISSIONS.filter((m) => game.done[m.key]).length;
+  const allDone = doneCount === MISSIONS.length;
+
+  return (
+    <s-box borderWidth="base" borderRadius="base" padding="base">
+      <div style={{ position: "relative", display: "grid", gap: 14 }}>
+        {props.confetti ? (
+          <div aria-hidden style={{ position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none" }}>
+            <style
+              dangerouslySetInnerHTML={{
+                __html:
+                  "@keyframes cc-confetti-fall { from { transform: translateY(-30px) rotate(0deg); opacity: 1; } to { transform: translateY(340px) rotate(320deg); opacity: 0; } }",
+              }}
+            />
+            {Array.from({ length: 18 }, (_, i) => (
+              <span
+                key={i}
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: `${(i * 53) % 100}%`,
+                  fontSize: 16 + ((i * 7) % 10),
+                  animation: `cc-confetti-fall ${1.6 + ((i * 13) % 10) / 10}s ease-in ${((i * 17) % 8) / 10}s both`,
+                }}
+              >
+                {CONFETTI_EMOJI[i % CONFETTI_EMOJI.length]}
+              </span>
+            ))}
+          </div>
+        ) : null}
+
+        {/* Score + level */}
+        <div style={{ display: "grid", gap: 6 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+            <s-heading>Training missions</s-heading>
+            <span style={{ fontSize: 13, fontWeight: 700, color: BRAND.accent }}>
+              {game.score} pts
+            </span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+            <span style={{ fontWeight: 700 }}>
+              {allDone ? "🏆 " : ""}
+              {level.name}
+            </span>
+            <span style={{ opacity: 0.65 }}>
+              {level.next !== null ? `next level at ${level.next} pts` : "max level!"}
+            </span>
+          </div>
+          <div
+            role="progressbar"
+            aria-valuenow={level.pct}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label="Progress to the next level"
+            style={{ height: 6, borderRadius: 3, background: "var(--s-color-border, #e3e3e3)", overflow: "hidden" }}
+          >
+            <div style={{ width: `${level.pct}%`, height: "100%", background: BRAND.gradient, borderRadius: 3 }} />
+          </div>
+        </div>
+
+        {/* Missions */}
+        <div style={{ display: "grid", gap: 6 }}>
+          <s-text color="subdued">
+            {allDone
+              ? "All missions complete — your AI survived the gauntlet! 🎉"
+              : `${doneCount} of ${MISSIONS.length} complete — click a mission to try it.`}
+          </s-text>
+          {MISSIONS.map((mission) => {
+            const done = Boolean(game.done[mission.key]);
+            const clickable = Boolean(mission.sample) && !done && !props.sending;
+            return (
+              <button
+                key={mission.key}
+                type="button"
+                title={mission.hint}
+                disabled={!clickable}
+                onClick={() => props.onMissionClick(mission)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  textAlign: "left",
+                  font: "inherit",
+                  fontSize: 12.5,
+                  padding: "7px 10px",
+                  borderRadius: 10,
+                  cursor: clickable ? "pointer" : "default",
+                  border: `1px solid ${done ? "rgba(0,180,90,.45)" : INK.borderSoft}`,
+                  background: done ? "rgba(0,180,90,.08)" : "var(--s-color-bg, #fff)",
+                  opacity: done ? 0.85 : 1,
+                }}
+              >
+                <span style={{ fontSize: 16 }}>{done ? "✅" : mission.emoji}</span>
+                <span style={{ display: "grid", gap: 1, minWidth: 0 }}>
+                  <span style={{ fontWeight: 700, textDecoration: done ? "line-through" : "none" }}>
+                    {mission.title}
+                  </span>
+                  <span style={{ opacity: 0.65, fontSize: 11.5 }}>
+                    {done ? `+${mission.points} pts` : mission.hint}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Discovered answer types */}
+        <div style={{ display: "grid", gap: 6 }}>
+          <s-text color="subdued">
+            Answer types discovered · {game.seenSources.filter((s) => SOURCE_LABELS[s]).length}
+          </s-text>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+            {game.seenSources
+              .filter((s) => SOURCE_LABELS[s])
+              .map((s) => (
+                <s-badge key={s} tone="info">
+                  {SOURCE_LABELS[s]}
+                </s-badge>
+              ))}
+            {game.seenSources.filter((s) => SOURCE_LABELS[s]).length === 0 ? (
+              <s-text color="subdued">— start chatting to collect them</s-text>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </s-box>
   );
 }
 

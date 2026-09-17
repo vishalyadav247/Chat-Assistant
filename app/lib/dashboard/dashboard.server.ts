@@ -1,7 +1,12 @@
 import { Prisma } from "@prisma/client";
 import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
-import { getEmbedStatus, type EmbedStatus } from "../embed-status.server";
+import { getEmbedDetail, type EmbedStatus } from "../embed-status.server";
+import { loadShopSettings } from "../settings/save.server";
+import { BRIDGE_TYPES } from "../ingestion/content-sync.server";
+import { SHOWABLE_PRODUCT } from "../search/showable";
+import { clampRange } from "../analytics/reports.server";
+import { ANALYTICS_RANGES, ANALYTICS_RANGE_DAYS, type AnalyticsRange } from "../analytics/shared";
 
 // Dashboard aggregates (spec 13). Every query is shop-scoped and excludes
 // isTest conversations (Test AI console traffic must never skew merchant KPIs).
@@ -12,11 +17,15 @@ import { getEmbedStatus, type EmbedStatus } from "../embed-status.server";
 // ("added_to_cart" analytics events, recorded only by the real storefront
 // widget, never by Test AI) as the assisted-revenue proxy.
 
-export type DashboardRange = "7d" | "30d" | "12m";
+// ONE range vocabulary across the app: the dashboard used to offer its own
+// narrower set (no "3m"), so Pro — whose analytics_range_days is exactly 90 —
+// had no option that matched its own allowance, and the two pages disagreed
+// about what a merchant could pick.
+export type DashboardRange = AnalyticsRange;
 
-export const DASHBOARD_RANGES: DashboardRange[] = ["7d", "30d", "12m"];
+export const DASHBOARD_RANGES: DashboardRange[] = ANALYTICS_RANGES;
 
-const RANGE_DAYS: Record<DashboardRange, number> = { "7d": 7, "30d": 30, "12m": 365 };
+const RANGE_DAYS = ANALYTICS_RANGE_DAYS;
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const LIVE_WINDOW_MS = 5 * 60 * 1000; // "live" = activity within 5 minutes
 
@@ -105,6 +114,12 @@ export async function dashboardMetrics(
   range: DashboardRange,
 ): Promise<DashboardMetrics> {
   requireShopId(shopId);
+  // Plan gate: the dashboard reads the SAME conversation history the analytics
+  // reports do, but it never clamped — so a Free shop (7 days) asking for "12m"
+  // got a full year of KPIs, deltas and series here while /app/analytics
+  // correctly refused it. Enforced at the data source for the same reason
+  // clampRange itself is: a hand-crafted ?range=12m must not outrun the loader.
+  range = await clampRange(shopId, range);
   const now = new Date();
   const days = RANGE_DAYS[range];
   const from = new Date(now.getTime() - days * DAY_MS);
@@ -158,17 +173,54 @@ export async function dashboardMetrics(
   };
 }
 
-// ── Setup checklist ─────────────────────────────────────────────────────────
+// ── Setup checklist: "Get your AI ready" (spec 13, revised 2026-09-14) ──────
+
+export type ChecklistAction =
+  | { kind: "navigate"; href: string }
+  /** Theme editor — the action a merchant needs is the customiser itself. */
+  | { kind: "external"; url: string }
+  /** Runs every catalogue/content sync from the dashboard (step 1). */
+  | { kind: "sync" }
+  /** Like navigate, but the button stays after the step is done (store info:
+   *  the step links back to a page the merchant may want to revisit. A DONE
+   *  step shows only "Completed" — no Review button (owner 2026-09-16). */
+  | { kind: "revisit"; href: string };
 
 export interface ChecklistStep {
-  id: string;
-  label: string;
+  id: "training" | "faqs" | "knowledge" | "instructions" | "chatbox" | "proactive" | "curated" | "embed";
+  title: string;
+  description: string;
   state: "done" | "todo" | "unknown";
-  /** Internal admin route for the deep link. */
-  href: string;
-  linkLabel: string;
-  /** External URL (theme editor) — only on the embed step's "unknown" state. */
-  externalUrl?: string;
+  action: ChecklistAction;
+  actionLabel: string;
+  /** Live status badge (the storefront embed), mirroring Settings → General. */
+  status?: { tone: "success" | "warning" | "critical" | "neutral"; label: string };
+  /** One extra line under the description (draft-theme case). */
+  note?: string;
+}
+
+export type TrainingSourceKey = "products" | "collections" | "pages" | "blogs" | "discounts";
+
+export interface TrainingSource {
+  key: TrainingSourceKey;
+  label: string;
+  /** Rows the AI reads: learn switch on AND the type's master Learn switch on. */
+  learned: number;
+  total: number;
+  /** When this source's own sync last finished (ISO) — drives "Syncing…". */
+  syncedAt: string | null;
+  /** The type's master Learn switch (Training tab). Off ⇒ learned is 0 and the
+   *  row must say "Learning off", not "Learned". */
+  masterOn: boolean;
+}
+
+export interface TrainingSummary {
+  sources: TrainingSource[];
+  learnedTotal: number;
+  /** Latest of the per-source sync times. */
+  lastSyncedAt: string | null;
+  /** Product sync is the only one that records running / error. */
+  productStatus: "idle" | "running" | "error";
 }
 
 export interface SetupChecklist {
@@ -176,7 +228,29 @@ export interface SetupChecklist {
   completed: number;
   total: number;
   embedStatus: EmbedStatus;
+  training: TrainingSummary;
 }
+
+/** The same four states Settings → General shows, so the two never disagree. */
+function embedStatusBadge(status: EmbedStatus): ChecklistStep["status"] {
+  if (status === "on") return { tone: "success", label: "On" };
+  if (status === "draft") return { tone: "warning", label: "Draft theme only" };
+  if (status === "off") return { tone: "critical", label: "Off" };
+  return { tone: "neutral", label: "Unknown" };
+}
+
+type LearnGroup = { learnEnabled: boolean; _count: { _all: number } }[];
+
+function learnCounts(
+  groups: LearnGroup,
+  masterOn: boolean,
+): { learned: number; total: number; masterOn: boolean } {
+  const total = groups.reduce((sum, g) => sum + g._count._all, 0);
+  const on = groups.find((g) => g.learnEnabled)?._count._all ?? 0;
+  return { learned: masterOn ? on : 0, total, masterOn };
+}
+
+const iso = (date: Date | null | undefined) => (date ? date.toISOString() : null);
 
 export async function setupChecklist(
   shopId: string,
@@ -184,84 +258,215 @@ export async function setupChecklist(
 ): Promise<SetupChecklist> {
   requireShopId(shopId);
 
-  const [embedStatus, widgetRow, syncState, persona, curatedPublished, activeCampaigns] =
-    await Promise.all([
-      getEmbedStatus(shopDomain),
-      db.widgetSettings.findUnique({ where: { shopId }, select: { id: true } }),
-      db.syncState.findUnique({ where: { shopId }, select: { productSyncAt: true } }),
-      db.persona.findUnique({ where: { shopId }, select: { role: true, behaviours: true } }),
-      db.curatedAnswer.count({ where: { shopId, status: "published" } }),
-      db.campaign.count({ where: { shopId, status: "active" } }),
-    ]);
+  const [
+    embedDetail,
+    widgetRow,
+    syncState,
+    faqsPublished,
+    customSources,
+    curatedPublished,
+    activeCampaigns,
+    settings,
+    productsTotal,
+    productsShowable,
+    collections,
+    pages,
+    articles,
+    discounts,
+  ] = await Promise.all([
+    getEmbedDetail(shopDomain),
+    db.widgetSettings.findUnique({ where: { shopId }, select: { id: true } }),
+    db.syncState.findUnique({ where: { shopId } }),
+    db.faq.count({ where: { shopId, status: "published" } }),
+    // Custom knowledge only: the FAQ / Pages / Blogs bridges are managed on
+    // their own tabs and would otherwise complete this step by themselves.
+    db.dataSource.count({
+      where: { shopId, status: "active", type: { notIn: ["faq", "store_info", ...BRIDGE_TYPES] } },
+    }),
+    db.curatedAnswer.count({ where: { shopId, status: "published" } }),
+    db.campaign.count({ where: { shopId, status: "active" } }),
+    loadShopSettings(shopId),
+    // Products the AI can actually SHOW (QA-U2) — the same SHOWABLE_PRODUCT
+    // rule the pipeline cards with, so a draft or unpublished product with its
+    // learn switch on is not reported as learned.
+    db.product.count({ where: { shopId } }),
+    db.product.count({ where: { shopId, ...SHOWABLE_PRODUCT } }),
+    db.collection.groupBy({ by: ["learnEnabled"], where: { shopId }, _count: { _all: true } }),
+    db.storePage.groupBy({ by: ["learnEnabled"], where: { shopId }, _count: { _all: true } }),
+    db.blogArticle.groupBy({ by: ["learnEnabled"], where: { shopId }, _count: { _all: true } }),
+    db.discount.groupBy({ by: ["learnEnabled"], where: { shopId }, _count: { _all: true } }),
+  ]);
 
+  const learn = settings.learn;
+  const sources: TrainingSource[] = [
+    {
+      key: "products",
+      label: "Products",
+      learned: learn.products ? productsShowable : 0,
+      total: productsTotal,
+      masterOn: learn.products,
+      syncedAt: iso(syncState?.productSyncAt),
+    },
+    {
+      key: "collections",
+      label: "Collections",
+      ...learnCounts(collections, learn.collections),
+      syncedAt: iso(syncState?.collectionSyncAt),
+    },
+    {
+      key: "pages",
+      label: "Pages",
+      ...learnCounts(pages, learn.pages),
+      syncedAt: iso(syncState?.pageSyncAt),
+    },
+    {
+      key: "blogs",
+      label: "Blogs",
+      ...learnCounts(articles, learn.blogs),
+      syncedAt: iso(syncState?.articleSyncAt),
+    },
+    {
+      key: "discounts",
+      label: "Discounts",
+      ...learnCounts(discounts, learn.discounts),
+      syncedAt: iso(syncState?.discountSyncAt),
+    },
+  ];
+  const learnedTotal = sources.reduce((sum, s) => sum + s.learned, 0);
+  const syncTimes = sources.flatMap((s) => (s.syncedAt ? [s.syncedAt] : [])).sort();
+  const productStatus: TrainingSummary["productStatus"] =
+    syncState?.status === "running" || syncState?.status === "error" ? syncState.status : "idle";
+
+  const embedStatus = embedDetail.status;
   // Same deep link as Settings → General "Turn on": activateAppId pre-selects
-  // the chat-widget app embed in the theme editor.
+  // the chat-widget app embed in the theme editor. Dropped once the embed is
+  // already ON — Shopify has no deactivate parameter, so re-sending activate
+  // would be a no-op dressed as an action; that merchant just wants the editor.
   const apiKey = process.env.SHOPIFY_API_KEY || "";
   const themeEditorUrl = `https://${shopDomain}/admin/themes/current/editor?context=apps${
-    apiKey ? `&activateAppId=${apiKey}/chat-widget` : ""
+    apiKey && embedStatus !== "on" ? `&activateAppId=${apiKey}/chat-widget` : ""
   }`;
 
+  // Step 1 is done once a sync has run AND the AI can use something from it
+  // (QA-U2): a sync that left every type switched off, or nothing showable, has
+  // not trained the AI on anything.
+  const trained = Boolean(syncState?.productSyncAt) && learnedTotal > 0;
+  const synced = Boolean(syncState?.productSyncAt);
+  const aiWrittenUnreviewed = settings.aiSetup.status === "done" && !settings.aiSetup.reviewedAt;
   const steps: ChecklistStep[] = [
     {
-      id: "embed",
-      // "draft" is NOT done — the embed is enabled, but on a theme shoppers
-      // aren't served, so the chat still isn't live. The label says which,
-      // rather than repeating the generic step text and looking stuck.
-      label:
-        embedStatus === "draft"
-          ? "Embed app to your LIVE theme (currently on a draft theme)"
-          : "Embed app to your theme",
-      state: embedStatus === "on" ? "done" : embedStatus === "unknown" ? "unknown" : "todo",
-      href: "/app/settings?tab=general",
-      linkLabel: embedStatus === "unknown" ? "Check in Theme editor" : "Settings",
-      ...(embedStatus === "unknown" ? { externalUrl: themeEditorUrl } : {}),
+      id: "training",
+      title: "Train AI data — catalog & store",
+      description: trained
+        ? `Products, Collections, Pages, Blogs and Discounts — ${learnedTotal.toLocaleString("en-US")} item${learnedTotal === 1 ? "" : "s"} learned.`
+        : synced
+          ? "Synced — but nothing is switched on for your AI yet. Turn learning on for your products or content."
+          : "Sync your products, collections, pages, blogs and discounts so your AI can learn them.",
+      state: trained ? "done" : "todo",
+      action: { kind: "sync" },
+      actionLabel: "Sync now",
     },
     {
-      id: "widget",
-      label: "Customize your chatbox widget",
+      id: "faqs",
+      title: "Train AI data — FAQs",
+      description: "Add the questions shoppers ask most, with your answers.",
+      state: faqsPublished >= 1 ? "done" : "todo",
+      action: { kind: "navigate", href: "/app/ai-agent/training?tab=faqs" },
+      actionLabel: "Add FAQs",
+    },
+    {
+      id: "knowledge",
+      title: "Train AI data — custom knowledge",
+      description: "PDFs, files, policies, or any specific website URL.",
+      state: customSources >= 1 ? "done" : "todo",
+      action: { kind: "navigate", href: "/app/ai-agent/training?tab=knowledge" },
+      actionLabel: "Add sources",
+    },
+    // Done once Instructions → General → Store info has text (user decision
+    // 2026-09-14) — and, when AI wrote it from the store's data (spec 26), once
+    // the merchant has reviewed it (saved General).
+    aiWrittenUnreviewed
+      ? {
+          id: "instructions",
+          title: "Review your AI instructions",
+          description:
+            "Your assistant's store info and instructions were written from your Shopify store. Check them and press Save.",
+          state: "todo",
+          action: { kind: "revisit", href: "/app/ai-agent/instructions" },
+          actionLabel: "Review",
+        }
+      : {
+          id: "instructions",
+          title: "Add your store info",
+          description:
+            "Tell your AI about your store — what you sell, where you're based and how shoppers can reach you.",
+          state: settings.storeInfo.about.trim() ? "done" : "todo",
+          action: { kind: "revisit", href: "/app/ai-agent/instructions#store-info" },
+          actionLabel: "Add store info",
+        },
+    {
+      id: "chatbox",
+      title: "Chatbox settings & appearance",
+      description: "Colours, position and greeting for your storefront widget.",
       state: widgetRow ? "done" : "todo",
-      href: "/app/chatbox",
-      linkLabel: "Chatbox",
+      action: { kind: "navigate", href: "/app/chatbox" },
+      actionLabel: "Customize",
     },
     {
-      id: "sync",
-      label: "Sync your product & store data",
-      state: syncState?.productSyncAt ? "done" : "todo",
-      href: "/app/ai-agent/training",
-      linkLabel: "Data Sources",
-    },
-    {
-      id: "instructions",
-      label: "Set up your AI agent instructions",
-      state: persona && persona.role.trim() !== "" && persona.behaviours.trim() !== "" ? "done" : "todo",
-      href: "/app/ai-agent/instructions",
-      linkLabel: "Instructions",
+      id: "proactive",
+      title: "Proactive chat",
+      description: "Trigger messages that reach shoppers before they ask.",
+      state: activeCampaigns >= 1 ? "done" : "todo",
+      action: { kind: "navigate", href: "/app/proactive-chat" },
+      actionLabel: "Create campaign",
     },
     {
       id: "curated",
-      label: "Publish first five curated answers",
-      state: curatedPublished >= 5 ? "done" : "todo",
-      href: "/app/curated-answers",
-      linkLabel: "Curated Answers",
+      title: "Curated answers",
+      description: "Hand-write replies for your highest-intent questions.",
+      // One published answer, not five (spec 13 revision: easier to set up).
+      state: curatedPublished >= 1 ? "done" : "todo",
+      action: { kind: "navigate", href: "/app/curated-answers" },
+      actionLabel: "Start",
     },
     {
-      id: "campaign",
-      label: "Launch a proactive chat campaign",
-      state: activeCampaigns >= 1 ? "done" : "todo",
-      href: "/app/proactive-chat",
-      linkLabel: "Proactive Chat",
+      id: "embed",
+      title: "Enable AI agent on storefront",
+      description: "Turn on the app embed so the chat goes live for shoppers.",
+      state: embedStatus === "on" ? "done" : embedStatus === "unknown" ? "unknown" : "todo",
+      action: { kind: "external", url: themeEditorUrl },
+      actionLabel:
+        embedStatus === "on"
+          ? "Open theme editor"
+          : embedStatus === "unknown"
+            ? "Check in theme editor"
+            : "Turn on",
+      status: embedStatusBadge(embedStatus),
+      // "draft" is a real state, not a near-miss of "off": the merchant HAS
+      // turned the embed on, just on a theme that is not live. Same wording as
+      // Settings → General.
+      ...(embedStatus === "draft"
+        ? {
+            note: `Enabled on ${embedDetail.themeName ?? "an unpublished theme"} — shoppers won't see the chat until that theme is published, or you turn it on for your live theme.`,
+          }
+        : {}),
     },
   ];
 
   // An "unknown" embed status (no read_themes) can't be completed from here,
-  // so it is excluded from the progress total (N of 5) and rendered as an
-  // informational row instead of an incomplete step.
+  // so it is excluded from the progress total and shown as information.
   const countable = steps.filter((step) => step.state !== "unknown");
   return {
     steps,
     completed: countable.filter((step) => step.state === "done").length,
     total: countable.length,
     embedStatus,
+    training: {
+      sources,
+      learnedTotal,
+      lastSyncedAt: syncTimes.length ? syncTimes[syncTimes.length - 1] : null,
+      productStatus,
+    },
   };
 }
 

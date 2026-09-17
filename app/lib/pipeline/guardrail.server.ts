@@ -16,9 +16,35 @@ export interface GuardrailHit {
   score: number;
 }
 
-/** Layer a: word-boundary keyword scan (fixes the demo's substring false positives). */
-export function keywordScan(message: string, bannedTopics: string[]): GuardrailHit | null {
+/**
+ * Layer a: word-boundary keyword scan (fixes the demo's substring false positives).
+ *
+ * `wholePhrase` (agent mode, spec 24): the topic must appear as a phrase. The
+ * per-word scan blocks on ANY significant word, so the default topic "medical
+ * advice" refused "is this medical-grade steel?" and "legal advice" refused "is
+ * it legal to ship to Canada?" — false refusals on ordinary product questions
+ * in any store category. The agent's own policy covers paraphrases.
+ */
+export function keywordScan(
+  message: string,
+  bannedTopics: string[],
+  opts: { wholePhrase?: boolean } = {},
+): GuardrailHit | null {
   const lower = message.toLowerCase();
+  if (opts.wholePhrase) {
+    // Singular and plural are the same topic: "elections" blocks "election".
+    const wordPattern = (word: string) => {
+      const stem = word.length > 3 && word.endsWith("s") && !word.endsWith("ss") ? word.slice(0, -1) : word;
+      return `${escapeRegex(stem)}(?:s|es)?`;
+    };
+    for (const topic of bannedTopics) {
+      const words = topic.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+      if (words.length === 0) continue;
+      const pattern = new RegExp(`(^|[^\\p{L}\\p{N}])${words.map(wordPattern).join("[^\\p{L}\\p{N}]+")}($|[^\\p{L}\\p{N}])`, "u");
+      if (pattern.test(lower)) return { topic, layer: "keyword", score: 1 };
+    }
+    return null;
+  }
   for (const topic of bannedTopics) {
     const words = topic
       .toLowerCase()
@@ -60,6 +86,41 @@ declare global {
   var bannedVectorCache: Map<string, number[][]> | undefined;
 }
 
+/**
+ * The banned-topic vectors for this shop, embedding them on a cache miss.
+ *
+ * Filling this lazily inside the first chat turn cost that shopper ~600 ms of
+ * OpenAI round trip for work that has nothing to do with their message
+ * `primeBannedVectors` below lets the widget's config
+ * fetch — which happens when the panel OPENS, before anyone types — pay it
+ * instead.
+ */
+async function bannedVectors(shopId: string, topics: string[]): Promise<number[][]> {
+  if (!global.bannedVectorCache) global.bannedVectorCache = new Map();
+  const cacheKey = `${shopId}:${topics.join("|")}`;
+  const hit = global.bannedVectorCache.get(cacheKey);
+  if (hit) return hit;
+  const vectors = await embedTexts(topics.map((t) => `a message about ${t}`), { shopId });
+  global.bannedVectorCache.set(cacheKey, vectors);
+  // Bound the cache (topics change → old keys accumulate).
+  if (global.bannedVectorCache.size > 500) global.bannedVectorCache.clear();
+  return vectors;
+}
+
+/** Fill the banned-topic vector cache off the hot path. Never throws. */
+export async function primeBannedVectors(
+  shopId: string,
+  guardrails: Guardrails | null,
+): Promise<void> {
+  const topics = guardrails?.bannedTopics.filter((t) => t.trim().length > 0) ?? [];
+  if (topics.length === 0) return;
+  try {
+    await bannedVectors(shopId, topics);
+  } catch (error) {
+    logError("banned_vector_prime_error", error, { shopId });
+  }
+}
+
 export async function meaningScan(
   shopId: string,
   queryEmbedding: number[],
@@ -68,15 +129,7 @@ export async function meaningScan(
   const topics = guardrails.bannedTopics.filter((t) => t.trim().length > 0);
   if (topics.length === 0) return null;
 
-  if (!global.bannedVectorCache) global.bannedVectorCache = new Map();
-  const cacheKey = `${shopId}:${topics.join("|")}`;
-  let vectors = global.bannedVectorCache.get(cacheKey);
-  if (!vectors) {
-    vectors = await embedTexts(topics.map((t) => `a message about ${t}`), { shopId });
-    global.bannedVectorCache.set(cacheKey, vectors);
-    // Bound the cache (topics change → old keys accumulate).
-    if (global.bannedVectorCache.size > 500) global.bannedVectorCache.clear();
-  }
+  const vectors = await bannedVectors(shopId, topics);
 
   let best: GuardrailHit | null = null;
   for (let i = 0; i < topics.length; i++) {

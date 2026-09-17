@@ -1,4 +1,5 @@
 import type { ShopSettingsData } from "../lib/settings/schemas";
+import { PlanBanner } from "./ui/PlanGate";
 
 // Settings → Chatbox tab (spec 16): availability + survey entry cards,
 // cart-drawer toggle, order tracking mode.
@@ -49,12 +50,17 @@ function TrackingMode(props: {
 
 export function SettingsChatbox(props: {
   cartDrawer: boolean;
+  /** Human-support waiting message — "" uses the default. */
+  humanModeMessage: string;
   orderTracking: OrderTracking;
   /** Last SAVED tracking config — drives the Connected state (the editable
    *  draft may differ while the merchant types a new key). */
   savedTracking: OrderTracking;
+  /** Tier that unlocks order tracking, or null when this plan has it. */
+  orderTrackingPlan: string | null;
   connecting: boolean;
   onCartDrawerChange: (value: boolean) => void;
+  onHumanModeMessageChange: (value: string) => void;
   onOrderTrackingChange: (value: OrderTracking) => void;
   /** Validate + persist the provider key ("" disconnects). */
   onConnect: (apiKey: string) => void;
@@ -89,6 +95,28 @@ export function SettingsChatbox(props: {
         </s-stack>
       </s-section>
 
+      {/* Human-support mode (this tab is its home;
+          the AI Agent page's off-banner links here). Saved by the page's
+          normal SaveBar with the rest of the chatbox slice. */}
+      <s-section heading="Human support mode">
+        <s-stack gap="base">
+          <s-paragraph>
+            When the AI agent is deactivated, chat runs as human support: shoppers&apos;
+            messages go to your Inbox and this is the first reply they see while your team is
+            on the way.
+          </s-paragraph>
+          <s-text-area
+            label="Waiting message"
+            rows={3}
+            maxLength={300}
+            value={props.humanModeMessage}
+            placeholder="Thanks for reaching out! Our team is helping other customers right now — we'll connect you with an agent shortly."
+            details="Sent once per conversation. Leave blank to use the default shown above."
+            onInput={(e) => props.onHumanModeMessageChange(e.currentTarget.value)}
+          />
+        </s-stack>
+      </s-section>
+
       <s-section>
         <s-switch
           label="Open cart drawer after add to cart"
@@ -109,6 +137,12 @@ export function SettingsChatbox(props: {
       <s-section heading="Order tracking">
         <s-stack gap="base">
           <s-paragraph>Set up how customers can track their orders via your chatbox.</s-paragraph>
+          {/* Settings stay editable while locked (they are kept for after an
+              upgrade); the banner says the storefront won't show tracking. */}
+          <PlanBanner plan={props.orderTrackingPlan} heading="Order tracking isn't included in your plan">
+            Shoppers can&apos;t track orders in the chat on your current plan. Your settings here are
+            saved and apply as soon as you upgrade.
+          </PlanBanner>
 
           <TrackingMode
             value="default"
@@ -151,14 +185,6 @@ export function SettingsChatbox(props: {
               <s-heading>Step 1. Select tracking provider</s-heading>
               <s-stack gap="small-300">
                 <s-checkbox label="17Track" checked disabled={false} onInput={() => {}} />
-                <s-stack direction="inline" gap="small" alignItems="center">
-                  <s-checkbox label="TrackingMore" checked={false} disabled onInput={() => {}} />
-                  <s-badge tone="neutral">Coming soon</s-badge>
-                </s-stack>
-                <s-stack direction="inline" gap="small" alignItems="center">
-                  <s-checkbox label="Track123" checked={false} disabled onInput={() => {}} />
-                  <s-badge tone="neutral">Coming soon</s-badge>
-                </s-stack>
               </s-stack>
             </s-stack>
 

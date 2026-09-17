@@ -3,7 +3,6 @@ import { z } from "zod";
 import db from "../db.server";
 import { recordEvent } from "../lib/analytics/events.server";
 import { resolveShopId } from "../lib/tenancy.server";
-import { hasFeature } from "../lib/billing/plans.server";
 import { authenticate } from "../shopify.server";
 
 // POST /apps/chatconvert/survey — satisfaction survey result (spec 05/16).
@@ -31,10 +30,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   // Post-chat CSAT is a Basic+ feature (spec 15). The widget config already
   // withholds the survey on Free, but the endpoint is public — gate it here too
   // so a crafted POST can't write ratings a Free shop never paid for.
-  const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
-  if (!hasFeature(shop?.plan ?? "free", "survey")) {
-    return new Response("not available on this plan", { status: 403 });
-  }
+  // No plan check since 2026-09-11 — the survey is on every plan. Gated, it
+  // refused Free ratings AFTER the widget had already shown the survey and
+  // thanked the shopper, so their answers were silently thrown away.
 
   const updated = await db.conversation.updateMany({
     // sessionId binds the rating to the caller's own conversation (review C1).

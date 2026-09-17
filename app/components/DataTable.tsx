@@ -1,8 +1,8 @@
-import { useId, useMemo, useState } from "react";
+import { useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { SPACE } from "./ui/tokens";
 
 // Shared admin table (specs 07/09/11/12), rendered on the native Polaris
-// s-table family (user directive 2026-08-12 — no hand-rolled <table> markup).
+// s-table family (no hand-rolled <table> markup).
 // Standard furniture per discount_screen_2.png, consistent app-wide:
 //   toolbar (pills/chips) left · collapsible search icon right,
 //   optional row selection + "N selected" bulk-action bar,
@@ -43,6 +43,14 @@ export function DataTable<Row extends { id: string }>(props: {
   hoverable?: boolean;
   /** Initial rows per page (default 10). */
   perPage?: number;
+  /** Keep the rows region from collapsing below a full page's height, so a
+   *  short last page or a narrow filter result doesn't make the pager jump up
+   * The height is MEASURED from the last full
+   *  page actually rendered — a pixel estimate over-reserved and left the
+   *  table taller than its rows — so until a full
+   *  page has been seen (e.g. fewer rows than a page holds) the table takes
+   *  its natural height. A floor, never a crop. */
+  minRows?: number;
   toolbar?: React.ReactNode;
   /** Rendered at the far right of the toolbar row, after the search icon
    *  (e.g. Contacts' Export menu button). */
@@ -66,6 +74,9 @@ export function DataTable<Row extends { id: string }>(props: {
   onPageChange?: (page: number) => void;
   /** Optional footer content on the pagination row, left of items-per-page. */
   footerExtra?: React.ReactNode;
+  /** Optional footer content at the LEFT edge of the pagination row (e.g. a
+   *  row count — cross-sell request 2026-09-11); the pager stays centered. */
+  footerStart?: React.ReactNode;
   /** Hide the built-in items-per-page select — for consumers whose page size
    *  is fixed server-side. */
   perPageSelector?: boolean;
@@ -110,6 +121,18 @@ export function DataTable<Row extends { id: string }>(props: {
   const pages = Math.max(1, Math.ceil(filtered.length / perPage));
   const current = Math.min(page, pages);
   const visible = filtered.slice((current - 1) * perPage, current * perPage);
+
+  // minRows: remember what a FULL page really measures (per page size), and
+  // floor shorter pages to that — never to an estimate (see the prop doc).
+  const rowsRegionRef = useRef<HTMLDivElement | null>(null);
+  const [fullPageHeight, setFullPageHeight] = useState<number | null>(null);
+  useLayoutEffect(() => setFullPageHeight(null), [perPage]);
+  useLayoutEffect(() => {
+    if (!props.minRows || !rowsRegionRef.current) return;
+    if (visible.length >= perPage) {
+      setFullPageHeight(rowsRegionRef.current.offsetHeight);
+    }
+  }, [visible.length, perPage, props.minRows]);
 
   const visibleSelected = visible.filter((r) => selected.has(r.id)).length;
   const allVisibleSelected = visible.length > 0 && visibleSelected === visible.length;
@@ -225,7 +248,16 @@ export function DataTable<Row extends { id: string }>(props: {
         </div>
       ) : null}
 
-      <div style={{ position: "relative" }}>
+      <div
+        ref={rowsRegionRef}
+        style={{
+          position: "relative",
+          minHeight:
+            props.minRows && visible.length < perPage && fullPageHeight !== null
+              ? fullPageHeight
+              : undefined,
+        }}
+      >
       {props.loading ? (
         <div
           style={{
@@ -415,7 +447,12 @@ export function DataTable<Row extends { id: string }>(props: {
           alignItems: "center",
         }}
       >
-        <span className="dt-pager-spacer" />
+        <span
+          className="dt-pager-spacer"
+          style={{ justifySelf: "start", display: "inline-flex", alignItems: "center" }}
+        >
+          {props.footerStart}
+        </span>
         <div style={{ display: "flex", gap: SPACE.sm, alignItems: "center" }}>
           <s-button
             variant="tertiary"

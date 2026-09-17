@@ -50,6 +50,74 @@
     return node;
   }
 
+  /** A model-written href we are willing to follow: this store's own paths, or
+   *  an explicit https page. Everything else (javascript:, data:, mailto
+   *  built from model text) renders as plain text instead of a link. */
+  function safeHref(raw) {
+    var href = String(raw || "").trim();
+    if (/^https:\/\/[^\s<>"']+$/i.test(href)) return href;
+    if (/^\/[^\s<>"']*$/.test(href)) return href;
+    return null;
+  }
+
+  var INLINE = /\[([^\]\n]{1,120})\]\((https:\/\/[^\s)]+|\/[^\s)]*)\)|(https:\/\/[^\s<>"']+)|\*\*([^*\n]{1,200})\*\*/g;
+
+  /**
+   * Bot text with the small amount of formatting the model actually produces:
+   * **bold**, markdown links, and bare https URLs.
+   *
+   * Everything is built with createElement/createTextNode — the model's output
+   * never becomes markup, so there is nothing to inject. Two visible bugs this
+   * fixes: replies were arriving with literal `**` around product names, and a
+   * URL in a reply (or quoted out of the merchant's own help articles)
+   * rendered as dead text because bot bubbles were textContent only.
+   */
+  function appendInline(node, text) {
+    var source = String(text == null ? "" : text);
+    var at = 0;
+    var m;
+    INLINE.lastIndex = 0;
+    while ((m = INLINE.exec(source)) !== null) {
+      if (m.index > at) node.appendChild(document.createTextNode(source.slice(at, m.index)));
+      var linkLabel = m[1];
+      var linkHref = m[2];
+      var bareUrl = m[3];
+      var bold = m[4];
+      if (bold !== undefined) {
+        var strong = document.createElement("strong");
+        strong.textContent = bold;
+        node.appendChild(strong);
+      } else {
+        var href = safeHref(linkHref !== undefined ? linkHref : bareUrl);
+        var label = linkLabel !== undefined ? linkLabel : bareUrl;
+        if (href) {
+          var a = el("a", null, { href: href, rel: "noopener noreferrer" });
+          // A storefront path stays in this tab (the widget survives the
+          // navigation); an external page must not take the shopper away.
+          if (href.charAt(0) !== "/") a.setAttribute("target", "_blank");
+          a.textContent = label;
+          node.appendChild(a);
+        } else {
+          node.appendChild(document.createTextNode(m[0]));
+        }
+      }
+      at = m.index + m[0].length;
+    }
+    if (at < source.length) node.appendChild(document.createTextNode(source.slice(at)));
+  }
+
+  /** Like setText, but renders the inline formatting above. Bot/agent bubbles
+   *  only — a shopper's own message is always shown exactly as they typed it. */
+  function setRichText(node, text) {
+    node.textContent = "";
+    String(text == null ? "" : text)
+      .split("\n")
+      .forEach(function (line, i) {
+        if (i > 0) node.appendChild(document.createElement("br"));
+        appendInline(node, line);
+      });
+  }
+
   // Bot/agent identity on message bubbles (spec 06 "Chat avatar"): with
   // "Store branding" the shell passes {url, name} from Settings → General →
   // Store information — logo (or the name's initials) as the avatar and the
@@ -290,7 +358,12 @@
       home.appendChild(row);
     }
 
-    if (widget.faqs) {
+    // FAQs on in Chatbox settings but none written yet ⇒ no block at all. An
+    // empty search box above "No results" reads as broken, not as unconfigured.
+    // `!== false`, not truthy: a caller that predates the flag (or any future
+    // one that forgets it) keeps the old behaviour instead of silently losing
+    // the block — which is exactly how the Chatbox preview lost its FAQs.
+    if (widget.faqs && config.faqAvailable !== false) {
       hasBlock = true;
       var faqBlk = el("div", "cw-blk");
       var search = el("div", "cw-search");
@@ -402,7 +475,10 @@
       row.appendChild(avatar());
     }
     var bubble = el("div", "cw-bubble" + (kind === "user" ? " cw-bubble--user" : kind === "sys" ? " cw-bubble--sys" : ""));
-    setText(bubble, content);
+    // The shopper's own words go in verbatim; a reply gets its links and bold
+    // rendered (see setRichText).
+    if (kind === "user") setText(bubble, content);
+    else setRichText(bubble, content);
     appendWithLabel(row, bubble, kind === "bot" ? botLabel(label) : label);
     return { el: row, bubbleEl: bubble };
   }
@@ -442,6 +518,29 @@
     return row;
   }
 
+  /**
+   * Buttons that open a screen of the widget itself (order tracking, contact,
+   * help), chosen by the agent from what the shop has switched on.
+   *
+   * Replaces the agent describing storefront navigation it cannot see — it
+   * once told a shopper to "click the Track navigation", which does not exist:
+   * order tracking lives in this panel. cb.onAction(action).
+   */
+  function actionChips(actions, cb) {
+    var wrap = el("div", "cw-actions-row");
+    actions.forEach(function (action) {
+      if (!action || !action.key) return;
+      var chip = el("button", "cw-chip cw-chip--action", { type: "button" });
+      // The label is written by the server, never by the model.
+      chip.textContent = action.label || "Open";
+      if (cb && cb.onAction) {
+        chip.addEventListener("click", function () { cb.onAction(action); });
+      }
+      wrap.appendChild(chip);
+    });
+    return wrap;
+  }
+
   /** Starter chips. cb.onStarter(starter). */
   function starterChips(starters, cb) {
     var wrap = el("div", "cw-starters");
@@ -460,16 +559,90 @@
     return wrap;
   }
 
+  /**
+   * Carousel of product cards (owner 2026-09-16). One card sits fully in view
+   * with ~75% of the next showing, so it reads as "there is more to the right";
+   * arrows and dots appear only with 2+ products, and native scroll-snap keeps
+   * swipe/drag working on touch.
+   */
+  function productCarousel(track, count) {
+    if (count < 2) return track;
+    var frame = el("div", "cw-carousel");
+    frame.appendChild(track);
+
+    var step = function () {
+      var card = track.querySelector(".cw-card");
+      var gap = 10;
+      return card ? card.getBoundingClientRect().width + gap : track.clientWidth;
+    };
+    // One chevron asset, mirrored by CSS for "previous".
+    var arrow = function (dir, label) {
+      var b = el("button", "cw-car-arrow cw-car-arrow--" + dir, { type: "button", "aria-label": label });
+      svg(b, ICONS.chev);
+      b.addEventListener("click", function () {
+        track.scrollBy({ left: dir === "next" ? step() : -step(), behavior: "smooth" });
+      });
+      return b;
+    };
+    var prev = arrow("prev", "Previous product");
+    var next = arrow("next", "Next product");
+    frame.appendChild(prev);
+    frame.appendChild(next);
+
+    var dots = el("div", "cw-car-dots", { role: "tablist", "aria-label": "Product" });
+    var buttons = [];
+    for (var i = 0; i < count; i++) {
+      (function (index) {
+        var dot = el("button", "cw-car-dot", { type: "button", role: "tab", "aria-label": "Product " + (index + 1) });
+        dot.addEventListener("click", function () {
+          track.scrollTo({ left: index * step(), behavior: "smooth" });
+        });
+        dots.appendChild(dot);
+        buttons.push(dot);
+      })(i);
+    }
+    frame.appendChild(dots);
+
+    var sync = function () {
+      var index = Math.round(track.scrollLeft / Math.max(1, step()));
+      if (index > count - 1) index = count - 1;
+      if (index < 0) index = 0;
+      for (var j = 0; j < buttons.length; j++) {
+        var on = j === index;
+        buttons[j].className = "cw-car-dot" + (on ? " cw-car-dot--on" : "");
+        buttons[j].setAttribute("aria-selected", on ? "true" : "false");
+      }
+      // An arrow that cannot move anything is hidden rather than dead.
+      var max = track.scrollWidth - track.clientWidth - 2;
+      prev.hidden = track.scrollLeft <= 2;
+      next.hidden = track.scrollLeft >= max;
+    };
+    var frameId = 0;
+    track.addEventListener("scroll", function () {
+      if (frameId) return;
+      frameId = requestAnimationFrame(function () {
+        frameId = 0;
+        sync();
+      });
+    });
+    setTimeout(sync, 0);
+    return frame;
+  }
+
   /** Product cards row. cb: {onView(card), onAdd(card)}. */
   function productCards(cards, currency, cb) {
     var wrap = el("div", "cw-cards", { role: "list" });
     cards.forEach(function (card) {
       var item = el("div", "cw-card", { role: "listitem" });
+      // The image is its own positioned box so the add button can sit ON it,
+      // bottom-right, leaving the row below to one full-width "View product".
+      var media = el("div", "cw-card-media");
       if (card.imageUrl) {
-        item.appendChild(el("img", "cw-card-img", { src: card.imageUrl, alt: card.title, loading: "lazy" }));
+        media.appendChild(el("img", "cw-card-img", { src: card.imageUrl, alt: card.title, loading: "lazy" }));
       } else {
-        item.appendChild(el("div", "cw-card-img"));
+        media.appendChild(el("div", "cw-card-img"));
       }
+      item.appendChild(media);
       var body = el("div", "cw-card-body");
       var t = el("div", "cw-card-t");
       t.textContent = card.title;
@@ -480,22 +653,51 @@
 
       var actions = el("div", "cw-card-actions");
       var view = el("a", "cw-btn cw-btn--ghost", { href: "/products/" + card.handle });
-      view.textContent = "View";
+      view.textContent = "View product";
       if (cb && cb.onView) {
         view.addEventListener("click", function () { cb.onView(card); });
       }
-      var add = el("button", "cw-btn cw-btn--primary", { type: "button" });
-      add.textContent = "Add to cart";
+      var add = el("button", "cw-card-add", { type: "button", "aria-label": "Add " + card.title + " to cart" });
+      add.textContent = "Add";
       if (cb && cb.onAdd) {
-        add.addEventListener("click", function () { cb.onAdd(card); });
+        // The add is a network round trip. Without a pending state the button
+        // sat idle until the drawer opened, which reads as "nothing happened"
+        // — so shoppers clicked again and added the item twice.
+        var busy = false;
+        var setPending = function (on) {
+          if (on === busy) return;
+          busy = on;
+          add.disabled = on;
+          add.setAttribute("aria-busy", on ? "true" : "false");
+          if (on) {
+            add.textContent = "";
+            add.appendChild(el("span", "cw-spin", { "aria-hidden": "true" }));
+          } else {
+            add.textContent = "Add";
+          }
+        };
+        add.addEventListener("click", function () {
+          if (busy) return;
+          setPending(true);
+          var done = false;
+          var release = function () {
+            if (done) return;
+            done = true;
+            setPending(false);
+          };
+          var result = cb.onAdd(card, { release: release });
+          // A handler that navigates away never settles; one that returns a
+          // promise releases the button when the cart call finishes.
+          if (result && typeof result.then === "function") result.then(release, release);
+        });
       }
+      media.appendChild(add);
       actions.appendChild(view);
-      actions.appendChild(add);
       body.appendChild(actions);
       item.appendChild(body);
       wrap.appendChild(item);
     });
-    return wrap;
+    return productCarousel(wrap, cards.length);
   }
 
   /** Message input bar. cb.onSend(text).
@@ -1539,9 +1741,17 @@
   }
 
   // ── footer ───────────────────────────────────────────────────────────────
-  function footer(showBranding) {
+  // "ChatConvert" links to the App Store listing (url from widget config).
+  function footer(showBranding, url) {
     var foot = el("div", "cw-foot");
-    foot.textContent = "Powered by ChatConvert";
+    foot.textContent = "Powered by ";
+    if (url && /^https:\/\/apps\.shopify\.com\//.test(url)) {
+      var a = el("a", null, { href: url, target: "_blank", rel: "noopener" });
+      a.textContent = "ChatConvert";
+      foot.appendChild(a);
+    } else {
+      foot.appendChild(document.createTextNode("ChatConvert"));
+    }
     if (!showBranding) foot.style.display = "none";
     return foot;
   }
@@ -1550,6 +1760,8 @@
     icons: ICONS,
     el: el,
     setText: setText,
+    setRichText: setRichText,
+    actionChips: actionChips,
     themeVars: themeVars,
     applyTheme: applyTheme,
     formatPrice: formatPrice,

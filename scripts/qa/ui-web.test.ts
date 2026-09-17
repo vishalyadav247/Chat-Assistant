@@ -25,6 +25,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
+import { qaFetch, waitForServer } from "./http";
 
 // Load .env manually (tsx does not) BEFORE importing app modules.
 for (const line of readFileSync(join(process.cwd(), ".env"), "utf-8").split(/\r?\n/)) {
@@ -89,7 +90,7 @@ async function probe(
   const headers: Record<string, string> = { "user-agent": UA, ...(init.headers ?? {}) };
   if (init.cookie) headers.cookie = init.cookie;
   if (init.origin !== null) headers.origin = init.origin ?? BASE;
-  const res = await fetch(BASE + path, {
+  const res = await qaFetch(BASE + path, {
     method: init.method ?? "GET",
     headers,
     body: init.body,
@@ -206,7 +207,7 @@ const WEB_PAGES: WebPage[] = [
     path: "/app",
     label: "Dashboard",
     permission: "dashboard",
-    heading: ['<s-section heading="Overview"', '<s-section heading="Setup checklist"'],
+    heading: ['<s-section heading="Overview"', "Get your AI ready"],
     controls: ['<s-select label="Date range"', "<s-button"],
   },
   {
@@ -305,8 +306,9 @@ async function main(): Promise<void> {
   const { mintHandoffToken, requestPasswordReset } = await import("../../app/lib/team/team.server");
 
   try {
-    const res = await fetch(`${BASE}/web/login`, { headers: { "user-agent": UA } });
-    if (!res.ok) throw new Error(`status ${res.status}`);
+    // Backoff gate (QA-T4): a cold dev server is slow, not down.
+    const up = await waitForServer(`${BASE}/web/login`, { headers: { "user-agent": UA } });
+    if (!up.ok) throw new Error(up.error);
   } catch (error) {
     // Never let an unreachable server look like a clean run.
     ok(
@@ -509,7 +511,7 @@ async function main(): Promise<void> {
     }
     // Non-embeddable + no-store on every public web page.
     {
-      const res = await fetch(`${BASE}/web/login`, { headers: { "user-agent": UA } });
+      const res = await qaFetch(`${BASE}/web/login`, { headers: { "user-agent": UA } });
       const csp = res.headers.get("content-security-policy") ?? "";
       const xfo = res.headers.get("x-frame-options") ?? "";
       ok(

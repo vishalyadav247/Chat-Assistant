@@ -5,7 +5,7 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
 import {
-  displayQuota,
+  getQuota,
   hasFeature,
   nextPlanNameForQuota,
   requiredPlanName,
@@ -25,6 +25,7 @@ import { getWidgetCssText, getWidgetRendererJs } from "../lib/widget/renderer-as
 import type { BrowseItemMeta } from "../components/BrowseProductsModal";
 import { ProactiveCampaignEditor, type CampaignDraft } from "../components/ProactiveCampaignEditor";
 import { campaignCtr, ProactiveCampaignTable } from "../components/ProactiveCampaignTable";
+import { ConfirmDeleteModal } from "../components/ui/ConfirmDeleteModal";
 import { ProactiveTemplatePicker } from "../components/ProactiveTemplatePicker";
 import { SaveBar } from "../components/SaveBar";
 import { PlanBanner, PlanMeter } from "../components/ui/PlanGate";
@@ -102,7 +103,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     premiumAllowed: hasFeature(plan, "premium_campaign_templates"),
     // Tier name for every premium-template chip/banner in this tree. Read from
     // the live matrix rather than hard-coded, because the operator can move the
-    // feature between plans from /platform.
+    // feature between plans from /admin.
     premiumPlan: hasFeature(plan, "premium_campaign_templates")
       ? null
       : requiredPlanName("premium_campaign_templates"),
@@ -111,7 +112,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     // instead of meeting it as a save error.
     activeQuota: {
       used: campaigns.filter((c) => c.status === "active").length,
-      quota: displayQuota(plan, "active_campaigns"),
+      quota: getQuota(plan, "active_campaigns"),
       nextPlan: nextPlanNameForQuota(plan, "active_campaigns"),
     },
     productMeta,
@@ -352,25 +353,17 @@ export default function ProactiveChatPage() {
                   nextPlan={data.activeQuota.nextPlan}
                 />
               </s-box>
-              {pendingDelete ? (
-                <s-banner tone="critical" heading={`Delete “${pendingDelete.name}”?`}>
-                  <s-paragraph>This can&apos;t be undone.</s-paragraph>
-                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                    <s-button
-                      variant="primary"
-                      tone="critical"
-                      disabled={busy}
-                      loading={busy}
-                      onClick={() =>
-                        fetcher.submit({ intent: "delete", id: pendingDelete.id }, { method: "post" })
-                      }
-                    >
-                      Delete
-                    </s-button>
-                    <s-button onClick={() => setPendingDelete(null)}>Keep it</s-button>
-                  </div>
-                </s-banner>
-              ) : null}
+              <ConfirmDeleteModal
+                open={pendingDelete !== null}
+                title={`Delete “${pendingDelete?.name ?? "this campaign"}”?`}
+                body="Shoppers stop seeing it immediately. This can't be undone."
+                loading={busy}
+                onCancel={() => setPendingDelete(null)}
+                onConfirm={() =>
+                  pendingDelete &&
+                  fetcher.submit({ intent: "delete", id: pendingDelete.id }, { method: "post" })
+                }
+              />
               <ProactiveCampaignTable
                 rows={data.campaigns}
                 currency={data.currency}

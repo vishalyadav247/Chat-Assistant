@@ -59,4 +59,25 @@ if ($left) {
   Write-Host 'Dev stack stopped - no project dev servers remain.' -ForegroundColor Green
 }
 
+# 5. Other project node processes, deliberately NOT killed. A `tsx` run
+#    (eval:golden, smoke, a QA suite, prisma studio) is usually something you
+#    started on purpose and want to finish - but it has the Prisma query engine
+#    mapped, and Windows will not let `prisma generate` rename over an open
+#    file. That surfaces later as a bare EPERM with no hint of the cause, so
+#    say it here while the connection is still obvious.
+$others = Get-CimInstance Win32_Process | Where-Object {
+  $_.Name -eq 'node.exe' -and $_.CommandLine -like '*chat-convert*' -and
+  $_.CommandLine -notlike '*@react-router*' -and $_.CommandLine -notlike '*vite*'
+}
+if ($others) {
+  Write-Host ''
+  Write-Host 'Left running (not part of the dev stack) - these hold the Prisma engine lock:' -ForegroundColor Yellow
+  foreach ($o in $others) {
+    $cmd = $o.CommandLine
+    if ($cmd.Length -gt 110) { $cmd = $cmd.Substring(0, 110) + '...' }
+    Write-Host ("  PID {0}  {1}" -f $o.ProcessId, $cmd)
+  }
+  Write-Host 'If `prisma generate` fails with EPERM, this is why.' -ForegroundColor Yellow
+}
+
 exit 0

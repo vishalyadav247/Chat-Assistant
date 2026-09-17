@@ -25,6 +25,45 @@ import type { MemberRole } from "./team/team.server";
 // or the TeamSession row behind an opaque HttpOnly cookie — never from client
 // input. SameSite=Lax means the cookie is never sent inside the admin iframe.
 
+declare global {
+  // eslint-disable-next-line no-var
+  var bootstrappedShops: Set<string> | undefined;
+}
+
+/**
+ * The shop row, fully bootstrapped (defaults + first sync), for an embedded
+ * admin request.
+ *
+ * The install hook (afterAuth → onShopAuthenticated) only runs when Shopify
+ * issues a NEW token. A store whose token already existed when the row did not
+ * — installed against another database, or a failed hook — used to get a bare
+ * row from this access check: the app opened, but no defaults were seeded and
+ * no sync was ever queued, so every product job logged `catalog_unknown_shop`
+ * (production, 2026-09-15). Opening the app now finishes the bootstrap. Checked
+ * once per shop per process; the bootstrap itself is idempotent.
+ */
+async function ensureShopBootstrapped(shopDomain: string): Promise<string> {
+  global.bootstrappedShops ??= new Set();
+  const shop = await db.shop.findUnique({ where: { domain: shopDomain }, select: { id: true } });
+  if (shop && global.bootstrappedShops.has(shop.id)) return shop.id;
+  const [persona, syncState] = shop
+    ? await Promise.all([
+        db.persona.findUnique({ where: { shopId: shop.id }, select: { id: true } }),
+        db.syncState.findUnique({ where: { shopId: shop.id }, select: { productSyncAt: true } }),
+      ])
+    : [null, null];
+  // Other syncs can create the sync_states row, so "products never synced" is
+  // the signal — re-queued at most once per shop per process.
+  if (!shop || !persona || !syncState?.productSyncAt) {
+    const { onShopAuthenticated } = await import("./install.server");
+    await onShopAuthenticated(shopDomain);
+  }
+  const shopId = shop?.id ?? (await resolveShopId(shopDomain));
+  if (global.bootstrappedShops.size > 5_000) global.bootstrappedShops.clear();
+  global.bootstrappedShops.add(shopId);
+  return shopId;
+}
+
 export type Surface = "admin" | "web";
 
 export type Permission =
@@ -128,7 +167,7 @@ export async function requireShopAccess(
     };
   } else {
     const { session, admin } = await authenticate.admin(request);
-    const shopId = await resolveShopId(session.shop);
+    const shopId = await ensureShopBootstrapped(session.shop);
     access = {
       surface: "admin",
       shopId,

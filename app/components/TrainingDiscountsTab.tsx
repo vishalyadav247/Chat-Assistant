@@ -2,21 +2,22 @@ import { useState } from "react";
 import type { DiscountRow } from "../routes/app.ai-agent.training";
 import { DataTable } from "./DataTable";
 import {
+  FilterSelect,
   LearnCard,
   StatusBadge,
-  SubTabs,
-  SyncControlLayout,
+  SyncStatus,
+  useMasterLearnDraft,
   useSyncWatcher,
   useTrainingFetcher,
 } from "./TrainingShared";
-import { PlanBanner } from "./ui/PlanGate";
+import { SaveBar } from "./SaveBar";
 
-// Discounts tab (spec 07, design discount_screen_2.png): upgrade banner for
-// plans without real-time discount sync, learn card with master AI switch,
-// manage card (Real-time mini switch, Manage → Shopify Discounts admin, Sync
-// now), and the discounts table on the shared DataTable (native s-table:
+// Discounts tab (spec 07, design discount_screen_2.png): learn card with master
+// AI switch, manage card (sync status, Manage → Shopify Discounts admin, Sync
+// now; discount webhooks apply on every plan, so there is no real-time switch
+// or upgrade banner), and the discounts table on the shared DataTable (native s-table:
 // status pills, collapsible search, selection + bulk AI enable/disable —
-// app-only per user decision 2026-08-12, never mutates the discount in
+// app-only, never mutates the discount in
 // Shopify — centered pager, items-per-page).
 
 const TYPE_META: Record<string, { icon: "discount" | "delivery" | "gift-card"; label: string }> = {
@@ -26,18 +27,13 @@ const TYPE_META: Record<string, { icon: "discount" | "delivery" | "gift-card"; l
   bxgy: { icon: "gift-card", label: "Buy X get Y" },
 };
 
-type StatusFilter = "all" | "active" | "inactive" | "learning_on" | "learning_off";
+// FAQ-style filter dropdowns (user, 2026-09-11 — replaced the SubTabs pills).
+type StatusFilter = "" | "active" | "inactive";
+type LearnFilter = "" | "on" | "off";
 
 export function TrainingDiscountsTab(props: {
   rows: DiscountRow[];
   lastSyncedAt: string | null;
-  showUpgradeBanner: boolean;
-  /** Plan allows real-time sync (Pro+; always true in open enforcement). */
-  realtime: boolean;
-  /** Tier that unlocks it (live matrix), or null when this plan has it. */
-  realtimePlan: string | null;
-  /** Merchant's saved toggle state (ShopSettings.discountRealtime). */
-  realtimeEnabled: boolean;
   /** myshopify domain — Manage links to the store's Discounts admin. */
   shopDomain: string;
   /** Master "Learn discounts" permission (ShopSettings.learn.discounts) —
@@ -47,70 +43,44 @@ export function TrainingDiscountsTab(props: {
   const dt = useDateTime();
   const { submit, pendingIntent } = useTrainingFetcher();
   const syncWatch = useSyncWatcher(props.lastSyncedAt, "Discounts synced");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("");
+  const [learnFilter, setLearnFilter] = useState<LearnFilter>("");
 
-  const rows = props.rows.filter((row) => {
-    switch (statusFilter) {
-      case "active":
-        return row.status === "active";
-      case "inactive":
-        return row.status !== "active";
-      case "learning_on":
-        return row.learnEnabled;
-      case "learning_off":
-        return !row.learnEnabled;
-      default:
-        return true;
-    }
-  });
+  const rows = props.rows.filter(
+    (row) =>
+      (!statusFilter ||
+        (statusFilter === "active" ? row.status === "active" : row.status !== "active")) &&
+      (!learnFilter || row.learnEnabled === (learnFilter === "on")),
+  );
   const learned = props.rows.filter((r) => r.learnEnabled).length;
+
+  // Master switch = major setting → Save/Discard bar; row toggles stay instant.
+  const master = useMasterLearnDraft(props.masterEnabled, (enabled) =>
+    submit("learn-master", { type: "discounts", enabled: enabled ? "true" : "false" }),
+  );
 
   return (
     <s-stack gap="base">
-      {props.showUpgradeBanner ? (
-        <PlanBanner plan={props.realtimePlan} heading="Upgrade to real-time discount sync">
-          Discounts sync instantly when you edit them in Shopify via webhooks — no manual sync
-          needed.
-        </PlanBanner>
-      ) : null}
-
+      <SaveBar
+        dirty={master.dirty}
+        saving={pendingIntent === "learn-master"}
+        onSave={master.onSave}
+        onDiscard={master.onDiscard}
+      />
       <LearnCard
         title="Discounts"
         chip={`${props.masterEnabled ? learned : 0} of ${props.rows.length} discounts learned`}
         description="Enable your AI agent to answer customer questions about discounts."
-        switchChecked={props.masterEnabled}
+        switchChecked={master.draft}
         switchLabel="Learn discounts"
-        onSwitch={(checked) =>
-          submit("learn-master", { type: "discounts", enabled: checked ? "true" : "false" })
-        }
+        onSwitch={master.setDraft}
       />
 
-      <s-section heading="Manage data">
+      <s-section heading="Manage discounts">
         <s-stack gap="base">
           <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="start">
-            <SyncControlLayout
-              toggle={
-                <s-switch
-                  label="Real-time sync"
-                  checked={props.realtime && props.realtimeEnabled}
-                  disabled={!props.realtime || pendingIntent === "discount-realtime"}
-                  onInput={(e) =>
-                    submit("discount-realtime", {
-                      enabled: e.currentTarget.checked ? "true" : "false",
-                    })
-                  }
-                />
-              }
-              info={
-                props.realtime
-                  ? "Discount webhooks keep this data fresh automatically."
-                  : `Available on ${props.realtimePlan ?? "higher"} plans — discount webhooks keep this data fresh automatically.`
-              }
-              locked={!props.realtime}
-              lockedPlan={props.realtimePlan}
-              lastSyncedAt={props.lastSyncedAt}
-              running={syncWatch.syncing}
-            />
+            {/* Webhooks on every plan — no real-time switch, no plan gate. */}
+            <SyncStatus type="discounts" lastSyncedAt={props.lastSyncedAt} running={syncWatch.syncing} />
             <s-stack direction="inline" gap="small-200" alignItems="center">
               <s-button href={`https://${props.shopDomain}/admin/discounts`} target="_blank" icon="external">
                 Manage in Shopify
@@ -124,13 +94,14 @@ export function TrainingDiscountsTab(props: {
                   syncWatch.start();
                 }}
               >
-                Sync now
+                Sync discounts
               </s-button>
             </s-stack>
           </s-grid>
 
           <DataTable
             rows={rows}
+            searchAlwaysOpen
             searchPlaceholder="Search discounts"
             searchFn={(row, q) =>
               row.title.toLowerCase().includes(q) || row.summary.toLowerCase().includes(q)
@@ -139,17 +110,26 @@ export function TrainingDiscountsTab(props: {
             perPage={10}
             hoverable
             toolbar={
-              <SubTabs
-                tabs={[
-                  { id: "all", label: "All" },
-                  { id: "active", label: "Active" },
-                  { id: "inactive", label: "Inactive" },
-                  { id: "learning_on", label: "Learning on" },
-                  { id: "learning_off", label: "Learning off" },
-                ]}
-                active={statusFilter}
-                onChange={setStatusFilter}
-              />
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <FilterSelect
+                  label="Status"
+                  value={statusFilter}
+                  options={[
+                    { value: "active", label: "Active" },
+                    { value: "inactive", label: "Inactive" },
+                  ]}
+                  onChange={(v) => setStatusFilter(v as StatusFilter)}
+                />
+                <FilterSelect
+                  label="Learning"
+                  value={learnFilter}
+                  options={[
+                    { value: "on", label: "Learning on" },
+                    { value: "off", label: "Learning off" },
+                  ]}
+                  onChange={(v) => setLearnFilter(v as LearnFilter)}
+                />
+              </div>
             }
             bulkActions={(ids, clear) => (
               <>
@@ -177,13 +157,28 @@ export function TrainingDiscountsTab(props: {
               {
                 key: "title",
                 title: "Title",
+                // Title + the summary ("20% off all products…") — kept, unlike
+                // pages/blogs, because for a discount the summary IS the offer
+                // and often says more than the internal title. One line each;
+                // the full summary shows on hover.
                 render: (row) => (
                   <s-stack gap="small-500">
                     <s-text type="strong">{row.title}</s-text>
-                    {row.summary ? <s-text color="subdued">{row.summary}</s-text> : null}
+                    {row.summary ? (
+                      <div
+                        title={row.summary}
+                        style={{
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        <s-text color="subdued">{row.summary}</s-text>
+                      </div>
+                    ) : null}
                   </s-stack>
                 ),
-                width:200
+                width: 200,
               },
               {
                 key: "status",
@@ -193,11 +188,20 @@ export function TrainingDiscountsTab(props: {
               {
                 key: "method",
                 title: "Method",
-                render: (row) => (
-                  <s-text tone="neutral">
-                    {row.method === "automatic" ? "Automatic" : "Code"}
-                  </s-text>
-                )
+                // The code sits under the method rather than in a column of its
+                // own — the table is already wide, and the code is only ever
+                // meaningful for the "Code" method. It is what the AI agent now
+                // quotes to shoppers, so the merchant should see exactly what
+                // was synced.
+                render: (row) =>
+                  row.method === "automatic" ? (
+                    <s-text tone="neutral">Automatic</s-text>
+                  ) : (
+                    <s-stack gap="small-500">
+                      <s-text tone="neutral">Code</s-text>
+                      {row.code ? <s-text color="subdued">{row.code}</s-text> : null}
+                    </s-stack>
+                  ),
               },
               {
                 key: "type",

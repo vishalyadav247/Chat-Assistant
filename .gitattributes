@@ -1,0 +1,9 @@
+# Shell scripts MUST check out with LF, even though development happens on
+# Windows. A CRLF .sh on the droplet dies at the shebang with
+# `/usr/bin/env: 'bash\r': No such file or directory`, which is a confusing
+# first failure for a deploy script whose whole job is to be reliable.
+*.sh text eol=lf
+
+# Same reasoning for anything else the Linux box executes or parses directly.
+*.service text eol=lf
+Dockerfile text eol=lf

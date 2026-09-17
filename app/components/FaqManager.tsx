@@ -1,19 +1,29 @@
-import { useDeferredValue, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FaqCategoryData, FaqRowData } from "../lib/faq/faq.server";
 import type { TrainingActionResult } from "../routes/app.ai-agent.training";
 import { BrowseModalShell } from "./BrowseProductsModal";
+import { DataTable } from "./DataTable";
 import { ReorderButtons } from "./DragReorder";
-import { downloadText, useTrainingFetcher } from "./TrainingShared";
+import { downloadText, LearnCard, useTrainingFetcher } from "./TrainingShared";
+import { useDateTime } from "../lib/format/context";
+import { PlanMeter } from "./ui/PlanGate";
 import { ConfirmDeleteModal } from "./ui/ConfirmDeleteModal";
 import { htmlTextLength, RichTextEditor } from "./ui/RichTextEditor";
 
 // FAQs tab (spec 07, design #viewTraining → FAQs): toolbar (import / export /
-// add FAQ / add category), search + Status/Featured filters, category tree
-// with per-row featured stars and up/down reorder, category + FAQ modals.
-// Answers are stored as sanitized HTML (rich-text editor deferred — textarea
-// v1, same delta as spec 06 starter answers).
+// add FAQ / add category), FAQ list in the shared paginated DataTable —
+// the same table the Products/Collections/Discounts tabs use (the faqs
+// quota reaches 250, so a category tree with
+// drag reorder does not scale; category / status / featured filters +
+// built-in search + 10/25/50-per-page pager replaced it). Categories are
+// managed via More actions → Manage categories; FAQ order — the GLOBAL
+// chat-widget display order, across categories — moves via the FAQ modal's
+// "Position in chat widget" number input or the per-row up/down arrows
+// (`faq-move`). Categories carry NO position/featured of their own
+// (the widget only shows them as labels).
+// Answers are stored as sanitized HTML.
 
-// Category icons are Polaris icon names only (user decision 2026-08-12 — no
+// Category icons are Polaris icon names only (no
 // free emoji input). Legacy rows may still hold an emoji; CategoryIcon falls
 // back to rendering it as text.
 const ICON_PRESETS = [
@@ -44,51 +54,21 @@ function CategoryIcon(props: { icon: string }) {
   return isEmoji ? <>{props.icon}</> : <s-icon type="page" size="small" />;
 }
 
-// Row hover elevation (design faq.png — Chatty-style): inline styles can't
-// express :hover, so the table ships a tiny scoped stylesheet instead.
-const TABLE_CSS = `
-.ccfaq-row {
-  position: relative;
-  transition: box-shadow .15s ease, background-color .15s ease;
-}
-.ccfaq-row:hover {
-  background: var(--s-color-bg-surface-hover, #fafafa);
-  box-shadow: 0 2px 10px rgba(26, 26, 26, .14);
-  z-index: 1;
-}
-.ccfaq-handle {
-  border: none;
-  background: none;
-  color: var(--s-color-text-secondary, #8a8a8f);
-  transition: background-color .15s ease, color .15s ease, transform .15s ease;
-}
-.ccfaq-handle:not(:disabled):hover {
-  background: var(--s-color-bg-fill-secondary, #f1f1f1);
-  color: var(--s-color-text, #303030);
-  transform: scale(1.1);
-}
-.ccfaq-handle:not(:disabled):active {
-  cursor: grabbing;
-}
-/* Phones (spec 19): the 140px/110px Status/Featured tracks leave no room for
-   the question — let them shrink to their content (badge + star). */
-@media (max-width: 768px) {
-  .ccfaq-gridhead, .ccfaq-row {
-    grid-template-columns: minmax(0, 1fr) auto auto !important;
-    gap: 8px !important;
-  }
-  .ccfaq-filter {
-    width: auto !important;
-    flex: 1 1 140px;
-  }
-}
-`;
-
+// Every column the importer understands, in the SAME order exportFaqCsv writes
+// them — so an export can be edited and re-imported, and the sample doubles as
+// the format reference. Ordering and featured are deliberately NOT in the file
+// imported FAQs append to the end of the widget
+// order, not featured — both are set in the app afterwards.
+//
+//   category  name; created automatically if the shop has no category by that
+//             name. Blank → the default category.
+//   status    "draft" (matched loosely) → draft; anything else → published.
 const SAMPLE_CSV = [
-  "question,answer",
-  "What is your return policy?,You can return any item within 30 days of delivery for a full refund.",
-  "Do you ship internationally?,Yes — we ship worldwide. International orders arrive in 7–14 business days.",
-  "How do I track my order?,Once your order ships we email you a tracking link.",
+  "question,answer,category,status",
+  "What is your return policy?,You can return any item within 30 days of delivery for a full refund.,Returns,published",
+  "Do you ship internationally?,Yes — we ship worldwide. International orders arrive in 7–14 business days.,Shipping,published",
+  "How do I track my order?,Once your order ships we email you a tracking link.,Shipping,published",
+  "Can I change my order after checkout?,Contact us within an hour and we'll do our best.,Orders,draft",
 ].join("\r\n");
 
 interface FaqDraft {
@@ -98,48 +78,65 @@ interface FaqDraft {
   status: "published" | "draft";
   categoryId: string;
   featured: boolean;
+  /** 1-based slot in the shop's GLOBAL widget order — what the chat widget shows. */
+  position?: number;
   unresolvedId?: string;
 }
 
-type DragItem = { kind: "category"; id: string } | { kind: "faq"; id: string };
-type DropEdge = "before" | "after" | "into";
+/** One DataTable row = one FAQ, with its category flattened in for the
+ *  Category column/filter and the full FaqRowData kept for the edit modal. */
+interface FaqTableRow {
+  id: string;
+  question: string;
+  status: string;
+  featured: boolean;
+  categoryId: string;
+  categoryName: string;
+  categoryIcon: string;
+  /** 1-based slot in the shop's GLOBAL widget order (across categories). */
+  widgetPosition: number;
+  faq: FaqRowData;
+}
 
+// No position / featured here: the widget
+// never reads either — it shows the category only as a text label on FAQ rows
+// — so the controls promised an ordering/placement effect that didn't exist.
+// FAQ-level position + featured are the real widget controls.
 interface CategoryDraft {
   id: string | null;
   name: string;
   icon: string;
-  position: number; // 1-based
   status: "published" | "draft";
-  featured: boolean;
   isDefault: boolean;
 }
 
 export function FaqManager(props: {
   tree: FaqCategoryData[];
+  /** FAQ plan cap (faqs quota): count / limit / plan that raises
+   *  it. Adding is disabled at the cap; editing existing FAQs never is. */
+  quotaUsed: number;
+  quotaLimit: number;
+  quotaNextPlan: string | null;
   prefillQuestion: string;
   prefillUnresolvedId: string;
 }) {
-  const [search, setSearch] = useState("");
+  const dt = useDateTime();
+  const [categoryFilter, setCategoryFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<"" | "published" | "draft">("");
   const [featuredFilter, setFeaturedFilter] = useState<"" | "yes" | "no">("");
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [faqDraft, setFaqDraft] = useState<FaqDraft | null>(null);
   const [categoryDraft, setCategoryDraft] = useState<CategoryDraft | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<
     { kind: "faq" | "category"; id: string; label: string } | null
   >(null);
+  const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [importCsv, setImportCsv] = useState<{ name: string; text: string } | null>(null);
   const [importError, setImportError] = useState("");
   const [exportOpen, setExportOpen] = useState(false);
   const [exportScope, setExportScope] = useState<"all" | "published">("all");
 
-  // Optimistic reorder: a drop re-arranges this local copy INSTANTLY while the
-  // place intent + loader revalidation (which can take seconds — the training
-  // loader reloads every tab) catch up; fresh loader data clears it.
-  const [optimisticTree, setOptimisticTree] = useState<FaqCategoryData[] | null>(null);
-  useEffect(() => setOptimisticTree(null), [props.tree]);
-  const tree = optimisticTree ?? props.tree;
+  const tree = props.tree;
 
   const defaultCategoryId = tree.find((c) => c.isDefault)?.id ?? tree[0]?.id ?? "";
 
@@ -185,94 +182,34 @@ export function FaqManager(props: {
     });
   }, [props.prefillQuestion, props.prefillUnresolvedId, defaultCategoryId]);
 
-  // Deferred so typing in the search field never blocks on re-filtering the
-  // tree (Polaris-smooth search; React keeps the input responsive).
-  const deferredSearch = useDeferredValue(search);
-  const query = deferredSearch.trim().toLowerCase();
-  const anyFilter = Boolean(query || statusFilter || featuredFilter);
-  const faqPasses = (faq: FaqRowData) => {
-    if (statusFilter && faq.status !== statusFilter) return false;
-    if (featuredFilter && faq.featured !== (featuredFilter === "yes")) return false;
-    if (query && !faq.question.toLowerCase().includes(query)) return false;
-    return true;
-  };
-
-  const visibleTree = tree
-    .map((category) => ({ category, faqs: category.faqs.filter(faqPasses) }))
-    .filter(
-      ({ category, faqs }) =>
-        !anyFilter || faqs.length > 0 || (query && category.name.toLowerCase().includes(query)),
-    );
-
-  // ── Drag-and-drop reorder (design faq.png) ────────────────────────────────
-  // Categories reorder among themselves; FAQs reorder within/across categories
-  // (dropping on a category header appends to it). Disabled while a filter is
-  // active (row indexes would be ambiguous) or a mutation is in flight. Drag
-  // handles stay keyboard-accessible via ArrowUp/ArrowDown → the move intents.
-  const [dragging, setDragging] = useState<DragItem | null>(null);
-  const [dropHint, setDropHint] = useState<{ key: string; edge: DropEdge } | null>(null);
-  const dragEnabled = !anyFilter && !busy;
-
-  const edgeFor = (e: React.DragEvent<HTMLElement>): "before" | "after" => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    return e.clientY < rect.top + rect.height / 2 ? "before" : "after";
-  };
-
-  // dragover fires continuously — only touch state when the hint actually
-  // changes, otherwise every mouse move re-renders the whole tree (lag).
-  const hintIfChanged = (key: string, edge: DropEdge) =>
-    setDropHint((h) => (h && h.key === key && h.edge === edge ? h : { key, edge }));
-
-  const clearDrag = () => {
-    setDragging(null);
-    setDropHint(null);
-  };
-
-  const dropCategoryOnCategory = (targetId: string, edge: "before" | "after") => {
-    if (!dragging || dragging.kind !== "category" || dragging.id === targetId) return;
-    const moved = tree.find((c) => c.id === dragging.id);
-    const without = tree.filter((c) => c.id !== dragging.id);
-    const index = without.findIndex((c) => c.id === targetId);
-    if (index < 0 || !moved) return;
-    const insert = edge === "before" ? index : index + 1;
-    setOptimisticTree([...without.slice(0, insert), moved, ...without.slice(insert)]);
-    submit("category-place", { id: dragging.id, position: String(insert + 1) });
-  };
-
-  /** Optimistic FAQ move: strip the dragged FAQ everywhere, re-insert it in
-   *  the target category at `insert` (index within the stripped list). */
-  const moveFaqLocally = (faqId: string, categoryId: string, insert: number) => {
-    const moved = tree.flatMap((c) => c.faqs).find((f) => f.id === faqId);
-    if (!moved) return;
-    setOptimisticTree(
-      tree.map((c) => {
-        const faqs = c.faqs.filter((f) => f.id !== faqId);
-        if (c.id === categoryId) faqs.splice(insert, 0, moved);
-        return { ...c, faqs };
-      }),
-    );
-  };
-
-  const dropFaqOnFaq = (categoryId: string, targetFaqId: string, edge: "before" | "after") => {
-    if (!dragging || dragging.kind !== "faq" || dragging.id === targetFaqId) return;
-    const category = tree.find((c) => c.id === categoryId);
-    if (!category) return;
-    const without = category.faqs.filter((f) => f.id !== dragging.id);
-    const index = without.findIndex((f) => f.id === targetFaqId);
-    if (index < 0) return;
-    const insert = edge === "before" ? index : index + 1;
-    moveFaqLocally(dragging.id, categoryId, insert);
-    submit("faq-place", { id: dragging.id, categoryId, position: String(insert) });
-  };
-
-  const dropFaqOnCategory = (categoryId: string) => {
-    if (!dragging || dragging.kind !== "faq") return;
-    const category = tree.find((c) => c.id === categoryId);
-    if (!category) return;
-    const insert = category.faqs.filter((f) => f.id !== dragging.id).length;
-    moveFaqLocally(dragging.id, categoryId, insert);
-    submit("faq-place", { id: dragging.id, categoryId, position: String(insert) });
-  };
+  // One flat row list in the GLOBAL widget order (position across all
+  // categories — the exact order the chat widget shows; a category is only a
+  // label) for the shared DataTable; the Category / Status / Featured selects
+  // filter it BEFORE the table so its built-in search and pager work on what
+  // is actually visible.
+  const allRows: FaqTableRow[] = tree
+    .flatMap((category) =>
+      category.faqs.map((faq) => ({
+        id: faq.id,
+        question: faq.question,
+        status: faq.status,
+        featured: faq.featured,
+        categoryId: category.id,
+        categoryName: category.name,
+        categoryIcon: category.icon,
+        faq,
+      })),
+    )
+    .sort(
+      (a, b) => a.faq.position - b.faq.position || a.question.localeCompare(b.question),
+    )
+    .map((row, index) => ({ ...row, widgetPosition: index + 1 }));
+  const rows = allRows.filter(
+    (row) =>
+      (!categoryFilter || row.categoryId === categoryFilter) &&
+      (!statusFilter || row.status === statusFilter) &&
+      (!featuredFilter || row.featured === (featuredFilter === "yes")),
+  );
 
   const openAddFaq = (categoryId?: string) =>
     setFaqDraft({
@@ -293,6 +230,7 @@ export function FaqManager(props: {
       status: faq.status === "published" ? "published" : "draft",
       categoryId,
       featured: faq.featured,
+      position: allRows.find((r) => r.id === faq.id)?.widgetPosition,
     });
   };
 
@@ -301,9 +239,7 @@ export function FaqManager(props: {
       id: null,
       name: "",
       icon: "page",
-      position: tree.length + 1,
       status: "published",
-      featured: false,
       isDefault: false,
     });
 
@@ -312,18 +248,8 @@ export function FaqManager(props: {
       id: category.id,
       name: category.name,
       icon: category.icon,
-      position: tree.findIndex((c) => c.id === category.id) + 1,
       status: category.status === "draft" ? "draft" : "published",
-      featured: category.featured,
       isDefault: category.isDefault,
-    });
-
-  const toggleCollapsed = (id: string) =>
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
     });
 
   const onImportFile = (file: File | null) => {
@@ -339,7 +265,22 @@ export function FaqManager(props: {
     reader.readAsText(file);
   };
 
+  const atFaqCap = props.quotaUsed >= props.quotaLimit;
+  // "Learned" = what the AI actually reads: the FAQ knowledge bridge indexes
+  // PUBLISHED FAQs only (knowledge-ingest loadDocs "faq"), so a draft is
+  // counted in the total but not as learned — the same chip rule as the other
+  // Training tabs' learnEnabled counts.
+  const publishedCount = allRows.filter((row) => row.status === "published").length;
+
   return (
+    <s-stack gap="base">
+      {/* Same top card as every other Training tab. No master switch: FAQs
+          have no "learn" toggle — publishing one is what makes it learnable. */}
+      <LearnCard
+        title="FAQs"
+        chip={`${publishedCount} of ${allRows.length} FAQs learned`}
+        description="Answer common questions instantly. Published FAQs appear in your chat widget and teach the AI; drafts stay private until you publish them."
+      />
     <s-section heading="Manage FAQs">
       <s-stack gap="base">
         <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flexWrap: "wrap" }}>
@@ -358,13 +299,21 @@ export function FaqManager(props: {
               <s-button icon="export" onClick={() => setExportOpen(true)}>
                 Export
               </s-button>
+              <s-button icon="edit" onClick={() => setCategoriesOpen(true)}>
+                Manage categories
+              </s-button>
             </s-menu>
             <s-button variant="primary" commandFor="faq-add-new-menu">
               Add new
             </s-button>
             <s-menu id="faq-add-new-menu" accessibilityLabel="Add new">
-              <s-button icon="plus" onClick={() => openAddFaq()}>
-                Add FAQ
+              {/* Pre-selects the category the table is filtered to. */}
+              <s-button
+                icon="plus"
+                disabled={atFaqCap}
+                onClick={() => openAddFaq(categoryFilter || undefined)}
+              >
+                {atFaqCap ? `Add FAQ (limit ${props.quotaLimit} reached)` : "Add FAQ"}
               </s-button>
               <s-button icon="plus" onClick={openAddCategory}>
                 Add category
@@ -373,218 +322,200 @@ export function FaqManager(props: {
           </div>
         </div>
 
-        {/* Full-width search, then the two filter dropdowns inline (natural
-            width) on the next row (user request 2026-08-12). */}
-        <s-search-field
-          label="Search FAQs"
-          labelAccessibilityVisibility="exclusive"
-          placeholder="Search all categories and FAQs"
-          value={search}
-          onInput={(e) => setSearch(e.currentTarget.value)}
+        {/* FAQ plan cap on its own full-width row — beside the toolbar
+            the meter was too squeezed. */}
+        <PlanMeter
+          used={props.quotaUsed}
+          quota={props.quotaLimit}
+          label="FAQs"
+          nextPlan={props.quotaNextPlan}
         />
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          {/* s-select fills its container — cap each in a fixed-width box so
-              the dropdowns stay compact. */}
-          <div className="ccfaq-filter" style={{ width: 180 }}>
-            <s-select
-              label="Status"
-              labelAccessibilityVisibility="exclusive"
-              value={statusFilter || "all"}
-              onInput={(e) => {
-                const v = e.currentTarget.value;
-                setStatusFilter(v === "published" || v === "draft" ? v : "");
-              }}
-            >
-              <s-option value="all">Status: All</s-option>
-              <s-option value="published">Published</s-option>
-              <s-option value="draft">Draft</s-option>
-            </s-select>
-          </div>
-          <div className="ccfaq-filter" style={{ width: 180 }}>
-            <s-select
-              label="Featured"
-              labelAccessibilityVisibility="exclusive"
-              value={featuredFilter || "all"}
-              onInput={(e) => {
-                const v = e.currentTarget.value;
-                setFeaturedFilter(v === "yes" || v === "no" ? v : "");
-              }}
-            >
-              <s-option value="all">Featured: All</s-option>
-              <s-option value="yes">Featured</s-option>
-              <s-option value="no">Not featured</s-option>
-            </s-select>
-          </div>
-        </div>
 
-        <style dangerouslySetInnerHTML={{ __html: TABLE_CSS }} />
-        <div
-          style={{
-            border: "1px solid var(--s-color-border, #e3e3e3)",
-            borderRadius: 12,
-            overflow: "hidden",
-          }}
-        >
-        <div
-          className="ccfaq-gridhead"
-          style={{
-            display: "grid",
-            gridTemplateColumns: "minmax(0,1fr) 140px 110px",
-            gap: 12,
-            padding: "10px 14px",
-            background: "var(--s-color-bg-surface-secondary, #fafafa)",
-            borderBottom: "1px solid var(--s-color-border, #e3e3e3)",
-            fontSize: 12.5,
-            fontWeight: 600,
-            color: "var(--s-color-text-secondary, #616161)",
-          }}
-        >
-          <span>FAQs</span>
-          <span style={{ textAlign: "center" }}>Status</span>
-          <span style={{ textAlign: "center" }}>Featured</span>
-        </div>
-
-        {visibleTree.length === 0 ? (
-          <s-box padding="large">
-            <s-text tone="neutral">No FAQs match your filters.</s-text>
-          </s-box>
-        ) : (
-          visibleTree.map(({ category, faqs }, categoryIndex) => (
-            <div
-              key={category.id}
-              style={{
-                borderTop: categoryIndex === 0 ? "none" : "1px solid var(--s-color-border, #e3e3e3)",
-              }}
-            >
-              <TreeRow
-                main={
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-                    <button
-                      type="button"
-                      aria-label={collapsed.has(category.id) ? "Expand category" : "Collapse category"}
-                      onClick={() => toggleCollapsed(category.id)}
-                      style={chevronStyle}
-                    >
-                      <s-icon
-                        type={collapsed.has(category.id) ? "chevron-right" : "chevron-down"}
-                        size="small"
-                      />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => openEditCategory(category)}
-                      style={{ ...linkButtonStyle, fontWeight: 700 }}
-                    >
-                      <span
-                        style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
-                      >
-                        <CategoryIcon icon={category.icon} /> {category.name}
-                      </span>
-                    </button>
-                    <s-text tone="neutral">({faqs.length} FAQs)</s-text>
-                    {category.isDefault ? <s-badge tone="neutral">Default</s-badge> : null}
-                  </span>
-                }
-                status={category.status}
-                featured={category.featured}
-                onOpen={() => openEditCategory(category)}
-                onKeyMove={(direction) =>
-                  submit("category-move", { id: category.id, direction })
-                }
-                busy={busy}
-                drag={{
-                  enabled: dragEnabled,
-                  isSource: dragging?.kind === "category" && dragging.id === category.id,
-                  edge: dropHint?.key === `cat:${category.id}` ? dropHint.edge : null,
-                  onDragStart: (e) => {
-                    setDragging({ kind: "category", id: category.id });
-                    e.dataTransfer.effectAllowed = "move";
-                    e.dataTransfer.setData("text/plain", category.id);
-                  },
-                  onDragOver: (e) => {
-                    if (!dragging) return;
-                    if (dragging.kind === "category" && dragging.id === category.id) return;
-                    e.preventDefault();
-                    hintIfChanged(
-                      `cat:${category.id}`,
-                      dragging.kind === "category" ? edgeFor(e) : "into",
-                    );
-                  },
-                  onDragLeave: () =>
-                    setDropHint((h) => (h?.key === `cat:${category.id}` ? null : h)),
-                  onDrop: (e) => {
-                    e.preventDefault();
-                    if (dragging?.kind === "category") {
-                      dropCategoryOnCategory(category.id, edgeFor(e));
-                    } else {
-                      dropFaqOnCategory(category.id);
-                    }
-                    clearDrag();
-                  },
-                  onDragEnd: clearDrag,
+        <DataTable
+          rows={rows}
+          perPage={10}
+          minRows={10}
+          searchAlwaysOpen
+          searchPlaceholder="Search FAQs by question or category"
+          searchFn={(row, q) =>
+            row.question.toLowerCase().includes(q) ||
+            row.categoryName.toLowerCase().includes(q)
+          }
+          emptyMessage={
+            allRows.length === 0
+              ? "No FAQs yet. Add one, or import a CSV from More actions."
+              : "No FAQs match your filters."
+          }
+          onRowClick={(row) => openEditFaq(row.faq, row.categoryId)}
+          // Multi-select (owner 2026-09-16): products and collections had bulk
+          // actions, FAQs had none — deleting a batch of AI drafts meant one
+          // row at a time.
+          bulkActions={(ids, clear) => (
+            <>
+              <s-button
+                disabled={pendingIntent === "faq-bulk-status"}
+                onClick={() => {
+                  submit("faq-bulk-status", { ids: ids.join(","), status: "published" });
+                  clear();
                 }}
-              />
-              {!collapsed.has(category.id) ? (
-                <div>
-                  {faqs.map((faq) => (
-                    <TreeRow
-                      key={faq.id}
-                      indent
-                      main={
-                        <button
-                          type="button"
-                          onClick={() => openEditFaq(faq, category.id)}
-                          style={linkButtonStyle}
-                        >
-                          {faq.question}
-                        </button>
-                      }
-                      status={faq.status}
-                      featured={faq.featured}
-                      onOpen={() => openEditFaq(faq, category.id)}
-                      onKeyMove={(direction) => submit("faq-move", { id: faq.id, direction })}
-                      busy={busy}
-                      drag={{
-                        enabled: dragEnabled,
-                        isSource: dragging?.kind === "faq" && dragging.id === faq.id,
-                        edge: dropHint?.key === `faq:${faq.id}` ? dropHint.edge : null,
-                        onDragStart: (e) => {
-                          setDragging({ kind: "faq", id: faq.id });
-                          e.dataTransfer.effectAllowed = "move";
-                          e.dataTransfer.setData("text/plain", faq.id);
-                        },
-                        onDragOver: (e) => {
-                          if (dragging?.kind !== "faq" || dragging.id === faq.id) return;
-                          e.preventDefault();
-                          hintIfChanged(`faq:${faq.id}`, edgeFor(e));
-                        },
-                        onDragLeave: () =>
-                          setDropHint((h) => (h?.key === `faq:${faq.id}` ? null : h)),
-                        onDrop: (e) => {
-                          e.preventDefault();
-                          dropFaqOnFaq(category.id, faq.id, edgeFor(e));
-                          clearDrag();
-                        },
-                        onDragEnd: clearDrag,
-                      }}
-                    />
+              >
+                Publish
+              </s-button>
+              <s-button
+                disabled={pendingIntent === "faq-bulk-status"}
+                onClick={() => {
+                  submit("faq-bulk-status", { ids: ids.join(","), status: "draft" });
+                  clear();
+                }}
+              >
+                Unpublish
+              </s-button>
+              <s-button
+                tone="critical"
+                disabled={pendingIntent === "faq-bulk-delete"}
+                onClick={() => {
+                  submit("faq-bulk-delete", { ids: ids.join(",") });
+                  clear();
+                }}
+              >
+                Delete
+              </s-button>
+            </>
+          )}
+          toolbar={
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <div style={{ width: 170 }}>
+                <s-select
+                  label="Category"
+                  labelAccessibilityVisibility="exclusive"
+                  value={categoryFilter || "all"}
+                  onInput={(e) => {
+                    const v = e.currentTarget.value;
+                    setCategoryFilter(v === "all" ? "" : v);
+                  }}
+                >
+                  <s-option value="all">Category: All</s-option>
+                  {tree.map((category) => (
+                    <s-option key={category.id} value={category.id}>
+                      {category.name}
+                    </s-option>
                   ))}
-                  <div
-                    style={{
-                      padding: "8px 14px 12px 34px",
-                      borderTop: "1px solid var(--s-color-border-secondary, #f1f1f1)",
-                    }}
-                  >
-                    <s-button variant="tertiary" onClick={() => openAddFaq(category.id)}>
-                      + Add FAQ
-                    </s-button>
-                  </div>
-                </div>
-              ) : null}
+                </s-select>
+              </div>
+              <div style={{ width: 150 }}>
+                <s-select
+                  label="Status"
+                  labelAccessibilityVisibility="exclusive"
+                  value={statusFilter || "all"}
+                  onInput={(e) => {
+                    const v = e.currentTarget.value;
+                    setStatusFilter(v === "published" || v === "draft" ? v : "");
+                  }}
+                >
+                  <s-option value="all">Status: All</s-option>
+                  <s-option value="published">Published</s-option>
+                  <s-option value="draft">Draft</s-option>
+                </s-select>
+              </div>
+              <div style={{ width: 160 }}>
+                <s-select
+                  label="Featured"
+                  labelAccessibilityVisibility="exclusive"
+                  value={featuredFilter || "all"}
+                  onInput={(e) => {
+                    const v = e.currentTarget.value;
+                    setFeaturedFilter(v === "yes" || v === "no" ? v : "");
+                  }}
+                >
+                  <s-option value="all">Featured: All</s-option>
+                  <s-option value="yes">Featured</s-option>
+                  <s-option value="no">Not featured</s-option>
+                </s-select>
+              </div>
             </div>
-          ))
-        )}
-        </div>
+          }
+          columns={[
+            {
+              key: "question",
+              title: "Question",
+              render: (row) => (
+                <span
+                  style={{
+                    display: "block",
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {row.question}
+                </span>
+              ),
+            },
+            {
+              key: "category",
+              title: "Category",
+              width: 140,
+              render: (row) => (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <CategoryIcon icon={row.categoryIcon} /> {row.categoryName}
+                </span>
+              ),
+            },
+            {
+              key: "status",
+              title: "Status",
+              width: 96,
+              render: (row) => (
+                <s-badge tone={row.status === "published" ? "success" : "info"}>
+                  {row.status === "published" ? "Published" : "Draft"}
+                </s-badge>
+              ),
+            },
+            {
+              key: "featured",
+              title: "Featured",
+              width: 76,
+              // Display-only: featured is changed
+              // in the edit modal's checkbox — clicking the star opens it via
+              // the row click.
+              render: (row) => <FeaturedStar featured={row.featured} />,
+            },
+            {
+              key: "created",
+              title: "Created",
+              width: 96,
+              // DB-stamped on insert — never
+              // merchant-entered. Rows older than the migration show its date.
+              render: (row) => <s-text tone="neutral">{dt.date(row.faq.createdAt)}</s-text>,
+            },
+            {
+              key: "order",
+              title: "Order",
+              width: 84,
+              align: "end",
+              // Chat-widget display order: the FAQ's 1-based slot across ALL
+              // categories + up/down nudges (`faq-move`).
+              render: (row) => (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    justifyContent: "flex-end",
+                  }}
+                >
+                  <s-text tone="neutral">#{row.widgetPosition}</s-text>
+                  <ReorderButtons
+                    label={row.question}
+                    enabled={!busy}
+                    onMove={(direction) => submit("faq-move", { id: row.id, direction })}
+                  />
+                </span>
+              ),
+            },
+          ]}
+        />
       </s-stack>
 
       {/* ── FAQ modal (design #mFaq) ─────────────────────────────────────── */}
@@ -633,7 +564,7 @@ export function FaqManager(props: {
               maxLength={500}
               onInput={(e) => setFaqDraft({ ...faqDraft, question: e.currentTarget.value })}
             />
-            {/* Same rich-text editor as conversation-starter answers (2026-08-17);
+            {/* Same rich-text editor as conversation-starter answers;
                 HTML is sanitized server-side on save (faq.server.ts). */}
             <RichTextEditor
               label="Answer"
@@ -664,7 +595,9 @@ export function FaqManager(props: {
               <s-select
                 label="Category"
                 value={faqDraft.categoryId}
-                onInput={(e) => setFaqDraft({ ...faqDraft, categoryId: e.currentTarget.value })}
+                onInput={(e) =>
+                  setFaqDraft({ ...faqDraft, categoryId: e.currentTarget.value })
+                }
               >
                 {tree.map((category) => (
                   <s-option key={category.id} value={category.id}>
@@ -672,6 +605,25 @@ export function FaqManager(props: {
                   </s-option>
                 ))}
               </s-select>
+              {/* GLOBAL widget order:
+                  1 shows first in the chat widget, across all categories.
+                  Number input per user request — no dropdown; the server
+                  clamps out-of-range values to the end of the list. */}
+              <s-number-field
+                label="Position in chat widget"
+                details={`1 shows first · ${allRows.length || 1} = last`}
+                min={1}
+                max={Math.max(1, allRows.length + (faqDraft.id ? 0 : 1))}
+                step={1}
+                value={faqDraft.position === undefined ? "" : String(faqDraft.position)}
+                onInput={(e) => {
+                  const n = Math.floor(Number(e.currentTarget.value));
+                  setFaqDraft({
+                    ...faqDraft,
+                    position: Number.isFinite(n) && n >= 1 ? n : undefined,
+                  });
+                }}
+              />
             </div>
             <s-checkbox
               label="Featured question"
@@ -681,6 +633,56 @@ export function FaqManager(props: {
             />
           </s-stack>
         ) : null}
+      </BrowseModalShell>
+
+      {/* ── Manage categories modal (the always-visible category
+          entry point after the tree/chips went away; each row opens the
+          existing edit modal). While a category is being edited the list is
+          only HIDDEN (categoriesOpen stays true), so closing the edit modal —
+          save, delete or cancel — returns here, refreshed by the loader
+          revalidation (user request 2026-09-10). ──────────────────────────── */}
+      <BrowseModalShell
+        open={categoriesOpen && categoryDraft === null}
+        title="Manage categories"
+        onClose={() => setCategoriesOpen(false)}
+        footer={
+          <>
+            <s-button icon="plus" onClick={openAddCategory}>
+              Add category
+            </s-button>
+            <span style={{ marginLeft: "auto" }}>
+              <s-button onClick={() => setCategoriesOpen(false)}>Done</s-button>
+            </span>
+          </>
+        }
+      >
+        <s-stack gap="small-200">
+          <s-text tone="neutral">
+            Categories group your FAQs and appear as a label on each question in the chat
+            widget. Select one to edit its name, icon or status.
+          </s-text>
+          {tree.map((category) => (
+            <button
+              key={category.id}
+              type="button"
+              onClick={() => openEditCategory(category)}
+              style={categoryRowStyle}
+            >
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                <CategoryIcon icon={category.icon} />
+                <span style={{ fontWeight: 600 }}>{category.name}</span>
+                <span style={{ color: "var(--s-color-text-secondary, #8a8a8f)" }}>
+                  ({category.faqs.length} FAQ{category.faqs.length === 1 ? "" : "s"})
+                </span>
+                {category.isDefault ? <s-badge tone="neutral">Default</s-badge> : null}
+                {category.status === "draft" ? <s-badge tone="info">Draft</s-badge> : null}
+              </span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                <s-icon type="edit" size="small" />
+              </span>
+            </button>
+          ))}
+        </s-stack>
       </BrowseModalShell>
 
       {/* ── Category modal (design #mCat) ────────────────────────────────── */}
@@ -770,48 +772,23 @@ export function FaqManager(props: {
                 ))}
               </div>
             </s-stack>
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-              <s-select
-                label="Position"
-                value={String(categoryDraft.position)}
-                onInput={(e) =>
-                  setCategoryDraft({
-                    ...categoryDraft,
-                    position: Number(e.currentTarget.value) || 1,
-                  })
-                }
-              >
-                {Array.from(
-                  { length: categoryDraft.id ? tree.length : tree.length + 1 },
-                  (_, i) => (
-                    <s-option key={i + 1} value={String(i + 1)}>
-                      {String(i + 1)}
-                    </s-option>
-                  ),
-                )}
-              </s-select>
-              <s-select
-                label="Status"
-                value={categoryDraft.status}
-                onInput={(e) =>
-                  setCategoryDraft({
-                    ...categoryDraft,
-                    status: e.currentTarget.value === "draft" ? "draft" : "published",
-                  })
-                }
-              >
-                <s-option value="published">Published</s-option>
-                <s-option value="draft">Draft</s-option>
-              </s-select>
-            </div>
-            <s-checkbox
-              label="Feature category"
-              details="Enable to show this category on the first page of FAQs chatbox. If not, it will only be shown when viewing all categories."
-              checked={categoryDraft.featured}
+            {/* No position or "Feature category" here:
+                the widget never read either — FAQ-level position/featured are
+                the real widget controls. */}
+            <s-select
+              label="Status"
+              details="Draft hides the category label in the chat widget"
+              value={categoryDraft.status}
               onInput={(e) =>
-                setCategoryDraft({ ...categoryDraft, featured: e.currentTarget.checked })
+                setCategoryDraft({
+                  ...categoryDraft,
+                  status: e.currentTarget.value === "draft" ? "draft" : "published",
+                })
               }
-            />
+            >
+              <s-option value="published">Published</s-option>
+              <s-option value="draft">Draft</s-option>
+            </s-select>
           </s-stack>
         ) : null}
       </BrowseModalShell>
@@ -926,178 +903,53 @@ export function FaqManager(props: {
         }}
       />
     </s-section>
+    </s-stack>
   );
 }
 
-const linkButtonStyle: React.CSSProperties = {
-  border: "none",
-  background: "none",
+const categoryRowStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 12,
+  width: "100%",
+  border: "1px solid var(--s-color-border, #e3e3e3)",
+  borderRadius: 10,
+  background: "var(--s-color-bg, #fff)",
+  padding: "10px 14px",
   cursor: "pointer",
   font: "inherit",
   fontSize: 13,
-  textAlign: "left",
-  padding: 0,
   color: "inherit",
-  minWidth: 0,
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
+  textAlign: "left",
 };
 
-const chevronStyle: React.CSSProperties = {
-  border: "none",
-  background: "none",
-  cursor: "pointer",
-  padding: "0 2px",
-  display: "inline-flex",
-  alignItems: "center",
-  color: "var(--s-color-text-secondary, #6b6b73)",
-};
-
-interface TreeRowDrag {
-  enabled: boolean;
-  /** This row is the one currently being dragged. */
-  isSource: boolean;
-  /** Drop indicator when another row hovers here: line above/below or "into". */
-  edge: DropEdge | null;
-  onDragStart: (e: React.DragEvent<HTMLElement>) => void;
-  onDragOver: (e: React.DragEvent<HTMLElement>) => void;
-  onDragLeave: () => void;
-  onDrop: (e: React.DragEvent<HTMLElement>) => void;
-  onDragEnd: () => void;
-}
-
-function TreeRow(props: {
-  main: React.ReactNode;
-  status: string;
-  featured: boolean;
-  indent?: boolean;
-  busy: boolean;
-  /** Open the edit modal — fires on a click anywhere on the row. */
-  onOpen: () => void;
-  /** Keyboard fallback for drag reorder (ArrowUp/ArrowDown on the handle). */
-  onKeyMove: (direction: "up" | "down") => void;
-  drag: TreeRowDrag;
-}) {
-  const hintColor = "var(--s-color-border-focus, #005bd3)";
-  const dropShadow =
-    props.drag.edge === "before"
-      ? `inset 0 2px 0 0 ${hintColor}`
-      : props.drag.edge === "after"
-        ? `inset 0 -2px 0 0 ${hintColor}`
-        : props.drag.edge === "into"
-          ? `inset 0 0 0 2px ${hintColor}`
-          : undefined;
+/** Featured indicator — display-only: featured is
+ *  changed via the edit modals' checkboxes; clicking a table star falls
+ *  through to the row click → opens that modal.
+ *  Inline SVG because s-icon paints its own palette and ignores the parent's
+ *  color, and featured = filled yellow star. */
+function FeaturedStar(props: { featured: boolean }) {
   return (
-    // Keyboard access to "open" is the row's name/question button — this
-    // row-level handler only widens the pointer click target (Chatty-style).
-    // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
-    <div
-      className="ccfaq-row"
-      onClick={(e) => {
-        // Anywhere on the row opens the edit modal — except clicks on the
-        // row's own interactive controls (chevron, star, drag handle, links).
-        if ((e.target as HTMLElement).closest("button, s-button, a, input")) return;
-        props.onOpen();
-      }}
-      onDragOver={props.drag.onDragOver}
-      onDragLeave={props.drag.onDragLeave}
-      onDrop={props.drag.onDrop}
+    <span
+      role="img"
+      aria-label={props.featured ? "Featured" : "Not featured"}
+      title={props.featured ? "Featured — edit to change" : "Not featured — edit to change"}
       style={{
-        cursor: "pointer",
-        display: "grid",
-        gridTemplateColumns: "minmax(0,1fr) 140px 110px",
-        gap: 12,
+        display: "inline-flex",
         alignItems: "center",
-        padding: props.indent ? "10px 14px 10px 34px" : "13px 14px",
-        borderTop: props.indent
-          ? "1px solid var(--s-color-border-secondary, #f1f1f1)"
-          : "none",
-        opacity: props.drag.isSource ? 0.4 : 1,
-        boxShadow: dropShadow,
-        // The hover transition would delay the drop indicator — show it instantly.
-        transition: dropShadow ? "none" : undefined,
+        color: props.featured ? "#f5b400" : "var(--s-color-text-secondary, #c4c4ca)",
       }}
     >
-      <span style={{ minWidth: 0, overflow: "hidden", display: "inline-flex", alignItems: "center", gap: 6 }}>
-        <button
-          type="button"
-          className="ccfaq-handle"
-          aria-label="Reorder (drag, or press arrow up/down)"
-          disabled={!props.drag.enabled}
-          draggable={props.drag.enabled}
-          onDragStart={(e) => {
-            // Ghost the WHOLE row while dragging, not just the tiny handle.
-            const row = (e.currentTarget as HTMLElement).closest(".ccfaq-row");
-            if (row instanceof HTMLElement) {
-              e.dataTransfer.setDragImage(row, 24, row.offsetHeight / 2);
-            }
-            props.drag.onDragStart(e);
-          }}
-          onDragEnd={props.drag.onDragEnd}
-          onKeyDown={(e) => {
-            if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-              e.preventDefault();
-              props.onKeyMove(e.key === "ArrowUp" ? "up" : "down");
-            }
-          }}
-          style={{
-            padding: 6,
-            margin: -2,
-            display: "inline-flex",
-            alignItems: "center",
-            borderRadius: 6,
-            cursor: props.drag.enabled ? "grab" : "default",
-            opacity: props.drag.enabled ? 1 : 0.4,
-            touchAction: "none",
-          }}
-        >
-          <s-icon type="drag-handle" size="base" />
-        </button>
-        <ReorderButtons
-          label="row"
-          enabled={props.drag.enabled}
-          onMove={props.onKeyMove}
+      <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true">
+        <path
+          d="M10 2 L12 7.25 L17.61 7.53 L13.23 11.05 L14.7 16.47 L10 13.4 L5.3 16.47 L6.77 11.05 L2.39 7.53 L8 7.25 Z"
+          fill={props.featured ? "#f5b400" : "none"}
+          stroke={props.featured ? "#f5b400" : "currentColor"}
+          strokeWidth="1.5"
+          strokeLinejoin="round"
         />
-        <span style={{ minWidth: 0, overflow: "hidden", display: "inline-flex", alignItems: "center", gap: 8 }}>
-          {props.main}
-        </span>
-      </span>
-      <span style={{ textAlign: "center" }}>
-        <s-badge tone={props.status === "published" ? "success" : "info"}>
-          {props.status === "published" ? "Published" : "Draft"}
-        </s-badge>
-      </span>
-      <span style={{ textAlign: "center" }}>
-        {/* Display-only indicator (user decision 2026-08-17): featured is
-            changed in the edit modal's checkbox, not by clicking the row.
-            Clicking the star falls through to the row → opens that modal. */}
-        <span
-          role="img"
-          aria-label={props.featured ? "Featured" : "Not featured"}
-          title={props.featured ? "Featured — edit to change" : "Not featured — edit to change"}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            padding: 4,
-            // Featured = filled yellow star (user request 2026-08-12).
-            color: props.featured ? "#f5b400" : "var(--s-color-text-secondary, #c4c4ca)",
-          }}
-        >
-          {/* Inline SVG star: s-icon paints its own palette and ignores the
-              parent's color, so the yellow featured state needs a glyph we
-              control. Shape mirrors Polaris star. */}
-          <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true">
-            <path
-              d="M10 2 L12 7.25 L17.61 7.53 L13.23 11.05 L14.7 16.47 L10 13.4 L5.3 16.47 L6.77 11.05 L2.39 7.53 L8 7.25 Z"
-              fill={props.featured ? "#f5b400" : "none"}
-              stroke={props.featured ? "#f5b400" : "currentColor"}
-              strokeWidth="1.5"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </span>
-      </span>
-    </div>
+      </svg>
+    </span>
   );
 }

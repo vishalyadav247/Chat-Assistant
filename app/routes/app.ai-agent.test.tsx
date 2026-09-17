@@ -16,8 +16,11 @@ import { APP_NAME } from "./app";
 // Test AI (spec 08, design ai-agent.html #viewTest): merchant chat console
 // that streams the REAL pipeline via /api/test-chat (isTest: true → no usage
 // meter tick, conversation flagged isTest). This route's action serves the
-// per-reply debug data: the pipeline frames don't carry sourceLayer/intent,
-// so after each turn the client asks for the just-saved assistant Message row.
+// per-reply source data: the pipeline frames don't carry sourceLayer/intent,
+// so after each turn the client asks for the just-saved assistant Message row
+// and shows a merchant-friendly "Answered from" line. The developer-grade
+// Turn inspector was removed 2026-09-14 (user decision) — deep debugging
+// lives in Admin → Debug now; this page is the MERCHANT's testing preview.
 
 export interface ReviewSourceData {
   sourceLayer: string | null;
@@ -124,7 +127,10 @@ export default function TestAiPage() {
   const navigate = useNavigate();
 
   return (
-    <s-page heading={APP_NAME} inlineSize="large">
+    // Default page width — same as the dashboard (user, 2026-09-14; it was
+    // "large" only to fit the Turn inspector column, which moved to
+    // Admin → Debug).
+    <s-page heading={APP_NAME}>
       <s-stack gap="base">
         <PageHeader
           title="Test AI"

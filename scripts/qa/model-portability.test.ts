@@ -5,10 +5,10 @@
  *
  * Answers the user's question: "if we change the openai 4 model family, does it
  * work the same if we switch any model any time?" — by exercising the request
- * dialect, the platform override precedence, the retry seam and the embedding
+ * dialect, the admin override precedence, the retry seam and the embedding
  * migration path.
  *
- * Everything it writes (the platform:ai override row, the embedding-model
+ * Everything it writes (the admin:ai override row, the embedding-model
  * marker) is restored to its previous value in the finally block.
  */
 import { readFileSync } from "node:fs";
@@ -95,12 +95,12 @@ async function main(): Promise<void> {
   const { CHAT_MODEL_OPTIONS, chatModelError, chatModelWarning } = await import(
     "../../app/lib/llm/models"
   );
-  const { priceFor, MODEL_PRICING } = await import("../../app/lib/platform/llm-pricing");
+  const { priceFor, MODEL_PRICING } = await import("../../app/lib/admin/llm-pricing");
   const { OpenAiProvider } = await import("../../app/lib/llm/openai.server");
   const { runtimeConfig, loadRuntimeConfig } = await import(
-    "../../app/lib/platform/runtime-config.server"
+    "../../app/lib/admin/runtime-config.server"
   );
-  const settings = await import("../../app/lib/platform/platform-settings.server");
+  const settings = await import("../../app/lib/admin/admin-settings.server");
   const { env } = await import("../../app/lib/env.server");
   const { toSqlVector, EMBEDDING_DIMENSIONS } = await import(
     "../../app/lib/embeddings/embedding.server"
@@ -168,7 +168,7 @@ async function main(): Promise<void> {
     ok("o1-mini is excluded from json mode", !supportsJsonObject("o1-mini"));
 
     // ────────────────────────────────────────────────────────────────────────
-    section("4. platform override CANNOT de-tune the router or the summariser");
+    section("4. admin override CANNOT de-tune the router or the summariser");
     // The hostile setting: an operator dials creativity way up and the budget
     // way down. Router JSON and summaries must be immune; replies must not be.
     await settings.saveAiOverrides({ chatModel: "", temperature: 1.9, maxTokens: 16 });
@@ -259,7 +259,7 @@ async function main(): Promise<void> {
     ok(
       "changing env CHAT_MODEL at runtime does NOT take effect without a restart",
       env().CHAT_MODEL !== "gpt-4.1",
-      `still ${env().CHAT_MODEL} — use /platform/ai for a live switch`,
+      `still ${env().CHAT_MODEL} — use /admin/ai for a live switch`,
     );
     process.env.CHAT_MODEL = envChatModel;
 
@@ -350,7 +350,7 @@ async function main(): Promise<void> {
     }
     ok("a 400 is NOT retried (fail fast on a bad model id)", threw && fatal.calls === 1);
 
-    section("10. custom model id validation at /platform/ai");
+    section("10. custom model id validation at /admin/ai");
     ok("a pasted sentence is refused", chatModelError("please use gpt-4o") !== null);
     ok("a whitespace id is refused", chatModelError("gpt 4o mini") !== null);
     ok("blank means environment default", chatModelError("") === null);
@@ -452,7 +452,7 @@ async function main(): Promise<void> {
   } finally {
     // Restore exactly what we found.
     // The o1-mini case deliberately trips the seam's "no json mode" warning;
-    // remove the rows this run produced so /platform/logs stays honest.
+    // remove the rows this run produced so /admin/logs stays honest.
     await db.appLog
       .deleteMany({ where: { event: "chat_model_no_json_mode", occurredAt: { gte: startedAt } } })
       .catch(() => {});

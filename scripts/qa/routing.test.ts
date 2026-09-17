@@ -1,5 +1,5 @@
 /* QA: routing / guard-order sweep across all three surfaces (embedded admin,
- * web, platform) plus the app proxy and webhooks.
+ * web, admin) plus the app proxy and webhooks.
  *
  *   Run: npx tsx scripts/qa/routing.test.ts
  *   Needs: the dev server on http://localhost:3000 (BASE_URL to override) and
@@ -11,6 +11,7 @@
  */
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { qaFetch, waitForServer } from "./http";
 
 // Load .env manually (tsx does not) BEFORE importing app modules.
 for (const line of readFileSync(join(process.cwd(), ".env"), "utf-8").split(/\r?\n/)) {
@@ -67,7 +68,7 @@ async function probe(
 ): Promise<Probe> {
   const headers: Record<string, string> = { "user-agent": UA, ...(init.headers ?? {}) };
   if (init.cookie) headers.cookie = init.cookie;
-  const res = await fetch(BASE + path, {
+  const res = await qaFetch(BASE + path, {
     method: init.method ?? "GET",
     headers,
     body: init.body,
@@ -124,19 +125,21 @@ const WEB_ROUTES = [
   "web.logout.tsx",
   "web.reset.$token.tsx",
 ];
-const PLATFORM_ROUTES = [
-  "platform.tsx",
-  "platform._index.tsx",
-  "platform.admins.tsx",
-  "platform.ai.tsx",
-  "platform.login.tsx",
-  "platform.logout.tsx",
-  "platform.logs.tsx",
-  "platform.plans.tsx",
-  "platform.promo-codes.tsx",
-  "platform.settings.tsx",
-  "platform.usage._index.tsx",
-  "platform.usage.$shopId.tsx",
+const ADMIN_ROUTES = [
+  "admin.tsx",
+  "admin._index.tsx",
+  "admin.access.tsx",
+  "admin.ai.tsx",
+  "admin.debug._index.tsx",
+  "admin.debug.$shopId.$conversationId.tsx",
+  "admin.login.tsx",
+  "admin.logout.tsx",
+  "admin.logs.tsx",
+  "admin.plans.tsx",
+  "admin.promo-codes.tsx",
+  "admin.settings.tsx",
+  "admin.usage._index.tsx",
+  "admin.usage.$shopId.tsx",
 ];
 const PROXY_PATHS = [
   "/proxy/ping",
@@ -196,8 +199,9 @@ async function main(): Promise<void> {
 
   // Reachability gate — everything below is HTTP.
   try {
-    const res = await fetch(`${BASE}/web/login`, { headers: { "user-agent": UA } });
-    if (!res.ok) throw new Error(`status ${res.status}`);
+    // Backoff gate (QA-T4): a cold dev server is slow, not down.
+    const up = await waitForServer(`${BASE}/web/login`, { headers: { "user-agent": UA } });
+    if (!up.ok) throw new Error(up.error);
   } catch (error) {
     // Never let an unreachable server look like a clean run — record a real
     // failure so the exit code is non-zero and the gap is visible.
@@ -210,7 +214,7 @@ async function main(): Promise<void> {
   const groups: Array<[string, string[]]> = [
     ["app.*", APP_ROUTES],
     ["web.*", WEB_ROUTES],
-    ["platform.*", PLATFORM_ROUTES],
+    ["admin.*", ADMIN_ROUTES],
     ["proxy.*", PROXY_PATHS.map((p) => `proxy.${p.split("/")[2]}.tsx`)],
     ["webhooks.*", WEBHOOK_PATHS.map((p) => `webhooks.${p.replace("/webhooks/", "").replace(/\//g, ".")}.tsx`)],
   ];
@@ -219,41 +223,122 @@ async function main(): Promise<void> {
     ok(`${label} route modules present (${files.length})`, missing.length === 0, missing.join(", "));
   }
   ok("auth.$ present", existsSync(join(ROUTES_DIR, "auth.$.tsx")));
-  // /auth/login (the template's .myshopify.com shop-domain form) was removed
-  // for App Store req 2.3.1. It must be GONE — no route, no `login` export, no
-  // redirect_urls entry, and nothing anywhere that asks for a shop domain.
+  // Shop-domain login (J-10 / QA-C1, 2026-09-14). App Store req 2.3.1 — verified
+  // on shopify.dev — forbids asking a merchant to type a myshopify.com URL or shop
+  // domain. No route may render that input; /auth/login stays only as the path
+  // the library bounces to (with ?shop=) and must never 500 on a public URL.
   {
     const toml = readFileSync(join(process.cwd(), "shopify.app.toml"), "utf-8");
-    ok("auth.login route directory is gone", !existsSync(join(ROUTES_DIR, "auth.login")));
+    ok("auth.login route present", existsSync(join(ROUTES_DIR, "auth.login.tsx")));
     ok(
-      "shopify.server.ts no longer exports `login`",
-      !/^\s*export\s+const\s+login\s*=/m.test(readFileSync(join(process.cwd(), "app", "shopify.server.ts"), "utf-8")),
+      "shopify.server.ts exports `login`",
+      /^\s*export\s+const\s+login\s*=/m.test(readFileSync(join(process.cwd(), "app", "shopify.server.ts"), "utf-8")),
     );
-    ok("/auth/login is no longer a declared redirect_url", !toml.includes("/auth/login"));
-    // No surviving route may render a shop-domain input (req 2.3.1).
+    ok("/auth/login is not a declared redirect_url", !toml.includes("/auth/login"));
     const offenders: string[] = [];
     for (const file of readdirSync(ROUTES_DIR, { withFileTypes: true })) {
       if (!file.isFile() || !file.name.endsWith(".tsx")) continue;
       const src = readFileSync(join(ROUTES_DIR, file.name), "utf-8");
-      if (/name=["']shop["']|myshopify\.com["']?\s*\/?>/.test(src) && /<(input|s-text-field|s-email-field)/i.test(src)) {
+      if (/name=["']shop["']/.test(src) && /<(input|s-text-field|s-email-field)/i.test(src)) {
         offenders.push(file.name);
       }
     }
     ok("no route renders a shop-domain input", offenders.length === 0, offenders.join(", "));
+    const landing = readFileSync(join(ROUTES_DIR, "_index", "route.tsx"), "utf-8");
+    ok(
+      "_index has no shop-domain field, myshopify placeholder or login() action (req 2.3.1)",
+      !/name="shop"/.test(landing) &&
+        !/placeholder="[^"]*myshopify/.test(landing) &&
+        !/login\(request\)/.test(landing),
+    );
+    ok(
+      "auth.login is redirect-only (no action)",
+      !/export const action/.test(readFileSync(join(ROUTES_DIR, "auth.login.tsx"), "utf-8")),
+    );
+    const home = await probe("/");
+    ok(
+      "/ renders with no <form> and no shop input",
+      home.status === 200 && !/<form/i.test(home.body) && !/name="shop"/.test(home.body),
+      String(home.status),
+    );
 
+    // With ?shop=, /auth/login hands off to the managed-install screen rather
+    // than dead-ending a stale bookmark; either way it must not serve a page.
     const p = await probe("/auth/login?shop=dev-shop.myshopify.com");
     ok("/auth/login does not serve a page", p.status !== 200, String(p.status));
     ok(
       "/auth/login redirects instead of erroring",
-      p.status === 302 || p.status === 301 || p.status === 404,
+      p.status === 302 || p.status === 301,
       `${p.status} — ${p.body.slice(0, 160).replace(/\s+/g, " ")}`,
     );
-    if (p.status === 302 || p.status === 301) {
-      // auth.login.tsx redirects to "/" (install entry point). A 404 would
-      // dead-end a stale bookmark; a redirect keeps the flow alive WITHOUT
-      // rendering the template shop-domain form that req 2.3.1 forbids.
-      ok("/auth/login redirects to the install entry point", (p.location ?? "") === "/", p.location ?? "");
-    }
+    ok(
+      "/auth/login?shop= redirects to the Shopify install screen",
+      /oauth\/install/.test(p.location ?? ""),
+      p.location ?? "",
+    );
+
+    // J-11 (2026-09-07, reported from the live app). Clicking the app name in
+    // the Shopify admin opened the MARKETING page — store-domain box and
+    // "Install from the Shopify App Store" band — to a merchant who already had
+    // the app installed, inside their own admin. The redirect above keys on
+    // `shop` alone, and that entry arrives with `host` instead. `host` is
+    // base64 of `admin.shopify.com/store/<store>`, so the shop is recoverable.
+    const b64 = (s: string) => Buffer.from(s).toString("base64");
+    const adminHost = b64("admin.shopify.com/store/dev-shop");
+    const fromAdmin = await probe(`/?host=${encodeURIComponent(adminHost)}&embedded=1`);
+    ok(
+      "/ with host but no shop redirects into the app",
+      fromAdmin.status === 302 && (fromAdmin.location ?? "").startsWith("/app"),
+      `${fromAdmin.status} → ${fromAdmin.location ?? "(none)"}`,
+    );
+    ok(
+      "…and recovers the shop from host",
+      /shop=dev-shop\.myshopify\.com/.test(fromAdmin.location ?? ""),
+      fromAdmin.location ?? "",
+    );
+    // Embedded with an unreadable host: still never the install card in an
+    // iframe — /app can authenticate from the session token by itself.
+    const badHost = await probe("/?host=zzz%21%21&embedded=1");
+    ok(
+      "/ embedded with an unreadable host still leaves the marketing page",
+      badHost.status === 302 && (badHost.location ?? "").startsWith("/app"),
+      `${badHost.status} → ${badHost.location ?? "(none)"}`,
+    );
+    // A host naming somewhere else must NOT yield a shop domain — that would
+    // send a merchant to another store's install screen.
+    const foreign = await probe(`/?host=${encodeURIComponent(b64("evil.example.com/store/x"))}`);
+    ok(
+      "a foreign host is not decoded into a shop",
+      foreign.status === 200 || !/shop=/.test(foreign.location ?? ""),
+      `${foreign.status} → ${foreign.location ?? "(none)"}`,
+    );
+    // The public page must still exist for real visitors.
+    const publicVisit = await probe("/");
+    ok("the marketing page still serves a plain visitor", publicVisit.status === 200, String(publicVisit.status));
+
+    // J-12. The APP NAME in the admin sidebar is itself a link, and per the App
+    // nav reference its target defaults to "/" — this app's public marketing
+    // page. Without a rel="home" override, clicking the app name took an
+    // installed merchant to the store-domain box and the "Install from the
+    // Shopify App Store" band, inside their own admin. This was the actual
+    // reported defect; the host-decoding redirect above does NOT cover it,
+    // because that click carries neither `shop` nor `host`.
+    const layout = readFileSync(join(ROUTES_DIR, "app.tsx"), "utf-8");
+    ok(
+      "the app nav declares a home link",
+      /rel:\s*"home"/.test(layout),
+      'without it the app name points at "/" — the marketing page',
+    );
+    ok(
+      "the home link targets /app",
+      /<s-link href="\/app" \{\.\.\.HOME_REL\}>/.test(layout),
+      "rel=home must name the app's real home route",
+    );
+    ok(
+      "only one home link exists",
+      (layout.match(/rel:\s*"home"/g) || []).length === 1,
+      'the App nav reference: "Only one link should have rel=\'home\'"',
+    );
 
     // Every declared OAuth redirect URL must have a route behind it.
     const start = toml.indexOf("redirect_urls = [");
@@ -319,7 +404,7 @@ async function main(): Promise<void> {
     ["/web/handoff", 200],
     ["/web/invite/not-a-real-token", 200],
     ["/web/reset/not-a-real-token", 200],
-    ["/platform/login", 200],
+    ["/admin/login", 200],
   ] as Array<[string, number]>) {
     const p = await probe(path);
     ok(`GET ${path} → ${expected}`, p.status === expected, String(p.status));
@@ -338,24 +423,24 @@ async function main(): Promise<void> {
     ok("/?shop=… → /app?shop=…", p.status === 302 && (p.location ?? "").startsWith("/app?shop="), `${p.status} ${p.location}`);
   }
   {
-    const p = await probe("/platform");
-    ok("/platform (signed out) → /platform/login", p.status === 302 && (p.location ?? "").includes("/platform/login"), `${p.status} ${p.location}`);
+    const p = await probe("/admin");
+    ok("/admin (signed out) → /admin/login", p.status === 302 && (p.location ?? "").includes("/admin/login"), `${p.status} ${p.location}`);
   }
-  for (const path of ["/platform/admins", "/platform/ai", "/platform/logs", "/platform/plans", "/platform/promo-codes", "/platform/settings", "/platform/usage", "/platform/usage/abc123"]) {
+  for (const path of ["/admin/access", "/admin/ai", "/admin/debug", "/admin/debug/shop123/convo123", "/admin/logs", "/admin/plans", "/admin/promo-codes", "/admin/settings", "/admin/usage", "/admin/usage/abc123"]) {
     const p = await probe(path);
     ok(
-      `${path} (signed out) → /platform/login?next=`,
-      p.status === 302 && (p.location ?? "").includes(`/platform/login?next=${encodeURIComponent(path)}`),
+      `${path} (signed out) → /admin/login?next=`,
+      p.status === 302 && (p.location ?? "").includes(`/admin/login?next=${encodeURIComponent(path)}`),
       `${p.status} ${p.location}`,
     );
   }
   {
-    // /platform?tab=… : the guard preserves the query string on the bounce.
-    const p = await probe("/platform/usage?range=90d");
+    // /admin?tab=… : the guard preserves the query string on the bounce.
+    const p = await probe("/admin/usage?range=90d");
     const loc = p.location ?? "";
     ok(
-      "/platform deep link keeps its query on the auth bounce",
-      loc.includes(encodeURIComponent("/platform/usage?range=90d")),
+      "/admin deep link keeps its query on the auth bounce",
+      loc.includes(encodeURIComponent("/admin/usage?range=90d")),
       loc,
     );
   }
@@ -394,9 +479,9 @@ async function main(): Promise<void> {
         entry.indexOf('X-Content-Type-Options') < entry.indexOf("frame-ancestors"),
     );
     ok(
-      "/platform is in the frame-ancestors 'none' branch (not just /web)",
-      /platformPage\s*=\s*pathname === "\/platform" \|\| pathname\.startsWith\("\/platform\/"\)/.test(entry) &&
-        /if \(webAuthPage \|\| platformPage/.test(entry),
+      "/admin is in the frame-ancestors 'none' branch (not just /web)",
+      /adminPage\s*=\s*pathname === "\/admin" \|\| pathname\.startsWith\("\/admin\/"\)/.test(entry) &&
+        /if \(webAuthPage \|\| adminPage/.test(entry),
       "a ?shop= param would otherwise let the operator console be framed",
     );
     ok("the deny branch also sets Cache-Control: no-store", /frame-ancestors 'none'[\s\S]{0,400}Cache-Control",\s*"no-store"/.test(entry));
@@ -409,13 +494,13 @@ async function main(): Promise<void> {
       ["/", "marketing"],
       ["/web/login", "web"],
       ["/web/forgot", "web"],
-      ["/platform/login", "platform"],
+      ["/admin/login", "admin"],
       ["/app/inbox", "app"],
     ];
     for (const [path, kind] of cases) {
       const p = await probe(path);
       ok(`${path}: X-Content-Type-Options: nosniff`, p.headers.get("x-content-type-options") === "nosniff", p.headers.get("x-content-type-options") ?? "(missing)");
-      if (kind === "web" || kind === "platform") {
+      if (kind === "web" || kind === "admin") {
         ok(`${path}: CSP frame-ancestors 'none'`, (p.headers.get("content-security-policy") ?? "").includes("frame-ancestors 'none'"), p.headers.get("content-security-policy") ?? "(missing)");
         ok(`${path}: X-Frame-Options: DENY`, p.headers.get("x-frame-options") === "DENY", p.headers.get("x-frame-options") ?? "(missing)");
         ok(`${path}: Cache-Control: no-store`, (p.headers.get("cache-control") ?? "").includes("no-store"), p.headers.get("cache-control") ?? "(missing)");
@@ -425,9 +510,9 @@ async function main(): Promise<void> {
         ok(`${path}: Cache-Control: no-store (shopper PII)`, (p.headers.get("cache-control") ?? "").includes("no-store"), p.headers.get("cache-control") ?? "(missing)");
       }
     }
-    // The regression the /platform branch fixes: a ?shop= param must NOT make
+    // The regression the /admin branch fixes: a ?shop= param must NOT make
     // the operator console framable by that shop.
-    for (const path of ["/platform/login?shop=dev-shop.myshopify.com", "/web/login?shop=dev-shop.myshopify.com"]) {
+    for (const path of ["/admin/login?shop=dev-shop.myshopify.com", "/web/login?shop=dev-shop.myshopify.com"]) {
       const p = await probe(path);
       const csp = p.headers.get("content-security-policy") ?? "";
       ok(`${path}: still frame-ancestors 'none' despite ?shop=`, csp.includes("frame-ancestors 'none'") && !csp.includes("myshopify.com"), csp || "(missing)");
@@ -483,11 +568,11 @@ async function main(): Promise<void> {
     ok("GET /web/logout without a cookie → /web/login", p.status === 302 && (p.location ?? "").endsWith("/web/login"), `${p.status} ${p.location}`);
   }
   {
-    const p = await probe("/platform/logout", { cookie: "cc_platform=some-token" });
+    const p = await probe("/admin/logout", { cookie: "cc_admin=some-token" });
     const setCookie = p.headers.get("set-cookie") ?? "";
     ok(
-      "GET /platform/logout does not clear the platform cookie",
-      p.status === 302 && !/cc_platform=;/.test(setCookie),
+      "GET /admin/logout does not clear the admin cookie",
+      p.status === 302 && !/cc_admin=;/.test(setCookie),
       `${p.status} | set-cookie: ${setCookie || "(none)"}`,
     );
   }
@@ -658,13 +743,13 @@ async function main(): Promise<void> {
     }
   }
 
-  // ── Section 10: authenticated platform routing ────────────────────────────
-  section("10. Authenticated platform surface");
+  // ── Section 10: authenticated admin routing ────────────────────────────
+  section("10. Authenticated admin surface");
   {
     const { createHash, randomBytes } = await import("node:crypto");
     const { hashPassword } = await import("../../app/lib/team/password.server");
     // A throwaway operator account — never touch the real one's sessions.
-    const admin = await db.platformAdmin.create({
+    const admin = await db.adminUser.create({
       data: {
         email: `${TAG}-operator-${Date.now()}@example.invalid`,
         name: "QA routing operator",
@@ -672,7 +757,7 @@ async function main(): Promise<void> {
       },
     });
     const raw = randomBytes(32).toString("base64url");
-    const row = await db.platformSession.create({
+    const row = await db.adminSession.create({
       data: {
         tokenHash: createHash("sha256").update(raw).digest("hex"),
         adminId: admin.id,
@@ -681,45 +766,55 @@ async function main(): Promise<void> {
       },
     });
     try {
-      const cookie = `cc_platform=${raw}`;
-      for (const path of ["/platform", "/platform/admins", "/platform/ai", "/platform/logs", "/platform/plans", "/platform/promo-codes", "/platform/settings", "/platform/usage"]) {
+      const cookie = `cc_admin=${raw}`;
+      for (const path of ["/admin", "/admin/access", "/admin/ai", "/admin/logs", "/admin/plans", "/admin/promo-codes", "/admin/settings", "/admin/usage"]) {
         const p = await probe(path, { cookie });
         ok(`signed-in GET ${path} → 200`, p.status === 200, String(p.status));
       }
+      // Debug recordings are OWNER-only (QA-C3): a plain operator is refused,
+      // an owner gets in. The throwaway account is role "admin" by default.
       {
-        const p = await probe("/platform/login", { cookie });
-        ok("/platform/login (signed in) → /platform", p.status === 302 && (p.location ?? "") === "/platform", `${p.status} ${p.location}`);
+        const p = await probe("/admin/debug", { cookie });
+        ok("signed-in non-owner GET /admin/debug → 403 (owner-only)", p.status === 403, String(p.status));
+        await db.adminUser.update({ where: { id: admin.id }, data: { role: "owner" } });
+        const owner = await probe("/admin/debug", { cookie });
+        ok("signed-in owner GET /admin/debug → 200", owner.status === 200, String(owner.status));
+        await db.adminUser.update({ where: { id: admin.id }, data: { role: "admin" } });
       }
       {
-        const p = await probe("/platform/login?next=https%3A%2F%2Fevil.example", { cookie });
-        ok("/platform/login?next=<external> falls back to /platform", p.status === 302 && (p.location ?? "") === "/platform", `${p.status} ${p.location}`);
+        const p = await probe("/admin/login", { cookie });
+        ok("/admin/login (signed in) → /admin", p.status === 302 && (p.location ?? "") === "/admin", `${p.status} ${p.location}`);
       }
-      // A platform cookie must not unlock a merchant surface.
+      {
+        const p = await probe("/admin/login?next=https%3A%2F%2Fevil.example", { cookie });
+        ok("/admin/login?next=<external> falls back to /admin", p.status === 302 && (p.location ?? "") === "/admin", `${p.status} ${p.location}`);
+      }
+      // A admin cookie must not unlock a merchant surface.
       {
         const p = await probe("/app/inbox", { cookie });
-        ok("platform cookie does NOT open /app/inbox", isBlocked(p), String(p.status));
+        ok("admin cookie does NOT open /app/inbox", isBlocked(p), String(p.status));
       }
-      // A merchant web cookie must not unlock the platform surface (covered by
-      // the signed-out sweep above, re-asserted with a bogus platform value).
+      // A merchant web cookie must not unlock the admin surface (covered by
+      // the signed-out sweep above, re-asserted with a bogus admin value).
       {
-        const p = await probe("/platform/settings", { cookie: "cc_platform=not-a-real-token" });
-        ok("bogus platform cookie → /platform/login", p.status === 302 && (p.location ?? "").includes("/platform/login"), `${p.status} ${p.location}`);
+        const p = await probe("/admin/settings", { cookie: "cc_admin=not-a-real-token" });
+        ok("bogus admin cookie → /admin/login", p.status === 302 && (p.location ?? "").includes("/admin/login"), `${p.status} ${p.location}`);
       }
       // POST-only logout, and it really clears the cookie.
       {
-        const p = await probe("/platform/logout", { cookie, method: "POST", body: new URLSearchParams({}) });
+        const p = await probe("/admin/logout", { cookie, method: "POST", body: new URLSearchParams({}) });
         const setCookie = p.headers.get("set-cookie") ?? "";
         ok(
-          "POST /platform/logout clears the cookie and redirects",
-          p.status === 302 && /cc_platform=;?/.test(setCookie) && /Max-Age=0/.test(setCookie),
+          "POST /admin/logout clears the cookie and redirects",
+          p.status === 302 && /cc_admin=;?/.test(setCookie) && /Max-Age=0/.test(setCookie),
           `${p.status} ${setCookie}`,
         );
-        const gone = await db.platformSession.findUnique({ where: { id: row.id } });
-        ok("POST /platform/logout deletes the platform_sessions row", gone === null);
+        const gone = await db.adminSession.findUnique({ where: { id: row.id } });
+        ok("POST /admin/logout deletes the platform_sessions row", gone === null);
       }
     } finally {
-      await db.platformSession.deleteMany({ where: { adminId: admin.id } }).catch(() => undefined);
-      await db.platformAdmin.delete({ where: { id: admin.id } }).catch(() => undefined);
+      await db.adminSession.deleteMany({ where: { adminId: admin.id } }).catch(() => undefined);
+      await db.adminUser.delete({ where: { id: admin.id } }).catch(() => undefined);
     }
   }
 

@@ -1,7 +1,9 @@
 import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
-import { displayQuota, getQuota, overageRate } from "./plans.server";
-import { reportOverageUsage } from "./usage-records.server";
+import { bonusQuota } from "./quota-grants.server";
+import { getQuota, overageRate } from "./plans.server";
+import { submitOverageRecords } from "./usage-records.server";
+import { hasUsageHeadroom, usageBalance } from "./usage-cap.server";
 import { logError } from "../log.server";
 
 // Conversation metering (spec 15 rules — the billing FAQ is the contract):
@@ -29,9 +31,14 @@ export function currentPeriodStart(now = new Date()): Date {
 
 /**
  * Whether conversations beyond the allowance can be BILLED for this shop.
- * Requires a plan overage rate AND a monthly subscription with a usage line
- * item: yearly subscriptions cannot carry usage lines (Shopify rejects them,
- * QA D1), so they hard-cap at quota exactly like Free.
+ * Requires a plan overage rate AND a subscription carrying a usage line item.
+ *
+ * The billingInterval check is a LEGACY SAFETY NET, not live logic. Annual
+ * billing was withdrawn and nothing can create a yearly
+ * subscription any more, but a row written before that may still say "yearly" —
+ * and Shopify rejects usage lines on ANNUAL subscriptions (QA D1), so billing
+ * one would fail. Keep it: deleting it would start charging those shops for
+ * conversations Shopify will never accept a usage record for.
  */
 export function overageBillable(shop: {
   plan: string;
@@ -65,15 +72,17 @@ export async function tickConversation(args: {
     select: { plan: true, billingInterval: true, usageLineItemId: true },
   });
   const plan = shop?.plan ?? "free";
-  const quota = displayQuota(plan, "conversations");
-  const enforcedQuota = getQuota(plan, "conversations");
+  // Plan allowance PLUS any live bonus grant for this shop: a grant raises the
+  // cap, so overage only ever starts past the two together.
+  const quota =
+    getQuota(plan, "conversations") + (await bonusQuota(shopId, "conversations"));
   const billable = shop ? overageBillable(shop) : false;
 
   const noTick = async (): Promise<UsageResult> => {
     const usage = await currentUsage(shopId);
     return {
       ticked: false,
-      withinQuota: usage < enforcedQuota,
+      withinQuota: usage < quota,
       nearCap: quota > 0 && usage / quota >= 0.8,
       overageRecorded: false,
       conversationCount: usage,
@@ -113,7 +122,7 @@ export async function tickConversation(args: {
     data: { meteredAt: now },
   });
 
-  const withinQuota = usage.conversationCount <= enforcedQuota;
+  const withinQuota = usage.conversationCount <= quota;
   let overageRecorded = false;
   if (!withinQuota && billable) {
     await db.planUsage.update({
@@ -121,11 +130,12 @@ export async function tickConversation(args: {
       data: { overageCount: { increment: 1 } },
     });
     overageRecorded = true;
-    // Report to Shopify billing fire-and-forget (15b) — never blocks the chat path.
-    reportOverageUsage(
-      shopId,
-      `Extra AI conversation beyond the ${quota.toLocaleString("en-US")}/month plan allowance`,
-    ).catch((error) => logError("overage_usage_record_error", error));
+    // Bill it fire-and-forget — never blocks the chat path. Anything this call
+    // fails to bill stays as overageCount - overageReported and is retried by
+    // the hourly reconcile job, so a hiccup here costs nothing.
+    submitOverageRecords(shopId, periodStart).catch((error) =>
+      logError("overage_usage_record_error", error),
+    );
   }
 
   return {
@@ -146,13 +156,93 @@ export async function aiAllowed(shopId: string): Promise<boolean> {
     select: { plan: true, billingInterval: true, usageLineItemId: true },
   });
   const plan = shop?.plan ?? "free";
-  const enforcedQuota = getQuota(plan, "conversations");
-  if (enforcedQuota === Number.MAX_SAFE_INTEGER) return true;
+  const planQuota = getQuota(plan, "conversations");
+  if (planQuota === Number.MAX_SAFE_INTEGER) return true;
+  // The allowance INCLUDES any live bonus grant. It must be compared against
+  // usage, not merely checked for existence: nothing decrements a grant under
+  // the cap-raise model, so `bonus > 0 ⇒ allowed` would let a Free shop with a
+  // +3 grant answer for ever instead of for three more conversations.
+  const enforcedQuota = planQuota + (await bonusQuota(shopId, "conversations"));
   const usage = await currentUsage(shopId);
   if (usage < enforcedQuota) return true;
-  // Monthly paid plans keep replying on (billable) overage; Free and yearly
-  // subscriptions (no usage line, QA D1) stop at the cap.
-  return shop ? overageBillable(shop) : false;
+  // Free (and any legacy annual row) has no usage line, so it stops at the cap.
+  if (!shop || !overageBillable(shop)) return false;
+  // Monthly paid plans keep replying on overage — but only while the merchant's
+  // APPROVED spend ceiling still has room. Past it Shopify refuses the charge
+  // (`Failed to create usage charge`), so serving on would be free work; the
+  // merchant raises the limit from Plan & Usage. Fails safe: an unreachable
+  // Shopify counts as headroom, and the reconcile job bills what we served.
+  return hasUsageHeadroom(shopId, plan);
+}
+
+export interface UsageStatus {
+  plan: string;
+  used: number;
+  quota: number;
+  pct: number;
+  /** ≥80% of the allowance and not yet over it. */
+  nearCap: boolean;
+  /** Conversations served past the allowance this month. */
+  overage: number;
+  /** Of those, not yet billed (retried hourly). */
+  unbilled: number;
+  /** Overage charged so far this month, in USD. */
+  spend: number;
+  rate: number | null;
+  billable: boolean;
+  /** The merchant's approved ceiling for the billing cycle, in USD. */
+  capped: number;
+  remaining: number;
+  /** Ceiling reached: the AI has stopped until the limit is raised. */
+  ceilingReached: boolean;
+  /** Bonus conversations granted to this shop and still unspent. */
+  credits: number;
+}
+
+/**
+ * Everything Plan & Usage needs to tell the merchant the truth about metering:
+ * how close they are, whether they are being charged, and whether the AI has
+ * stopped — without it, a merchant could be billed with nothing on screen
+ * to explain it.
+ */
+export async function usageStatus(shopId: string): Promise<UsageStatus> {
+  const id = requireShopId(shopId);
+  const shop = await db.shop.findUnique({
+    where: { id },
+    select: { plan: true, billingInterval: true, usageLineItemId: true },
+  });
+  const plan = shop?.plan ?? "free";
+  // What the merchant is actually held to: plan allowance + any live bonus. The
+  // old split (display the plan number, enforce a different one) is gone with
+  // the enforcement switch — the meter now cannot disagree with reality.
+  const credits = await bonusQuota(id, "conversations");
+  const quota = getQuota(plan, "conversations") + credits;
+  const periodStart = currentPeriodStart();
+  const row = await db.planUsage.findUnique({
+    where: { shopId_periodStart: { shopId: id, periodStart } },
+    select: { conversationCount: true, overageCount: true, overageReported: true },
+  });
+  const used = row?.conversationCount ?? 0;
+  const overage = row?.overageCount ?? 0;
+  const billable = shop ? overageBillable(shop) : false;
+  const rate = billable ? overageRate(plan) : null;
+  const balance = billable ? await usageBalance(id) : { capped: 0, used: 0, remaining: 0, unknown: false };
+  return {
+    plan,
+    used,
+    quota,
+    pct: quota > 0 ? Math.round((used / quota) * 100) : 0,
+    nearCap: quota > 0 && used / quota >= 0.8 && used <= quota,
+    overage,
+    unbilled: Math.max(0, overage - (row?.overageReported ?? 0)),
+    spend: Number((balance.used || 0).toFixed(2)),
+    rate,
+    billable,
+    capped: balance.capped,
+    remaining: balance.remaining,
+    ceilingReached: billable && !balance.unknown && balance.capped > 0 && balance.remaining < (rate ?? 0),
+    credits,
+  };
 }
 
 export async function currentUsage(shopId: string): Promise<number> {

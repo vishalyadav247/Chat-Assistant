@@ -114,6 +114,7 @@ async function callRoute(
 async function main() {
   const { default: db } = await import("../../app/db.server");
   const { onShopAuthenticated } = await import("../../app/lib/install.server");
+  const { DEFAULT_PERSONA } = await import("../../app/lib/ai-defaults");
   const { cleanupShop, countShopRows } = await import("../../app/lib/jobs/handlers.server");
   const uninstalledRoute = await import("../../app/routes/webhooks.app.uninstalled");
   const scopesRoute = await import("../../app/routes/webhooks.app.scopes_update");
@@ -161,15 +162,35 @@ async function main() {
   );
   const guardrails = await db.guardrails.findUnique({ where: { shopId } });
   check("default Guardrails seeded", guardrails !== null);
+  // Spec 24: the fallback is seeded BLANK so the built-in message is served in
+  // the shop's language (QA2-A3); a merchant-written one still wins.
   check(
-    "Guardrails carry a fallback message + banned topics",
-    Boolean(guardrails?.fallbackMessage) && (guardrails?.bannedTopics.length ?? 0) > 0,
+    "Guardrails carry banned topics and a blank (translated built-in) fallback",
+    guardrails?.fallbackMessage === "" && (guardrails?.bannedTopics.length ?? 0) > 0,
+  );
+  check(
+    "Persona is seeded with the generic defaults (behaviours included)",
+    persona?.role === DEFAULT_PERSONA.role && persona?.behaviours === DEFAULT_PERSONA.behaviours,
   );
   const recCount = await db.recommendation.count({ where: { shopId } });
   check("seeded app recommendations", recCount === 2, `${recCount}`);
+  // QA-P4 (owner decision 2026-09-14): new installs default to 90-day transcript retention.
+  const freshSettings = await db.shopSettings.findUnique({ where: { shopId } });
+  check(
+    "new install defaults transcript retention to 90 days",
+    (freshSettings?.settings as { retentionDays?: number } | undefined)?.retentionDays === 90,
+    JSON.stringify((freshSettings?.settings as { retentionDays?: number } | undefined)?.retentionDays),
+  );
 
   // Idempotency: afterAuth also fires on every token refresh.
+  // An EXISTING store must never be moved to the new default: drop the settings
+  // row (a store that never saved settings) and re-authenticate.
+  await db.shopSettings.deleteMany({ where: { shopId } });
   await onShopAuthenticated(FRESH);
+  check(
+    "re-auth of an existing store does NOT seed the 90-day default (keeps Keep forever)",
+    (await db.shopSettings.count({ where: { shopId } })) === 0,
+  );
   check(
     "afterAuth is idempotent (no duplicate persona/guardrails/recommendations)",
     (await db.persona.count({ where: { shopId } })) === 1 &&
@@ -272,7 +293,6 @@ async function main() {
     ["faq.exportFaqCsv", () => faq.exportFaqCsv(shopId, "all")],
     ["inbox.listConversations", () => inbox.listConversations(shopId)],
     ["sources.listSources", () => sources.listSources(shopId)],
-    ["sources.listSuggested", () => sources.listSuggested(shopId)],
     ["metafields.listMetafieldDefinitions", () => metafields.listMetafieldDefinitions(shopId)],
     ["settings.loadShopSettings", () => settingsSave.loadShopSettings(shopId)],
     ["widget.loadWidgetSettings", () => widgetSave.loadWidgetSettings(shopId)],

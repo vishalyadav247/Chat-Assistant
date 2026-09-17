@@ -43,7 +43,7 @@
 
   /**
    * Stream one chat turn.
-   * handlers: {onToken, onMessage, onCards, onHandover, onDone, onError}.
+   * handlers: {onToken, onMessage, onCards, onActions, onHandover, onDone, onError}.
    * Returns a promise resolving when the stream ends.
    */
   function streamChat(base, payload, handlers) {
@@ -77,6 +77,7 @@
           if (frame.type === "token" && handlers.onToken) handlers.onToken(frame.text);
           else if (frame.type === "message" && handlers.onMessage) handlers.onMessage(frame.text);
           else if (frame.type === "cards" && handlers.onCards) handlers.onCards(frame.cards);
+          else if (frame.type === "actions" && handlers.onActions) handlers.onActions(frame.actions);
           else if (frame.type === "handover" && handlers.onHandover) handlers.onHandover(frame.data);
           else if (frame.type === "done") {
             settled = true;

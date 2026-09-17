@@ -7,6 +7,37 @@
  * 2026-08-17) · multi-turn continuity · no-accidental-handover · history window.
  */
 import { PrismaClient } from "@prisma/client";
+import { PUBLISHED_FIXTURE_QUESTIONS } from "./qa/curated-fixtures";
+
+// Engine: `--agent pipeline` (default — asserts the router + lanes PATHS) or
+// `--agent tools` (the default engine since spec 24; QA3-T1). The agent has no
+// lanes, so in tools mode lane names map to the agent's reply kinds
+// (detail → question/buy, buy_browse → buy, clarify → chat/question) and cases
+// may carry their own agentOutcome / agentInText. Cards, text and action
+// checks are the same in both modes.
+const AGENT = (() => {
+  const i = process.argv.indexOf("--agent");
+  return i > 0 && process.argv[i + 1] === "tools" ? "tools" : "pipeline";
+})();
+process.env.AI_AGENT_MODE = AGENT;
+
+const AGENT_EQUIVALENT: Record<string, string[]> = {
+  detail: ["question", "buy"],
+  buy_browse: ["buy"],
+  clarify: ["chat", "question"],
+  fell_back: ["fell_back", "question"],
+};
+
+function outcomeOk(testCase: { expectOutcome: string[]; agentOutcome?: string[] }, outcome: string): boolean {
+  if (AGENT === "pipeline") return testCase.expectOutcome.includes(outcome);
+  const expected = testCase.agentOutcome ?? testCase.expectOutcome.flatMap((o) => [o, ...(AGENT_EQUIVALENT[o] ?? [])]);
+  return expected.includes(outcome);
+}
+
+/** Multi-turn product follow-ups: a buy lane, or (agent) any reply that shows cards. */
+function buyOk(outcome: string, cardCount: number): boolean {
+  return ["buy", "buy_browse"].includes(outcome) || (AGENT === "tools" && cardCount > 0);
+}
 
 const dbCheck = new PrismaClient();
 const DEV_SHOP_DOMAIN = "dev-shop.myshopify.com";
@@ -18,6 +49,42 @@ interface GoldenCase {
   expectCards?: boolean;
   /** At least one returned card title must match (checks ranking, not just recall). */
   expectCardTitle?: RegExp;
+  /** No returned card title may match (checks precision — the wrong product must NOT be shown). */
+  rejectCardTitle?: RegExp;
+  /** Reply text must NOT match (QA-A4/A6: invented alternatives, promised email). */
+  rejectInText?: RegExp;
+  /** QA-A1/A7: the reply may name no catalogue product that is not carded. */
+  groundedText?: boolean;
+  /** QA-A5: an `actions` frame must offer this key. */
+  expectAction?: string;
+  /** Upper bound on cards (QA-A2: no padding). */
+  maxCards?: number;
+  /** Tools mode only: accepted outcomes, replacing the lane mapping. */
+  agentOutcome?: string[];
+  /** Tools mode only: reply text check, replacing expectInText. */
+  agentInText?: RegExp;
+  /** Tools mode only: replaces rejectInText. */
+  agentRejectInText?: RegExp;
+  /** Run in this engine only. */
+  only?: "pipeline" | "tools";
+}
+
+/**
+ * Catalogue products the reply names but the cards do not show (QA-A1).
+ * A product counts as "named" by its distinctive two-word head ("Rose Quartz",
+ * "Thermal Socks") — the model shortens titles, so whole-title matching misses
+ * exactly the failure this guards. A head that is part of a carded title is fine.
+ */
+function namesUncardedProduct(text: string, cardTitles: string[], catalogue: string[]): string | null {
+  const lower = text.toLowerCase();
+  const carded = cardTitles.map((t) => t.toLowerCase());
+  for (const title of catalogue) {
+    const head = title.toLowerCase().split(/\s+/).slice(0, 2).join(" ");
+    if (head.length < 6 || !lower.includes(head)) continue;
+    if (carded.some((t) => t.includes(head))) continue;
+    return title;
+  }
+  return null;
 }
 
 const GOLDEN: GoldenCase[] = [
@@ -46,25 +113,84 @@ const GOLDEN: GoldenCase[] = [
   { input: "a bottle that keeps drinks hot", expectOutcome: ["buy"], expectCards: true, expectCardTitle: /Tumbler|Bottle/ },
   // Bare "customer service" is a question, not a hand-off (handover.server.ts patterns).
   { input: "what is your customer service email?", expectOutcome: ["question", "fell_back"] },
+  // A question about the store itself is RAG, never small talk — the chat lane
+  // retrieves nothing and once invented "visits are not available" against a
+  // store page that said otherwise (tuning event 2026-09-11).
+  { input: "can I come and pick up my order in person?", expectOutcome: ["question"], expectInText: /mon|fri|10\s?am|4\s?pm|warehouse/i },
+  // ── Field-aware ranking + model picks (2026-09-01) — the real-store failure:
+  // long descriptions name OTHER products' colours and stones ("pairs with
+  // black outfits", "recharge on a selenite plate"). A word only in the prose
+  // must not make a product a match; the literal title match must win.
+  // QA-A1 (2026-09-14): the reply once ALSO recommended Rose Quartz ("pairs
+  // beautifully with black") after code dropped its card — groundedText checks
+  // the words, not just the cards.
+  { input: "show me black bracelets", expectOutcome: ["buy"], expectCards: true, expectCardTitle: /Black Onyx/, rejectCardTitle: /Rose Quartz/, groundedText: true },
+  { input: "do you have selenite bracelets", expectOutcome: ["buy"], expectCards: true, expectCardTitle: /Selenite Crystal/, rejectCardTitle: /Rose Quartz/ },
+  // Question-shaped product ask: routed buy, or question → catalogue rescue.
+  { input: "which bracelet is good for love", expectOutcome: ["buy"], expectCards: true, expectCardTitle: /Rose Quartz/ },
+  // ── QA report 2026-09-14 (tuning event) ──────────────────────────────────
+  // A3: a creative / general-assistant task is off-topic when a store scope is
+  // set (dev-shop has one) — it used to route chat and write the poem.
+  { input: "write me a poem about the ocean", expectOutcome: ["off_topic"] },
+  // A4: availability of a NAMED product is answered from the catalogue row
+  // (stock 0 on dev-shop), not RAG — and no invented alternatives.
+  {
+    input: "is the Mulberry Silk Pillowcase in stock?",
+    expectOutcome: ["detail"],
+    expectInText: /out of stock|sold out|not in stock|currently unavailable|no stock|isn'?t in stock|not available/i,
+    rejectInText: /other pillowcase|similar|alternative/i,
+    // Agent: offering to look for a similar one is fine; naming an unretrieved
+    // alternative is not (the grounding rule is checked by the card/text contract).
+    agentRejectInText: /(we have|try|how about|check out|consider) (the|our|a) [\w ]*pillowcase|alternative/i,
+  },
+  // A5: order status goes to the Track-order screen (order tracking is on for
+  // dev-shop's plan), not a borderline curated answer.
+  { input: "where is my order #1234?", expectOutcome: ["order_status"], expectAction: "track_order" },
+  // A6: a blocked topic never asks for an email when no form is shown.
+  // Agent (QA3-A7): answered, not blocked — "not a medical treatment, see a doctor".
+  {
+    input: "can this crystal bracelet cure my anxiety?",
+    expectOutcome: ["blocked"],
+    rejectInText: /email/i,
+    agentOutcome: ["blocked", "chat", "question", "buy"],
+    agentInText: /not (a )?medical|doctor|not a (cure|treatment)/i,
+  },
+  // ── QA round 3 (2026-09-15) — live-journey failures of the AI agent ───────
+  // A2: browsing by price has no product words; 8 products are under $20.
+  { input: "anything under $20?", expectOutcome: ["buy", "buy_browse"], expectCards: true, only: "tools" },
+  // A1: the offer lives only in store information (no synced discount).
+  { input: "any offer running?", expectOutcome: ["question"], agentInText: /WELCOME10/i, only: "tools" },
+  // A1: bulk quantity → the wholesale rule, not "yes you can".
+  { input: "can I buy 60 yoga mats for my studio?", expectOutcome: ["question", "buy"], agentInText: /wholesale/i, only: "tools" },
+  // A3: no invented add-on ("charging case" does not exist on dev-shop).
+  {
+    input: "how long does the battery last on the wireless earbuds?",
+    expectOutcome: ["question", "buy"],
+    agentInText: /24/,
+    rejectInText: /charging case/i,
+    only: "tools",
+  },
+  // Catalogue overview: "what do you sell" is answered from the store's own catalogue.
+  { input: "what do you sell?", expectOutcome: ["chat", "question", "buy"], agentInText: /kitchen|fitness|home|apparel|beauty|electronic/i, rejectInText: /wallets? and belts/i, only: "tools" },
 ];
 
 async function main() {
-  if (!process.env.OPENAI_API_KEY) {
-    console.log("NOTE: no OPENAI_API_KEY — structural eval will fail on router calls. Aborting.");
-    process.exit(2);
-  }
-
   const shop = await dbCheck.shop.findUnique({ where: { domain: DEV_SHOP_DOMAIN } });
   if (!shop) throw new Error("seed first (npx prisma db seed)");
 
   const { runPipeline } = await import("../app/lib/pipeline/index.server");
+  const catalogue = (
+    await dbCheck.product.findMany({ where: { shopId: shop.id, status: "active" }, select: { title: true } })
+  ).map((p) => p.title);
 
   let failures = 0;
-  for (const testCase of GOLDEN) {
+  console.log(`engine: ${AGENT}`);
+  for (const testCase of GOLDEN.filter((c) => !c.only || c.only === AGENT)) {
     const sessionId = `golden-${Math.random().toString(36).slice(2, 10)}`;
     let outcome = "";
     let text = "";
     let cards: { title: string }[] = [];
+    let actionKeys: string[] = [];
     for await (const frame of runPipeline({
       shopId: shop.id,
       sessionId,
@@ -74,21 +200,40 @@ async function main() {
       if (frame.type === "token") text += frame.text;
       if (frame.type === "message") text += frame.text;
       if (frame.type === "cards") cards = frame.cards;
+      if (frame.type === "actions") actionKeys = frame.actions.map((a) => a.key);
       if (frame.type === "done") outcome = frame.outcome;
     }
 
     const problems: string[] = [];
-    if (!testCase.expectOutcome.includes(outcome)) {
-      problems.push(`outcome "${outcome}" not in [${testCase.expectOutcome.join(", ")}]`);
+    if (!outcomeOk(testCase, outcome)) {
+      problems.push(`outcome "${outcome}" not in [${(AGENT === "tools" && testCase.agentOutcome) || testCase.expectOutcome.join(", ")}]`);
     }
     if (testCase.expectCards && cards.length === 0 && outcome !== "clarify") {
       problems.push("expected product cards, got none");
     }
-    if (testCase.expectInText && !testCase.expectInText.test(text) && outcome !== "clarify") {
-      problems.push(`reply text failed ${testCase.expectInText}: "${text.slice(0, 120)}"`);
+    const textCheck = AGENT === "tools" ? (testCase.agentInText ?? testCase.expectInText) : testCase.expectInText;
+    if (textCheck && !textCheck.test(text) && outcome !== "clarify") {
+      problems.push(`reply text failed ${textCheck}: "${text.slice(0, 120)}"`);
     }
     if (testCase.expectCardTitle && !cards.some((c) => testCase.expectCardTitle!.test(c.title))) {
       problems.push(`no card matched ${testCase.expectCardTitle}: [${cards.map((c) => c.title).join(" | ")}]`);
+    }
+    if (testCase.rejectCardTitle && cards.some((c) => testCase.rejectCardTitle!.test(c.title))) {
+      problems.push(`a card matched ${testCase.rejectCardTitle} and must not: [${cards.map((c) => c.title).join(" | ")}]`);
+    }
+    const rejectCheck = AGENT === "tools" ? (testCase.agentRejectInText ?? testCase.rejectInText) : testCase.rejectInText;
+    if (rejectCheck && rejectCheck.test(text)) {
+      problems.push(`reply text matched ${rejectCheck} and must not: "${text.slice(0, 160)}"`);
+    }
+    if (testCase.groundedText) {
+      const named = namesUncardedProduct(text, cards.map((c) => c.title), catalogue);
+      if (named) problems.push(`reply names "${named}" but it is not carded: "${text.slice(0, 160)}"`);
+    }
+    if (testCase.expectAction && !actionKeys.includes(testCase.expectAction)) {
+      problems.push(`expected action ${testCase.expectAction}, got [${actionKeys.join(", ")}]`);
+    }
+    if (testCase.maxCards !== undefined && cards.length > testCase.maxCards) {
+      problems.push(`expected at most ${testCase.maxCards} card(s), got ${cards.length}`);
     }
 
     if (problems.length === 0) {
@@ -120,12 +265,43 @@ async function main() {
       if (frame.type === "done") outcome = frame.outcome;
     }
     const overBudget = cards.filter((c) => c.price > 25);
-    if (["buy", "buy_browse"].includes(outcome) && overBudget.length === 0) {
+    if (buyOk(outcome, cards.length) && overBudget.length === 0) {
       console.log(`PASS  multi-turn "under $25" → ${outcome} (${cards.length} cards, all ≤ $25)`);
     } else {
       failures++;
       console.log(
         `FAIL  multi-turn "under $25" → ${outcome}; over-budget: ${overBudget.map((c) => c.title).join(", ") || "none"}`,
+      );
+    }
+  }
+
+  // ── QA-A2 (2026-09-14): no padding with an off-category product ───────────
+  // "…something warm for my head under $20" once returned Fleece Beanie AND
+  // Thermal Socks (a vector-only top-up to reach two cards) while the reply
+  // said "this pick".
+  {
+    const sessionId = `golden-a2-${Math.random().toString(36).slice(2, 10)}`;
+    let conversationId: string | undefined;
+    for await (const frame of runPipeline({
+      shopId: shop.id, sessionId, message: "gloves I can use with my phone", isTest: true,
+    })) {
+      if (frame.type === "done") conversationId = frame.conversationId;
+    }
+    let outcome = "";
+    let cards: { title: string; price: number }[] = [];
+    for await (const frame of runPipeline({
+      shopId: shop.id, sessionId, conversationId, message: "something warm for my head under $20", isTest: true,
+    })) {
+      if (frame.type === "cards") cards = frame.cards;
+      if (frame.type === "done") outcome = frame.outcome;
+    }
+    const offCategory = cards.filter((c) => /sock|glove|jacket|bottle|wallet|bracelet/i.test(c.title));
+    if (buyOk(outcome, cards.length) && cards.some((c) => /beanie|hat|headband|cap/i.test(c.title)) && offCategory.length === 0) {
+      console.log(`PASS  A2 head-warmer follow-up → ${outcome} (${cards.map((c) => c.title).join(" | ")})`);
+    } else {
+      failures++;
+      console.log(
+        `FAIL  A2 head-warmer follow-up → ${outcome}; cards: ${cards.map((c) => c.title).join(" | ") || "none"}; off-category: ${offCategory.map((c) => c.title).join(", ") || "none"}`,
       );
     }
   }
@@ -139,19 +315,26 @@ async function main() {
     const turns = ["show me some jackets", "under $100", "the waterproof one?"];
     let outcome = "";
     let cards: { price: number; title: string }[] = [];
+    let onScreen: { price: number; title: string }[] = [];
     for (const message of turns) {
       cards = [];
       for await (const frame of runPipeline({ shopId: shop.id, sessionId, conversationId, message, isTest: true })) {
-        if (frame.type === "cards") cards = frame.cards;
+        if (frame.type === "cards") {
+          cards = frame.cards;
+          if (message !== turns[0]) onScreen = frame.cards;
+        }
         if (frame.type === "done") {
           outcome = frame.outcome;
           conversationId = frame.conversationId;
         }
       }
     }
+    // Agent: a product already carded by "under $100" is not carded again for
+    // "the waterproof one?" (no repeat cards) — the card on screen counts.
+    if (AGENT === "tools" && cards.length === 0) cards = onScreen;
     const overBudget = cards.filter((c) => c.price > 100);
     const hasWaterproof = cards.some((c) => /waterproof|rain/i.test(c.title));
-    if (["buy", "buy_browse"].includes(outcome) && overBudget.length === 0 && hasWaterproof) {
+    if ((buyOk(outcome, cards.length) || (AGENT === "tools" && cards.length > 0)) && overBudget.length === 0 && hasWaterproof) {
       console.log(`PASS  3-turn "the waterproof one?" → ${outcome} (${cards.map((c) => c.title).join(" | ")})`);
     } else {
       failures++;
@@ -211,12 +394,66 @@ async function main() {
   // verified structurally by its outcome being "curated".
 
   console.log(failures === 0 ? "\nGOLDEN SET PASS ✔" : `\nGOLDEN SET FAIL ✖ (${failures})`);
-  process.exit(failures === 0 ? 0 : 1);
+  return failures;
 }
 
-main()
+/**
+ * The golden set measures the pipeline against the SEED catalogue. But
+ * scripts/qa/seed-curated.ts publishes its own fixtures onto the very same dev
+ * shop, and some of them legitimately intercept golden inputs — "do you ship
+ * internationally" scores 0.72 against "do you ship to Canada?", the borderline
+ * confirm call accepts it, and the turn is served from curated instead of
+ * reaching the RAG question path. That is the product working correctly, but it
+ * silently changes what this eval measures, which makes a red result impossible
+ * to read. So the fixtures are unpublished for the duration and restored after —
+ * never deleted, and restored even when the run throws.
+ */
+async function withSeedCatalogueOnly<T>(work: () => Promise<T>): Promise<T> {
+  // Fixtures are identified by question on the dev shop (QA-T3), never by a
+  // marker in shopper-visible talking points.
+  const devShop = await dbCheck.shop.findUnique({ where: { domain: DEV_SHOP_DOMAIN }, select: { id: true } });
+  const parked = devShop
+    ? await dbCheck.curatedAnswer.findMany({
+        where: { shopId: devShop.id, question: { in: PUBLISHED_FIXTURE_QUESTIONS }, status: "published" },
+        select: { id: true },
+      })
+    : [];
+  const ids = parked.map((row) => row.id);
+  if (ids.length > 0) {
+    await dbCheck.curatedAnswer.updateMany({ where: { id: { in: ids } }, data: { status: "draft" } });
+    console.log(`(parked ${ids.length} QA fixture curated answers so the seed catalogue is what gets measured)\n`);
+  }
+  try {
+    return await work();
+  } finally {
+    if (ids.length > 0) {
+      await dbCheck.curatedAnswer.updateMany({ where: { id: { in: ids } }, data: { status: "published" } });
+    }
+  }
+}
+
+// Checked before anything is parked, so an early abort can never leave the
+// fixtures unpublished.
+if (!process.env.OPENAI_API_KEY) {
+  console.log("NOTE: no OPENAI_API_KEY — structural eval will fail on router calls. Aborting.");
+  process.exit(2);
+}
+
+withSeedCatalogueOnly(main)
+  .then((failures) => {
+    process.exitCode = failures === 0 ? 0 : 1;
+  })
   .catch((error) => {
     console.error("eval crashed:", error);
-    process.exit(1);
+    process.exitCode = 1;
   })
-  .finally(() => dbCheck.$disconnect());
+  .finally(async () => {
+    await dbCheck.$disconnect();
+    // The pipeline runs on the app/db.server SINGLETON — a SECOND client whose
+    // pool keeps the event loop alive. Disconnecting only `dbCheck` left the
+    // process hanging forever AFTER printing its results, with the output still
+    // trapped in npm’s pipe buffer, so a finished run looked like a stuck one
+    // (2026-09-10: two completed runs wedged, one of them for 80 minutes).
+    const appDb = (await import("../app/db.server")).default;
+    await appDb.$disconnect().catch(() => undefined);
+  });

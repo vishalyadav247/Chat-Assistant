@@ -211,7 +211,7 @@ export function ChatboxAppearance(props: {
 
       <s-section heading="Launcher">
         <s-stack gap="base">
-        {/* Compact labeled rows (user request 2026-08-12): segmented style
+        {/* Compact labeled rows: segmented style
             pills + inline controls — the live preview shows the result. */}
         <LauncherRow label="Style">
           <TabPills
@@ -226,7 +226,7 @@ export function ChatboxAppearance(props: {
           />
         </LauncherRow>
 
-        {/* Rows stay visible for every style (user request 2026-08-13): the
+        {/* Rows stay visible for every style: the
             style pills only change the storefront rendering, not the form. */}
         <LauncherRow label="Label">
           <div style={{ maxWidth: 280 }}>
@@ -254,7 +254,7 @@ export function ChatboxAppearance(props: {
         </LauncherRow>
 
         <LauncherRow label="Background">
-          {/* Toggle (user request 2026-08-13): brand color by default; turning
+          {/* Toggle: brand color by default; turning
               it off enables the picker. Empty bgColor = brand (effective value
               the widget reads); customBgColor remembers the merchant's pick so
               toggling brand on and off again restores it instead of resetting

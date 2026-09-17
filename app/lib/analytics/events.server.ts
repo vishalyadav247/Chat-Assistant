@@ -12,6 +12,9 @@ export type AnalyticsEventType =
   | "catalog_synced"
   | "collection_synced"
   | "discount_synced"
+  // 22 pages & blogs
+  | "pages_synced"
+  | "articles_synced"
   // 03 pipeline (one per turn, payload carries intent/outcome/sourceLayer)
   | "turn_completed"
   | "turn_blocked"
@@ -19,6 +22,10 @@ export type AnalyticsEventType =
   | "turn_fell_back"
   | "curated_served"
   | "recommendation_shown"
+  // Detail lane (spec 03 delta): a follow-up about a product already shown was
+  // answered about that product instead of triggering a fresh recommendation.
+  // `resolved: false` means the model could not tell which product was meant.
+  | "detail_answered"
   | "llm_error"
   | "moderation_error"
   | "embedding_skipped"

@@ -8,7 +8,7 @@ import { PLANS, type PlanId } from "./plans.server";
 // means the trial restarts on any of these:
 //
 //   • uninstall → reinstall           • Basic → Pro (or Pro → Basic)
-//   • downgrade to Free → resubscribe • monthly → yearly
+//   • downgrade to Free → resubscribe • repeated plan switches
 //
 // i.e. a merchant can stay on a paid tier forever without ever being charged.
 // Shopify DOES protect against this, but only for Shopify App Pricing (managed
@@ -62,7 +62,7 @@ export interface TrialEntitlement {
   deadlineAt: Date | null;
 }
 
-/** Headline trial length for a plan, honouring platform overrides. */
+/** Headline trial length for a plan, honouring admin overrides. */
 export function trialAllowanceFor(plan: PlanId): number {
   return PLANS[plan]?.trialDays ?? 0;
 }
@@ -92,7 +92,7 @@ export function trialEntitlement(
     return { grantDays: allowanceDays, reset: true, deadlineAt: null };
   }
 
-  // The operator can raise trialDays at /platform/plans after a shop has
+  // The operator can raise trialDays at /admin/plans after a shop has
   // started. Extra days extend the ORIGINAL start, so days already consumed are
   // subtracted from the new total (Shopify's rule) instead of granting a
   // second, full-length trial. Lowering the allowance never shortens a trial

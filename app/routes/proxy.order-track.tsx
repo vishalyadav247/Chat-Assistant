@@ -3,6 +3,7 @@ import { z } from "zod";
 import { authenticate } from "../shopify.server";
 import { resolveShopId } from "../lib/tenancy.server";
 import { loadShopSettings } from "../lib/settings/save.server";
+import { getShopConfig } from "../lib/config/shop-config.server";
 import { get17TrackShipment, type ShipmentInfo } from "../lib/tracking/seventeen-track.server";
 import { logError } from "../lib/log.server";
 
@@ -150,6 +151,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   const shopId = await resolveShopId(session.shop);
+  // Server-side gate: the widget hides tracking when it is off or the plan lacks
+  // order_tracking, but this endpoint is public — refuse it here too. The shop
+  // config's widget.orderTracking is already the effective (switch AND plan) value.
+  if (!(await getShopConfig(shopId)).widget.orderTracking) {
+    return Response.json({ ok: false, error: "unavailable" }, { status: 403, ...noStore });
+  }
   const settings = await loadShopSettings(shopId);
   const tracking = settings.orderTracking;
   const integrated = tracking.mode === "integration" && Boolean(tracking.apiKey);
@@ -170,9 +177,29 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const { orderNumber, method, contact } = parsed.data;
 
+  /** Protected customer data denial is an HTTP 200 with the reason in `errors`
+   *  ("This app is not approved to access the Order object"), and unapproved
+   *  fields arrive redacted to null. Swallowing that read as "no orders", which
+   *  the widget renders as "check your order number and email", tells the
+   *  shopper THEY got it wrong and leaves the merchant no signal at all — so it
+   *  is surfaced as unavailable and logged with the reason. */
+  class OrderLookupUnavailable extends Error {}
+
   const fetchOrders = async (search: string): Promise<OrderNode[]> => {
     const response = await admin.graphql(ORDER_QUERY, { variables: { search } });
-    const body = (await response.json()) as { data?: { orders?: { nodes: OrderNode[] } } };
+    const body = (await response.json()) as {
+      data?: { orders?: { nodes: OrderNode[] } };
+      errors?: Array<{ message?: string }>;
+    };
+    if (body.errors?.length) {
+      const reason = body.errors.map((e) => e.message).filter(Boolean).join("; ");
+      logError("order_track_api_error", new Error(reason || "graphql error"), {
+        shopDomain: session.shop,
+        // No shopper input here — the search term carries their email/phone.
+        protectedData: /not approved to access/i.test(reason),
+      });
+      throw new OrderLookupUnavailable(reason);
+    }
     return body.data?.orders?.nodes ?? [];
   };
 

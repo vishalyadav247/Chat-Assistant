@@ -11,7 +11,7 @@ import {
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
-import { enqueue } from "../lib/jobs/queue.server";
+import { enqueueSync } from "../lib/jobs/queue.server";
 import { JOBS } from "../lib/jobs/handlers.server";
 import { invalidateShopConfig } from "../lib/config/shop-config.server";
 import {
@@ -26,10 +26,10 @@ import { DashboardOverview } from "../components/DashboardOverview";
 import { DashboardChecklist } from "../components/DashboardChecklist";
 import { DashboardLiveFeed } from "../components/DashboardLiveFeed";
 import { StripBanner } from "../components/ui/StripBanner";
-import { SPACE } from "../components/ui/tokens";
+import { allowedRanges } from "../lib/analytics/reports.server";
 import { currentUsage } from "../lib/billing/usage.server";
 import { getQuota, nextPlanNameForQuota } from "../lib/billing/plans.server";
-import { requireShopAccess } from "../lib/access.server";
+import { can, requireShopAccess } from "../lib/access.server";
 import { routeError } from "../lib/ui/route-error";
 import { logError } from "../lib/log.server";
 import { APP_NAME } from "./app";
@@ -121,16 +121,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const [metrics, checklist, feed, pendingQuestions, atcThisMonth, usage] = await Promise.all([
-    dashboardMetrics(shopId, range),
-    setupChecklist(shopId, shopDomain),
-    liveFeed(shopId),
-    db.unresolvedQuestion.count({ where: { shopId, status: "pending" } }),
-    db.analyticsEvent.count({
-      where: { shopId, type: "added_to_cart", occurredAt: { gte: monthAgo } },
-    }),
-    currentUsage(shopId),
-  ]);
+  const [metrics, checklist, ranges, feed, pendingQuestions, atcThisMonth, usage] =
+    await Promise.all([
+      dashboardMetrics(shopId, range),
+      setupChecklist(shopId, shopDomain),
+      allowedRanges(shopId),
+      liveFeed(shopId),
+      db.unresolvedQuestion.count({ where: { shopId, status: "pending" } }),
+      db.analyticsEvent.count({
+        where: { shopId, type: "added_to_cart", occurredAt: { gte: monthAgo } },
+      }),
+      currentUsage(shopId),
+    ]);
 
   // Conversation quota for the near-cap banner. In "open" enforcement mode
   // getQuota returns effectively-unlimited, so the banner stays hidden until
@@ -154,21 +156,58 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     // Tier that raises the monthly conversation cap — named in the near-cap
     // banner so "upgrade" points somewhere specific.
     quotaNextPlan: nextPlanNameForQuota(shop?.plan ?? "free", "conversations"),
+    // Same treatment as /app/analytics: ranges past the plan's history window
+    // are shown DISABLED with the tier that unlocks them, because clampRange
+    // narrows them silently and a shorter window looks like a quiet quarter.
+    allowedRanges: ranges,
+    rangeNextPlan: nextPlanNameForQuota(shop?.plan ?? "free", "analytics_range_days"),
   };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { shopDomain } = await requireShopAccess(request, { permission: "dashboard" }); // shop row guaranteed by access seam
+  const access = await requireShopAccess(request, { permission: "dashboard" }); // shop row guaranteed by access seam
+  const { shopDomain } = access;
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
 
-  if (intent === "sync-catalog") {
-    // Same jobs the install bootstrap enqueues (spec 02) — workers do the rest.
-    await enqueue(JOBS.catalogSync, { shopDomain: shopDomain });
-    await enqueue(JOBS.collectionSync, { shopDomain: shopDomain });
-    return { ok: true, intent };
+  if (intent === "sync-all") {
+    // Same permission as the Training tab's Sync buttons (QA-S2) — the dashboard
+    // must not be a side door to work its own page would refuse.
+    if (!can(access.role, access.surface, "ai_agent")) {
+      return { ok: false, intent, startedAt: null };
+    }
+    // Everything step 1 counts (spec 13): catalogue + store content. Workers do
+    // the rest. startedAt is SERVER time so the "Syncing…" rows compare it with
+    // server-written sync timestamps, never with a skewed browser clock.
+    const startedAt = new Date().toISOString();
+    let queued: boolean[];
+    try {
+      // Throttled per store + type (QA-U1): a repeat click inside the window
+      // queues nothing new, and a queue failure is an error toast, not a 500.
+      queued = await Promise.all(
+        [JOBS.catalogSync, JOBS.collectionSync, JOBS.discountSync, JOBS.pageSync, JOBS.articleSync].map(
+          (job) => enqueueSync(job, shopDomain),
+        ),
+      );
+    } catch (error) {
+      logError("dashboard_sync_all_error", error);
+      return { ok: false, intent, startedAt: null };
+    }
+    // Nothing queued ⇒ every sync is already queued from a click moments ago;
+    // no startedAt, so the step-1 rows do not wait for a sync that is not new.
+    return { ok: true, intent, startedAt: queued.some(Boolean) ? startedAt : null };
   }
-  return { ok: false, intent };
+
+  if (intent === "enable-ai") {
+    // Same write as the AI Agent page's toggle, behind the same permission.
+    if (!can(access.role, access.surface, "ai_agent")) {
+      return { ok: false, intent, startedAt: null };
+    }
+    await db.shop.update({ where: { id: access.shopId }, data: { aiEnabled: true } });
+    invalidateShopConfig(access.shopId);
+    return { ok: true, intent, startedAt: null };
+  }
+  return { ok: false, intent, startedAt: null };
 };
 
 export default function DashboardPage() {
@@ -180,6 +219,19 @@ export default function DashboardPage() {
   const syncFetcher = useFetcher<typeof action>();
   const processedSync = useRef<unknown>(null);
 
+  // Overview "Reload" shows its busy state only for a reload the MERCHANT
+  // clicked. It used to read `revalidator.state` directly, which the silent 5s
+  // poll below also drives — so the button flickered to "Reloading…" (and went
+  // disabled) every few seconds on its own.
+  const [manualReload, setManualReload] = useState(false);
+  useEffect(() => {
+    if (manualReload && revalidator.state === "idle") setManualReload(false);
+  }, [manualReload, revalidator.state]);
+  const reload = () => {
+    setManualReload(true);
+    revalidator.revalidate();
+  };
+
   // Live KPI + feed poll (spec 13): every ~5s while the tab is visible.
   useEffect(() => {
     const interval = setInterval(() => {
@@ -190,80 +242,92 @@ export default function DashboardPage() {
     return () => clearInterval(interval);
   }, [revalidator]);
 
+  // Server time of the last sync-all queued on this visit — the setup card's
+  // training detail shows each source as "Syncing…" until its own sync lands.
+  const [syncStartedAt, setSyncStartedAt] = useState<string | null>(null);
+
   useEffect(() => {
     if (syncFetcher.state !== "idle" || !syncFetcher.data) return;
     if (processedSync.current === syncFetcher.data) return;
     processedSync.current = syncFetcher.data;
     if (syncFetcher.data.ok) {
-      shopify.toast.show("Catalog sync started — products and collections are updating");
+      if (syncFetcher.data.startedAt) {
+        setSyncStartedAt(syncFetcher.data.startedAt);
+        shopify.toast.show("Sync started — products, collections, pages, blogs and discounts are updating");
+      } else {
+        // Throttled (QA-U1): the syncs queued moments ago are still the current ones.
+        shopify.toast.show("A sync is already running — it will finish shortly");
+      }
+      revalidator.revalidate();
     } else {
       shopify.toast.show("Couldn't start the sync", { isError: true });
     }
-  }, [syncFetcher.state, syncFetcher.data, shopify]);
+  }, [syncFetcher.state, syncFetcher.data, shopify, revalidator]);
 
   const syncing = syncFetcher.state !== "idle";
+  const syncAll = () => syncFetcher.submit({ intent: "sync-all" }, { method: "post" });
 
-  // Status banner (max one, by priority): AI off → near quota → setup left.
-  const [setupBannerDismissed, setSetupBannerDismissed] = useState(
-    () =>
-      typeof window !== "undefined" &&
-      window.localStorage.getItem("cc-dashboard-setup-banner") === "1",
-  );
+  // "Turn it on" switches the AI on right here (spec 13 revision).
+  const aiFetcher = useFetcher<typeof action>();
+  const processedAi = useRef<unknown>(null);
+  useEffect(() => {
+    if (aiFetcher.state !== "idle" || !aiFetcher.data) return;
+    if (processedAi.current === aiFetcher.data) return;
+    processedAi.current = aiFetcher.data;
+    if (aiFetcher.data.ok) shopify.toast.show("AI assistant turned on");
+    else shopify.toast.show("You don't have permission to turn the AI on", { isError: true });
+  }, [aiFetcher.state, aiFetcher.data, shopify]);
+  const enablingAi = aiFetcher.state !== "idle";
+
+  // Status banner (max one, by priority): AI off → near quota. The old
+  // "N setup steps left" banner is gone — the setup card below says the same
+  // thing with a percentage.
   const nearQuota = data.quota !== null && data.quota > 0 && data.usage >= data.quota * 0.8;
-  const setupLeft = data.checklist.total - data.checklist.completed;
 
-  const banner = !data.aiEnabled ? (
-    <StripBanner
-      tone="warning"
-      icon="alert-triangle"
-      title="Your AI assistant is turned off"
-      action={{ label: "Turn it on", onClick: () => navigate("/app/ai-agent") }}
-    >
-      Shoppers can still leave messages, but the assistant isn&apos;t answering questions or
-      recommending products. Turn it back on from the AI Agent page.
-    </StripBanner>
-  ) : nearQuota ? (
-    <StripBanner
-      tone="warning"
-      icon="chart-line"
-      title={`You've used ${data.usage} of ${data.quota} conversations this month`}
-      action={{
-        label: data.quotaNextPlan ? `Upgrade to ${data.quotaNextPlan}` : "View plans",
-        onClick: () => navigate("/app/plan-usage"),
-      }}
-    >
-      When the limit is reached the assistant pauses until the next billing period — upgrade to
-      keep it answering.
-    </StripBanner>
-  ) : setupLeft > 0 && !setupBannerDismissed ? (
-    <StripBanner
-      tone="info"
-      icon="info"
-      title={`${setupLeft} setup step${setupLeft === 1 ? "" : "s"} left to unlock the best results`}
-      onDismiss={() => {
-        setSetupBannerDismissed(true);
-        window.localStorage.setItem("cc-dashboard-setup-banner", "1");
-      }}
-    >
-      Finish the setup checklist below — stores that complete every step see noticeably better
-      answer quality and more assisted sales.
-    </StripBanner>
-  ) : null;
+  const banner =
+    !data.aiEnabled && !enablingAi ? (
+      <StripBanner
+        tone="warning"
+        icon="alert-triangle"
+        title="Your AI assistant is turned off"
+        action={{
+          label: "Turn it on",
+          onClick: () => aiFetcher.submit({ intent: "enable-ai" }, { method: "post" }),
+        }}
+      >
+        {/* Describes human-support mode as the pipeline runs it (index.server.ts:
+            AI off ⇒ the shopper gets the waiting message, the conversation goes to
+            the Inbox and the team is notified). The old copy said shoppers could
+            only "leave messages", which stopped being true with human mode. */}
+        Shoppers get your waiting message and their chats go to the Inbox for your team to
+        answer. Turn the AI on to answer questions and recommend products automatically.
+      </StripBanner>
+    ) : nearQuota ? (
+      <StripBanner
+        tone="warning"
+        icon="chart-line"
+        title={`You've used ${data.usage} of ${data.quota} conversations this month`}
+        action={{
+          label: data.quotaNextPlan ? `Upgrade to ${data.quotaNextPlan}` : "View plans",
+          onClick: () => navigate("/app/plan-usage"),
+        }}
+      >
+        When the limit is reached the assistant pauses until the next billing period — upgrade to
+        keep it answering.
+      </StripBanner>
+    ) : null;
 
   return (
     <s-page heading={APP_NAME}>
+      {/* One column (spec 13 revision): hero, banner, overview, setup, live feed. */}
       <s-stack gap="base">
         <DashboardHero
           greeting={data.greeting}
           shopName={data.shopName}
           pendingQuestions={data.pendingQuestions}
           atcThisMonth={data.atcThisMonth}
-          aiEnabled={data.aiEnabled}
-          syncing={syncing}
+          aiEnabled={data.aiEnabled || enablingAi}
           onAnswerQuestions={() => navigate("/app/ai-agent/review")}
-          onSyncCatalog={() =>
-            syncFetcher.submit({ intent: "sync-catalog" }, { method: "post" })
-          }
           onPreviewWidget={() =>
             window.open(`https://${data.shopDomain}`, "_blank", "noopener,noreferrer")
           }
@@ -273,28 +337,28 @@ export default function DashboardPage() {
 
         <DashboardOverview
           metrics={data.metrics}
-          range={data.range}
-          reloading={revalidator.state !== "idle"}
+          range={data.metrics.range}
+          allowedRanges={data.allowedRanges}
+          rangeNextPlan={data.rangeNextPlan}
+          reloading={manualReload}
           onRangeChange={(range) =>
             setSearchParams((params) => {
               params.set("range", range);
               return params;
             })
           }
-          onReload={() => revalidator.revalidate()}
+          onReload={reload}
         />
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-            gap: SPACE.base,
-            alignItems: "start",
-          }}
-        >
-          <DashboardChecklist checklist={data.checklist} onNavigate={(href) => navigate(href)} />
-          <DashboardLiveFeed items={data.feed} onOpen={(id) => navigate(`/app/inbox?c=${id}`)} />
-        </div>
+        <DashboardChecklist
+          checklist={data.checklist}
+          syncing={syncing}
+          syncStartedAt={syncStartedAt}
+          onSync={syncAll}
+          onNavigate={(href) => navigate(href)}
+        />
+
+        <DashboardLiveFeed items={data.feed} onOpen={(id) => navigate(`/app/inbox?c=${id}`)} />
       </s-stack>
     </s-page>
   );

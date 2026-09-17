@@ -1,5 +1,5 @@
 /* QA: sessions, authentication, authorization and cookies across the three
- * surfaces (Shopify admin, /web team app, /platform operator console).
+ * surfaces (Shopify admin, /web team app, /admin operator console).
  *
  *   Run: npx tsx scripts/qa/auth-sessions.test.ts
  *   Needs: the dev server on http://localhost:3000 (BASE_URL to override) and
@@ -136,13 +136,14 @@ async function main(): Promise<void> {
     peekInvite,
   } = await import("../../app/lib/team/team.server");
   const {
-    createPlatformSession,
-    readPlatformSession,
+    createAdminSession,
+    readAdminSession,
     revokeAdminSessions,
-    purgeExpiredPlatformSessions,
-    platformSafeNext,
-    destroyPlatformSession,
-  } = await import("../../app/lib/platform/platform-auth.server");
+    purgeExpiredAdminSessions,
+    adminSafeNext,
+    destroyAdminSession,
+    adminIdentity,
+  } = await import("../../app/lib/admin/admin-auth.server");
 
   try {
     const res = await fetch(`${BASE}/web/login`, { headers: { "user-agent": UA } });
@@ -191,15 +192,16 @@ async function main(): Promise<void> {
     return m;
   };
 
-  // A throwaway operator account. NEVER reuse the real one: revokeAdminSessions
-  // is global-per-admin and would sign the actual operator out everywhere.
-  const qaPlatformAdmin = await db.platformAdmin.create({
-    data: {
-      email: `${TAG}-operator-${stamp}@example.invalid`,
-      name: "QA operator",
-      passwordHash: await hashPassword(secret),
-    },
-  });
+  // Since 2026-09-03 there is exactly ONE operator identity — the ADMIN_EMAIL /
+  // ADMIN_PASSWORD pair in .env — and readAdminSession rejects any session that
+  // points elsewhere, so a throwaway account can no longer stand in for it.
+  // Sessions that already exist belong to somebody's open browser: they are
+  // recorded here and left alone by the cleanup below.
+  const qaAdminUser = await adminIdentity();
+  if (!qaAdminUser) throw new Error("set ADMIN_EMAIL and ADMIN_PASSWORD in .env before running this suite");
+  const preexistingAdminSessions = (await db.adminSession.findMany({ select: { id: true } })).map((s) => s.id);
+  const dropTestAdminSessions = () =>
+    db.adminSession.deleteMany({ where: { id: { notIn: preexistingAdminSessions } } });
 
   const aAdmin = await mk(shopA.id, "admin", "a-admin", true);
   const aAgent = await mk(shopA.id, "agent", "a-agent", false);
@@ -415,81 +417,92 @@ async function main(): Promise<void> {
       ok("team_sessions purge is wired into the nightly retention job", readFileSync(join(process.cwd(), "app", "lib", "jobs", "handlers.server.ts"), "utf-8").includes("purgeExpiredTokens"));
 
       const rawGhost = randomBytes(32).toString("base64url");
-      const gRow = await db.platformSession.create({
-        data: { tokenHash: createHash("sha256").update(rawGhost).digest("hex"), adminId: qaPlatformAdmin.id, expiresAt: new Date(Date.now() - DAY), userAgent: TAG },
+      const gRow = await db.adminSession.create({
+        data: { tokenHash: createHash("sha256").update(rawGhost).digest("hex"), adminId: qaAdminUser.id, expiresAt: new Date(Date.now() - DAY), userAgent: TAG },
       });
-      const n = await purgeExpiredPlatformSessions();
-      ok("purgeExpiredPlatformSessions() removes expired platform_sessions", n >= 1 && (await db.platformSession.count({ where: { id: gRow.id } })) === 0, `${n} row(s)`);
+      const n = await purgeExpiredAdminSessions();
+      ok("purgeExpiredAdminSessions() removes expired platform_sessions", n >= 1 && (await db.adminSession.count({ where: { id: gRow.id } })) === 0, `${n} row(s)`);
       const handlers = readFileSync(join(process.cwd(), "app", "lib", "jobs", "handlers.server.ts"), "utf-8");
       // Either the helper above, or the equivalent inline sweep — both prune.
       ok(
         "platform_sessions purge is wired into the nightly retention job",
-        handlers.includes("purgeExpiredPlatformSessions") ||
-          /platformSession[\s\S]{0,120}deleteMany\(\{\s*where:\s*\{\s*expiresAt:\s*\{\s*lt:/.test(handlers),
+        handlers.includes("purgeExpiredAdminSessions") ||
+          /adminSession[\s\S]{0,120}deleteMany\(\{\s*where:\s*\{\s*expiresAt:\s*\{\s*lt:/.test(handlers),
         "add it next to purgeExpiredTokens in the retentionPurge worker",
       );
       ok("team_sessions has no expired backlog right now", (await db.teamSession.count({ where: { expiresAt: { lt: new Date() } } })) === 0);
-      ok("platform_sessions has no expired backlog right now", (await db.platformSession.count({ where: { expiresAt: { lt: new Date() } } })) === 0);
+      ok("platform_sessions has no expired backlog right now", (await db.adminSession.count({ where: { expiresAt: { lt: new Date() } } })) === 0);
     }
 
-    // ══ 6. PlatformSession lifecycle ══════════════════════════════════════════
-    section("6. PlatformSession — 7-day sliding TTL, revocation");
-    const platformAdmin = qaPlatformAdmin;
+    // ══ 6. AdminSession lifecycle ══════════════════════════════════════════
+    section("6. AdminSession — 7-day sliding TTL, revocation");
+    const adminUser = qaAdminUser;
     {
-      const headers = await createPlatformSession(req(), platformAdmin.id);
+      const headers = await createAdminSession(req(), adminUser.id);
       const setCookie = headers.get("set-cookie") ?? "";
       const raw = decodeURIComponent(setCookie.split(";")[0].split("=").slice(1).join("="));
-      const row = await db.platformSession.findUnique({ where: { tokenHash: createHash("sha256").update(raw).digest("hex") } });
+      const row = await db.adminSession.findUnique({ where: { tokenHash: createHash("sha256").update(raw).digest("hex") } });
       const days = row ? Math.round((row.expiresAt.getTime() - Date.now()) / DAY) : -1;
-      ok("platform TTL is 7 days", days === 7, `${days}d`);
-      ok("readPlatformSession resolves the admin", (await readPlatformSession(req(`cc_platform=${raw}`)))?.admin.id === platformAdmin.id);
+      ok("admin TTL is 7 days", days === 7, `${days}d`);
+      ok("readAdminSession resolves the admin", (await readAdminSession(req(`cc_admin=${raw}`)))?.admin.id === adminUser.id);
 
       const before = row!.expiresAt.getTime();
-      await readPlatformSession(req(`cc_platform=${raw}`));
+      await readAdminSession(req(`cc_admin=${raw}`));
       await new Promise((r) => setTimeout(r, 300));
-      ok("platform renewal is throttled to once per day", (await db.platformSession.findUnique({ where: { id: row!.id } }))!.expiresAt.getTime() === before);
+      ok("admin renewal is throttled to once per day", (await db.adminSession.findUnique({ where: { id: row!.id } }))!.expiresAt.getTime() === before);
 
-      await db.platformSession.update({ where: { id: row!.id }, data: { lastSeenAt: new Date(Date.now() - 2 * DAY), expiresAt: new Date(Date.now() + 2 * DAY) } });
-      await readPlatformSession(req(`cc_platform=${raw}`));
+      await db.adminSession.update({ where: { id: row!.id }, data: { lastSeenAt: new Date(Date.now() - 2 * DAY), expiresAt: new Date(Date.now() + 2 * DAY) } });
+      await readAdminSession(req(`cc_admin=${raw}`));
       ok(
-        "a platform session older than a day slides back to 7 days",
+        "a admin session older than a day slides back to 7 days",
         await eventually(async () => {
-          const r = await db.platformSession.findUnique({ where: { id: row!.id } });
+          const r = await db.adminSession.findUnique({ where: { id: row!.id } });
           return !!r && r.expiresAt.getTime() - Date.now() > 6 * DAY;
         }),
       );
 
-      await db.platformSession.update({ where: { id: row!.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
-      ok("an expired platform session is rejected", (await readPlatformSession(req(`cc_platform=${raw}`))) === null);
-      ok("an expired platform session row is deleted on read", (await db.platformSession.findUnique({ where: { id: row!.id } })) === null);
-      ok("an unknown platform token is rejected", (await readPlatformSession(req("cc_platform=nope"))) === null);
-      ok("an over-long platform token is rejected", (await readPlatformSession(req(`cc_platform=${"x".repeat(500)}`))) === null);
+      await db.adminSession.update({ where: { id: row!.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+      ok("an expired admin session is rejected", (await readAdminSession(req(`cc_admin=${raw}`))) === null);
+      ok("an expired admin session row is deleted on read", (await db.adminSession.findUnique({ where: { id: row!.id } })) === null);
+      ok("an unknown admin token is rejected", (await readAdminSession(req("cc_admin=nope"))) === null);
+      ok("an over-long admin token is rejected", (await readAdminSession(req(`cc_admin=${"x".repeat(500)}`))) === null);
 
-      // revokeAdminSessions — what /platform/admins reset-password relies on.
-      const h1 = await createPlatformSession(req(), platformAdmin.id);
-      const h2 = await createPlatformSession(req(), platformAdmin.id);
+      // revokeAdminSessions — what /admin/access "sign out other sessions" uses.
+      const h1 = await createAdminSession(req(), adminUser.id);
+      const h2 = await createAdminSession(req(), adminUser.id);
       const t1 = decodeURIComponent((h1.get("set-cookie") ?? "").split(";")[0].split("=").slice(1).join("="));
       const t2 = decodeURIComponent((h2.get("set-cookie") ?? "").split(";")[0].split("=").slice(1).join("="));
-      const keepId = (await readPlatformSession(req(`cc_platform=${t1}`)))!.sessionId;
-      await revokeAdminSessions(platformAdmin.id, keepId);
-      ok("revokeAdminSessions(except) keeps the caller", (await readPlatformSession(req(`cc_platform=${t1}`))) !== null);
-      ok("revokeAdminSessions(except) kills the rest", (await readPlatformSession(req(`cc_platform=${t2}`))) === null);
-      const routeSrc = readFileSync(join(process.cwd(), "app", "routes", "platform.admins.tsx"), "utf-8");
+      const keepId = (await readAdminSession(req(`cc_admin=${t1}`)))!.sessionId;
+      await revokeAdminSessions(adminUser.id, keepId);
+      ok("revokeAdminSessions(except) keeps the caller", (await readAdminSession(req(`cc_admin=${t1}`))) !== null);
+      ok("revokeAdminSessions(except) kills the rest", (await readAdminSession(req(`cc_admin=${t2}`))) === null);
+      const routeSrc = readFileSync(join(process.cwd(), "app", "routes", "admin.access.tsx"), "utf-8");
       ok(
-        "the password-change action revokes every OTHER session, keeping the caller",
-        /revokeAdminSessions\(\s*me\.id\s*,\s*session\.sessionId\s*\)/.test(routeSrc),
+        "/admin/access revokes every OTHER session, keeping the caller",
+        /revokeAdminSessions\(\s*session\.admin\.id\s*,\s*session\.sessionId\s*\)/.test(routeSrc),
+      );
+      // The credentials are ADMIN_EMAIL / ADMIN_PASSWORD in .env, and a change
+      // there must invalidate every session issued under the old pair.
+      const authSrc = readFileSync(join(process.cwd(), "app", "lib", "admin", "admin-auth.server.ts"), "utf-8");
+      ok(
+        "sign-in compares against the environment, never a stored hash",
+        /safeEqual\(password,\s*creds\.password\)/.test(authSrc) && !/verifyPassword/.test(authSrc),
       );
       ok(
-        "the password-change action re-checks the current password first",
-        /intent === "password"[\s\S]{0,600}verifyPassword[\s\S]{0,400}revokeAdminSessions/.test(routeSrc),
+        "a changed ADMIN_EMAIL / ADMIN_PASSWORD deletes every existing session",
+        /changed[\s\S]{0,400}adminSession\.deleteMany\(\{\}\)/.test(authSrc),
+      );
+      ok(
+        "readAdminSession checks the environment BEFORE trusting the cookie",
+        /readAdminSession[\s\S]{0,900}await adminIdentity\(\)[\s\S]{0,400}adminSession\.findUnique/.test(authSrc),
       );
       ok(
         "removing an admin cascades their sessions (schema onDelete: Cascade)",
-        /model PlatformSession[\s\S]{0,600}onDelete:\s*Cascade/.test(readFileSync(join(process.cwd(), "prisma", "schema.prisma"), "utf-8")),
+        /model AdminSession[\s\S]{0,600}onDelete:\s*Cascade/.test(readFileSync(join(process.cwd(), "prisma", "schema.prisma"), "utf-8")),
       );
-      await destroyPlatformSession(req(`cc_platform=${t1}`));
-      ok("destroyPlatformSession removes the row", (await readPlatformSession(req(`cc_platform=${t1}`))) === null);
-      await db.platformSession.deleteMany({ where: { adminId: qaPlatformAdmin.id } });
+      await destroyAdminSession(req(`cc_admin=${t1}`));
+      ok("destroyAdminSession removes the row", (await readAdminSession(req(`cc_admin=${t1}`))) === null);
+      await dropTestAdminSessions();
     }
 
     // ══ 7. Shopify session storage ════════════════════════════════════════════
@@ -632,13 +645,13 @@ async function main(): Promise<void> {
       );
 
       // …and every other cookie-mutating web action is guarded too.
-      const srcs = ["web.login.tsx", "web.invite.$token.tsx", "web.reset.$token.tsx", "web.logout.tsx", "web.forgot.tsx", "platform.login.tsx", "platform.logout.tsx"];
+      const srcs = ["web.login.tsx", "web.invite.$token.tsx", "web.reset.$token.tsx", "web.logout.tsx", "web.forgot.tsx", "admin.login.tsx", "admin.logout.tsx"];
       for (const f of srcs) {
         ok(`${f} calls sameOrigin()`, readFileSync(join(process.cwd(), "app", "routes", f), "utf-8").includes("sameOrigin("));
       }
     }
     {
-      // safeNext / platformSafeNext open-redirect protection.
+      // safeNext / adminSafeNext open-redirect protection.
       const evil = [
         "https://evil.com",
         "http://evil.com",
@@ -657,9 +670,9 @@ async function main(): Promise<void> {
       }
       ok("safeNext keeps a real in-app path", safeNext("/app/settings?tab=team") === "/app/settings?tab=team");
       for (const value of ["https://evil.com", "//evil.com", "/\\evil.com", "/app/inbox", "javascript:x"]) {
-        ok(`platformSafeNext rejects ${JSON.stringify(value)}`, platformSafeNext(value) === "/platform", platformSafeNext(value));
+        ok(`adminSafeNext rejects ${JSON.stringify(value)}`, adminSafeNext(value) === "/admin", adminSafeNext(value));
       }
-      ok("platformSafeNext keeps a real platform path", platformSafeNext("/platform/usage?range=90d") === "/platform/usage?range=90d");
+      ok("adminSafeNext keeps a real admin path", adminSafeNext("/admin/usage?range=90d") === "/admin/usage?range=90d");
     }
 
     // ══ 10. Cookies ═══════════════════════════════════════════════════════════
@@ -709,12 +722,12 @@ async function main(): Promise<void> {
         const cl = clearSessionCookieHeaders(req()).get("set-cookie") ?? "";
         ok("production: the clearing cookie is Secure too", /Secure/.test(cl), cl);
         {
-          const ph = await createPlatformSession(req(), platformAdmin.id);
+          const ph = await createAdminSession(req(), adminUser.id);
           const pc = ph.get("set-cookie") ?? "";
-          ok("production: cc_platform is Secure + HttpOnly + SameSite=Lax + Path=/", /Secure/.test(pc) && /HttpOnly/.test(pc) && /SameSite=Lax/.test(pc) && /Path=\//.test(pc), pc);
-          ok("production: cc_platform Max-Age is 7 days", /Max-Age=604800\b/.test(pc), pc);
+          ok("production: cc_admin is Secure + HttpOnly + SameSite=Lax + Path=/", /Secure/.test(pc) && /HttpOnly/.test(pc) && /SameSite=Lax/.test(pc) && /Path=\//.test(pc), pc);
+          ok("production: cc_admin Max-Age is 7 days", /Max-Age=604800\b/.test(pc), pc);
           const rawP = decodeURIComponent(pc.split(";")[0].split("=").slice(1).join("="));
-          await destroyPlatformSession(req(`cc_platform=${rawP}`));
+          await destroyAdminSession(req(`cc_admin=${rawP}`));
         }
       } finally {
         if (prev === undefined) delete process.env.NODE_ENV;
@@ -746,11 +759,11 @@ async function main(): Promise<void> {
       await db.teamSession.deleteMany({ where: { memberId: aAdmin.id } });
     }
     {
-      // The platform cookie must not be readable by script and must not leak
+      // The admin cookie must not be readable by script and must not leak
       // into merchant surfaces as an authorisation.
-      const platformSrc = readFileSync(join(process.cwd(), "app", "lib", "platform", "platform-auth.server.ts"), "utf-8");
-      ok("cc_platform is always HttpOnly (no conditional)", /"HttpOnly",/.test(platformSrc));
-      ok("cc_platform is always SameSite=Lax", /"SameSite=Lax",/.test(platformSrc));
+      const adminSrc = readFileSync(join(process.cwd(), "app", "lib", "admin", "admin-auth.server.ts"), "utf-8");
+      ok("cc_admin is always HttpOnly (no conditional)", /"HttpOnly",/.test(adminSrc));
+      ok("cc_admin is always SameSite=Lax", /"SameSite=Lax",/.test(adminSrc));
     }
 
     // ══ 11. Member removal ════════════════════════════════════════════════════
@@ -777,8 +790,9 @@ async function main(): Promise<void> {
     await db.pushSubscription.deleteMany({ where: { memberId: { in: memberIds } } }).catch(() => undefined);
     await db.teamMember.deleteMany({ where: { id: { in: memberIds } } }).catch(() => undefined);
     await db.teamMember.deleteMany({ where: { email: { startsWith: `${TAG}-` } } }).catch(() => undefined);
-    await db.platformSession.deleteMany({ where: { adminId: qaPlatformAdmin.id } }).catch(() => undefined);
-    await db.platformAdmin.delete({ where: { id: qaPlatformAdmin.id } }).catch(() => undefined);
+    // Only the sessions this run minted — the operator row is the real identity
+    // now, and its other sessions are somebody's open browser.
+    await dropTestAdminSessions().catch(() => undefined);
     await db.session.deleteMany({ where: { shop: { startsWith: `${TAG}-` } } }).catch(() => undefined);
   }
 }

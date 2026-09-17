@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
-import { useFetcher } from "react-router";
+import { useFetcher, useRevalidator } from "react-router";
 import { useAppBridge } from "../lib/ui/surface";
 import type { GeneralData, InstructionsActionResult } from "../routes/app.ai-agent.instructions";
 import { SaveBar } from "./SaveBar";
-import { PlanBadge } from "./ui/PlanGate";
+import { STORE_INFO_MAX } from "../lib/settings/schemas";
+
+const SCOPE_MAX = 300;
+const OFF_TOPIC_MAX = 300;
 
 // Instructions → General tab (spec 08, design #viewInstructions persona panel):
 // Role / Communication style / Behaviours / Default language / Auto-detect
@@ -56,6 +59,9 @@ interface FormState {
   autoDetectLanguage: boolean;
   bannedTopicsText: string; // textarea, one per line
   fallbackMessage: string;
+  storeInfoAbout: string;
+  scope: string;
+  offTopicMessage: string;
 }
 
 function toForm(data: GeneralData): FormState {
@@ -68,14 +74,13 @@ function toForm(data: GeneralData): FormState {
     autoDetectLanguage: data.autoDetectLanguage,
     bannedTopicsText: data.bannedTopics.join("\n"),
     fallbackMessage: data.fallbackMessage,
+    storeInfoAbout: data.storeInfoAbout,
+    scope: data.scope,
+    offTopicMessage: data.offTopicMessage,
   };
 }
 
-export function InstructionsGeneralTab(props: {
-  initial: GeneralData;
-  /** Plan needed for `multi_language`, or null when this shop already has it. */
-  multiLanguagePlan: string | null;
-}) {
+export function InstructionsGeneralTab(props: { initial: GeneralData }) {
   const shopify = useAppBridge();
   const fetcher = useFetcher<InstructionsActionResult>();
   const [saved, setSaved] = useState<FormState>(() => toForm(props.initial));
@@ -99,6 +104,13 @@ export function InstructionsGeneralTab(props: {
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }));
 
+  // Arriving from the dashboard step (#store-info): bring the section into view.
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.location.hash === "#store-info") {
+      document.getElementById("store-info")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, []);
+
   const save = () => {
     const payload = {
       role: form.role.slice(0, 250),
@@ -112,6 +124,9 @@ export function InstructionsGeneralTab(props: {
         .map((line) => line.trim().slice(0, 100))
         .filter(Boolean),
       fallbackMessage: form.fallbackMessage.slice(0, 500),
+      storeInfoAbout: form.storeInfoAbout.slice(0, STORE_INFO_MAX),
+      scope: form.scope.slice(0, SCOPE_MAX),
+      offTopicMessage: form.offTopicMessage.slice(0, OFF_TOPIC_MAX),
     };
     fetcher.submit(
       { intent: "save-general", payload: JSON.stringify(payload) },
@@ -121,9 +136,176 @@ export function InstructionsGeneralTab(props: {
 
   const discard = () => setForm(saved);
 
+  // Spec 26: instructions written from the store's own data after install.
+  const regenerateFetcher = useFetcher<InstructionsActionResult>();
+  const regenerating = regenerateFetcher.state !== "idle";
+  useEffect(() => {
+    const result = regenerateFetcher.data;
+    if (regenerateFetcher.state !== "idle" || !result || result.intent !== "ai-setup-regenerate") return;
+    if (result.ok) {
+      shopify.toast.show("Writing your instructions from your store — this takes about a minute");
+    } else {
+      shopify.toast.show(result.error ?? "Couldn't start — try again", { isError: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [regenerateFetcher.state, regenerateFetcher.data]);
+  const aiSetup = props.initial.aiSetup;
+  const aiWritten = aiSetup.status === "done" && aiSetup.generatedAt;
+  const needsReview = aiWritten && !aiSetup.reviewedAt;
+  const inProgress = aiSetup.status === "pending" || aiSetup.status === "running";
+
+  // While a run is in progress the page reloads itself, so the merchant sees
+  // the new instructions (and what changed) without wondering whether it
+  // finished — the first version only showed a "refresh in a minute" toast.
+  const revalidator = useRevalidator();
+  useEffect(() => {
+    if (!inProgress) return;
+    const timer = setInterval(() => {
+      if (revalidator.state === "idle") revalidator.revalidate();
+    }, 5_000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inProgress]);
+
+  // A finished run reports what it rewrote; the form still holds the old text
+  // until the page reloads, so re-seed it from the freshly loaded values.
+  const loadedSignature = JSON.stringify(props.initial);
+  useEffect(() => {
+    const next = toForm(props.initial);
+    setSaved(next);
+    setForm((prev) => (JSON.stringify(prev) === JSON.stringify(saved) ? next : prev));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadedSignature]);
+
+  // "Reviewed" is normally set by saving General; a merchant who has nothing to
+  // change needs a way to clear the notice without a pointless save.
+  const dismissFetcher = useFetcher<InstructionsActionResult>();
+  const dismissing = dismissFetcher.state !== "idle";
+
+  const generatedLabel = (() => {
+    const at = new Date(aiSetup.generatedAt);
+    if (!aiSetup.generatedAt || Number.isNaN(at.getTime())) return "";
+    return ` on ${at.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}`;
+  })();
+
+  const fieldLabels: Record<string, string> = {
+    storeInfo: "Store info",
+    role: "Role",
+    brandVoice: "Tone",
+    behaviours: "Behaviours",
+    scope: "Store scope",
+    offTopicMessage: "Off-topic message",
+    fallbackMessage: "Fallback message",
+    bannedTopics: "Banned topics",
+    language: "Language",
+  };
+  const names = (fields: string[]) => fields.map((f) => fieldLabels[f] ?? f).join(", ");
+
   return (
     <s-stack gap="base">
       <SaveBar dirty={dirty} saving={saving} onSave={save} onDiscard={discard} />
+
+      {needsReview ? (
+        <s-banner tone="info" heading="Your assistant's instructions were written from your store">
+          <s-stack gap="small-200">
+            <s-paragraph>
+              Written from your Shopify store details, policies, pages and catalogue{generatedLabel} and already saved —
+              your assistant is using them now. Read them through and edit anything that isn&apos;t right, or dismiss this
+              notice.
+            </s-paragraph>
+            {aiSetup.applied.length > 0 ? (
+              <s-paragraph>
+                <s-text type="strong">Rewritten:</s-text> {names(aiSetup.applied)}.
+                {aiSetup.kept.length > 0 ? ` Left as they were: ${names(aiSetup.kept)}.` : ""}
+              </s-paragraph>
+            ) : (
+              <s-paragraph>
+                <s-text type="strong">Nothing was changed.</s-text> The store data didn&apos;t give enough to write
+                these fields, so your current instructions were kept.
+              </s-paragraph>
+            )}
+            {aiSetup.conflicts.length > 0 ? (
+              <s-stack gap="small-100">
+                <s-text type="strong">Your store data disagrees with itself — fix it in Shopify so the assistant is consistent:</s-text>
+                <s-unordered-list>
+                  {aiSetup.conflicts.map((conflict) => (
+                    <s-list-item key={conflict}>{conflict}</s-list-item>
+                  ))}
+                </s-unordered-list>
+              </s-stack>
+            ) : null}
+            {aiSetup.faqDrafts > 0 ? (
+              <s-paragraph>
+                {aiSetup.faqDrafts} FAQ draft{aiSetup.faqDrafts === 1 ? "" : "s"} added in Training → FAQs — publish the
+                ones you want shoppers to see and delete the rest. Drafts are never shown to shoppers.
+              </s-paragraph>
+            ) : null}
+            <s-stack direction="inline" gap="small-200">
+              <s-button
+                variant="secondary"
+                loading={dismissing}
+                disabled={dismissing}
+                onClick={() => dismissFetcher.submit({ intent: "ai-setup-reviewed" }, { method: "post" })}
+              >
+                I&apos;ve reviewed these
+              </s-button>
+            </s-stack>
+          </s-stack>
+        </s-banner>
+      ) : null}
+      {inProgress ? (
+        <s-banner tone="info" heading="Writing your instructions from your store data…">
+          <s-paragraph>This takes about a minute after your products finish syncing.</s-paragraph>
+        </s-banner>
+      ) : null}
+
+      <s-section heading="Write from my store">
+        <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="center">
+          <s-paragraph color="subdued">
+            Writes store info, role, tone, behaviours, scope and messages from your Shopify store details, policies,
+            pages and catalogue. This <s-text type="strong">replaces what is in these fields</s-text>, including text
+            you wrote — your FAQs, products and other settings are untouched.
+            {aiWritten ? ` Last written${generatedLabel}.` : ""}
+          </s-paragraph>
+          <s-button
+            icon="wand"
+            loading={regenerating}
+            disabled={regenerating || inProgress}
+            onClick={() => regenerateFetcher.submit({ intent: "ai-setup-regenerate" }, { method: "post" })}
+          >
+            {aiWritten ? "Rewrite from my store" : "Write from my store"}
+          </s-button>
+        </s-grid>
+      </s-section>
+
+      {/* Store info (2026-09-14): what the AI knows about the store itself.
+          Saved to ShopSettings.storeInfo.about and embedded as the store_info
+          knowledge source, so "where are you based?" is answered from it. The
+          dashboard "Add store info" step links here (#store-info). */}
+      <s-section id="store-info" heading="Store info">
+          <s-stack gap="small-200">
+            {/* "Fill from Shopify" was removed 2026-09-15 (owner decision): "Write
+                from my store" (spec 26) above writes this field and every other
+                one from the same Shopify data and more. */}
+            <s-paragraph color="subdued">
+              Tell your assistant about your store — what you sell, where you&apos;re based,
+              opening hours, and how shoppers can reach you. It answers questions about your
+              store from this.
+            </s-paragraph>
+            <s-text-area
+              label="Store info"
+              labelAccessibilityVisibility="exclusive"
+              rows={6}
+              maxLength={STORE_INFO_MAX}
+              value={form.storeInfoAbout}
+              placeholder={
+                "e.g., [Store name] is a small family-run business selling [what you sell].\nBased in: [city, country]. Opening hours: [days and times].\nShipping: [where you ship and how long it takes].\nContact: [email / phone]"
+              }
+              onInput={(e) => set("storeInfoAbout", e.currentTarget.value)}
+            />
+            <Counter value={form.storeInfoAbout} max={STORE_INFO_MAX} />
+          </s-stack>
+        </s-section>
 
       <s-section heading="Role">
         <s-stack gap="small-200">
@@ -136,7 +318,7 @@ export function InstructionsGeneralTab(props: {
             rows={3}
             maxLength={250}
             value={form.role}
-            placeholder="e.g., You are a friendly customer support assistant for an online accessories store. Your goal is to help customers find products, answer questions and provide excellent service."
+            placeholder="e.g., You are a friendly shopping assistant for this store. You help shoppers find the right products and answer their questions about products, orders and store policies."
             onInput={(e) => set("role", e.currentTarget.value)}
           />
           <Counter value={form.role} max={250} />
@@ -221,24 +403,13 @@ export function InstructionsGeneralTab(props: {
               </s-option>
             ))}
           </s-select>
-          {/* Gated by `multi_language` and enforced on save
-              (instructions/save.server.ts) — but only when turning it ON, so a
-              shop that already has it keeps it after a downgrade. The switch
-              mirrors that: locked when off and unavailable, live otherwise. */}
-          <s-stack direction="inline" gap="small-200" alignItems="center">
-            <s-switch
-              label="Auto-detect shopper's language"
-              details={
-                props.multiLanguagePlan && !form.autoDetectLanguage
-                  ? `Answer in the shopper's own language — available on ${props.multiLanguagePlan} and above.`
-                  : "When enabled, the assistant answers in the shopper's detected language."
-              }
-              disabled={Boolean(props.multiLanguagePlan) && !form.autoDetectLanguage}
-              checked={form.autoDetectLanguage}
-              onInput={(e) => set("autoDetectLanguage", e.currentTarget.checked)}
-            />
-            {!form.autoDetectLanguage ? <PlanBadge plan={props.multiLanguagePlan} /> : null}
-          </s-stack>
+          {/* Available on every plan. */}
+          <s-switch
+            label="Auto-detect shopper's language"
+            details="When enabled, the assistant answers in the language of the shopper's latest message and switches with them mid-chat. When off, it always answers in the default language above."
+            checked={form.autoDetectLanguage}
+            onInput={(e) => set("autoDetectLanguage", e.currentTarget.checked)}
+          />
         </s-stack>
       </s-section>
 
@@ -246,7 +417,7 @@ export function InstructionsGeneralTab(props: {
         <s-stack gap="small-200">
           <s-paragraph color="subdued">
             One topic or phrase per line. If a shopper&apos;s message is about one of these, the
-            assistant declines and shows the fallback message.
+            assistant politely declines.
           </s-paragraph>
           <s-text-area
             label="Banned topics"
@@ -260,6 +431,40 @@ export function InstructionsGeneralTab(props: {
         </s-stack>
       </s-section>
 
+      {/* Store scope + off-topic message (QA-A3 / owner decision D-4,
+          2026-09-14). The pipeline supported both but no screen set them. With a
+          scope set, requests outside it — including creative or general tasks
+          like "write me a poem" — are declined with the off-topic message. */}
+      <s-section heading="Store scope">
+        <s-stack gap="small-200">
+          <s-paragraph color="subdued">
+            What your store is about. When set, requests outside it — like writing a poem or
+            general questions — are politely declined with the message below. Leave empty to
+            not restrict topics.
+          </s-paragraph>
+          <s-text-area
+            label="Store scope"
+            labelAccessibilityVisibility="exclusive"
+            rows={2}
+            maxLength={SCOPE_MAX}
+            value={form.scope}
+            placeholder="e.g., outdoor clothing and camping gear"
+            onInput={(e) => set("scope", e.currentTarget.value)}
+          />
+          <Counter value={form.scope} max={SCOPE_MAX} />
+          <s-text-area
+            label="Off-topic message"
+            rows={2}
+            maxLength={OFF_TOPIC_MAX}
+            value={form.offTopicMessage}
+            placeholder="I can only help with our store and its products — is there something I can help you find?"
+            details="Shown when a request is outside your store scope. Leave blank to use the built-in default."
+            onInput={(e) => set("offTopicMessage", e.currentTarget.value)}
+          />
+          <Counter value={form.offTopicMessage} max={OFF_TOPIC_MAX} />
+        </s-stack>
+      </s-section>
+
       <s-section heading="Fallback message">
         <s-stack gap="small-200">
           <s-paragraph color="subdued">Shown when the assistant can&apos;t confidently help.</s-paragraph>
@@ -270,7 +475,7 @@ export function InstructionsGeneralTab(props: {
             maxLength={500}
             value={form.fallbackMessage}
             placeholder="I'm not sure about that one — leave your email and our team will get back to you."
-            details="Leave blank to use the built-in default. The assistant captures the shopper's email as a lead after showing this."
+            details="Leave blank to use the built-in default, shown in your store's language. The assistant captures the shopper's email as a lead after showing this."
             onInput={(e) => set("fallbackMessage", e.currentTarget.value)}
           />
           <Counter value={form.fallbackMessage} max={500} />

@@ -1,12 +1,14 @@
-// Plan matrix + gating seam (spec 15) + platform overrides (spec 19).
+// Plan matrix + gating seam (spec 15) + admin overrides (spec 19).
 // The code matrix below is the DEFAULT; the operator can edit every value from
-// the /platform dashboard. Overrides live in app_secrets["platform:plans"] and
+// the /admin dashboard. Overrides live in app_secrets["admin:plans"] and
 // are merged into the exported PLANS object IN PLACE, so the 20+ sync consumers
 // (incl. direct PLANS[...] reads) pick them up with zero signature changes.
-// ENFORCEMENT default = "enforced" (2026-08-21): the tiers below are FINAL, so
-// every quota and feature gate is live. The operator can still flip back to
-// "open" from /platform/plans (spec 19) — no code edit — which makes every
-// gate pass and every quota unlimited without touching the displayed matrix.
+// GATES ARE ALWAYS LIVE. The "open / enforced" operator switch was
+// removed: it existed only while the tiers were being decided, and it was global
+// — left on it served every merchant the top tier for free, silently. The tiers
+// are final, so every quota and feature gate below is applied, always. To give
+// ONE store more, grant it bonus quota (quota-grants.server.ts), which raises
+// that store’s cap without touching anyone else.
 
 import { z } from "zod";
 import db from "../../db.server";
@@ -37,141 +39,151 @@ export {
   type QuotaDimension,
 };
 
-/** Compiled-in default. The operator can override it from /platform/plans. */
-export const DEFAULT_ENFORCEMENT: "open" | "enforced" = "enforced";
-
-// FINAL tiers (reconciled 2026-08-21). THIS FILE IS THE SOURCE OF TRUTH for pricing.
+// FINAL tiers. THIS FILE IS THE SOURCE OF TRUTH for pricing.
 // There is deliberately no companion spreadsheet: two copies drifted once (D-16 —
 // manual_qas, policy_pages, crawl_pages, team_seats all wrong). A change here must be
 // mirrored in the App Store listing pricing, and nowhere else.
+//
+// 2026-09-11: re-baselined to the matrix the operator set in /admin/plans (user:
+// "current is the default state"). /admin/plans can still override any of it.
 export const DEFAULT_PLANS: Record<PlanId, PlanDefinition> = {
   free: {
     id: "free",
     name: "Free",
     priceMonthly: 0,
-    priceYearlyPerMonth: 0,
     trialDays: 0,
     overagePerConversation: null,
     quotas: {
       conversations: 75,
       products_synced: 200,
+      pages_synced: 10,
+      articles_synced: 10,
       curated_answers: 5,
-      manual_qas: 10,
-      policy_pages: 5,
-      crawl_pages: 1,
-      file_uploads: 0,
-      metafields_enabled: 3,
+      faqs: 10,
+      crawl_pages: 5,
+      file_uploads: 2,
+      csv_upload_mb: 1,
+      lookup_rows: 1000,
+      metafields_enabled: 5,
       team_seats: 1,
-      active_campaigns: 0,
+      active_campaigns: 1,
       analytics_range_days: 7,
+      recommendation_rules: 5,
     },
-    features: [],
+    features: ["push_notifications"],
+    hidden: false,
   },
   basic: {
     id: "basic",
     name: "Basic",
     priceMonthly: 19.99,
-    priceYearlyPerMonth: 16.39,
     trialDays: 7,
     overagePerConversation: 0.4,
     quotas: {
       conversations: 200,
       products_synced: 500,
-      curated_answers: 20,
-      manual_qas: 25,
-      policy_pages: 10,
-      crawl_pages: 10,
-      file_uploads: 0,
-      metafields_enabled: 10,
-      team_seats: 2,
-      active_campaigns: 2,
-      analytics_range_days: 30,
+      pages_synced: 25,
+      articles_synced: 50,
+      curated_answers: 15,
+      faqs: 50,
+      crawl_pages: 15,
+      file_uploads: 5,
+      csv_upload_mb: 2,
+      lookup_rows: 10000,
+      metafields_enabled: 15,
+      team_seats: 5,
+      active_campaigns: 3,
+      analytics_range_days: 90,
+      recommendation_rules: 10,
     },
-    features: ["remove_branding", "unanswered_analytics", "survey", "push_notifications"],
+    features: ["remove_branding", "unanswered_analytics", "push_notifications", "order_tracking"],
+    hidden: false,
   },
   pro: {
     id: "pro",
     name: "Pro",
     priceMonthly: 49.99,
-    priceYearlyPerMonth: 40.99,
     trialDays: 7,
     overagePerConversation: 0.4,
     quotas: {
       conversations: 500,
       products_synced: 1000,
-      curated_answers: 50,
-      manual_qas: 50,
-      policy_pages: 15,
+      pages_synced: 50,
+      articles_synced: 150,
+      curated_answers: 25,
+      faqs: 150,
       crawl_pages: 15,
-      file_uploads: 0,
-      metafields_enabled: 25,
+      file_uploads: 5,
+      csv_upload_mb: 5,
+      lookup_rows: 50000,
+      metafields_enabled: 15,
       team_seats: 5,
       active_campaigns: 10,
       analytics_range_days: 90,
+      recommendation_rules: 25,
     },
     features: [
       "remove_branding",
       "unanswered_analytics",
-      "survey",
       "push_notifications",
-      "discount_realtime_sync",
-      "catalog_auto_sync",
       "premium_campaign_templates",
       "inbox_cart_view",
-      "custom_recommendations",
+      "order_tracking",
     ],
+    hidden: false,
   },
   plus: {
     id: "plus",
     name: "Plus",
     priceMonthly: 99.99,
-    priceYearlyPerMonth: 81.99,
     trialDays: 7,
     overagePerConversation: 0.4,
     quotas: {
       conversations: 1000,
       products_synced: 5000,
-      curated_answers: 100,
-      manual_qas: 100,
-      policy_pages: 20,
-      crawl_pages: 20,
-      file_uploads: 5,
-      metafields_enabled: 100,
+      pages_synced: 100,
+      articles_synced: 250,
+      curated_answers: 50,
+      faqs: 250,
+      crawl_pages: 50,
+      file_uploads: 25,
+      csv_upload_mb: 10,
+      lookup_rows: 200000,
+      metafields_enabled: 50,
       team_seats: 10,
       active_campaigns: UNLIMITED_QUOTA,
       analytics_range_days: 365,
+      recommendation_rules: 50,
     },
     features: [
       "remove_branding",
       "unanswered_analytics",
-      "survey",
       "push_notifications",
-      "discount_realtime_sync",
-      "catalog_auto_sync",
       "premium_campaign_templates",
       "inbox_cart_view",
-      "custom_recommendations",
-      "exports",
-      "csv_import",
-      "file_upload",
-      "multi_language",
+      "order_tracking",
     ],
+    hidden: false,
   },
 };
 
 /** The LIVE matrix. Same object identity forever — overrides mutate it in place. */
 export const PLANS: Record<PlanId, PlanDefinition> = structuredClone(DEFAULT_PLANS);
 
-// ── Platform overrides (app_secrets["platform:plans"], written by /platform/plans) ──
+// ── Admin overrides (app_secrets["admin:plans"], written by /admin/plans) ──
 
-export const PLAN_CONFIG_SECRET_KEY = "platform:plans";
+export const PLAN_CONFIG_SECRET_KEY = "admin:plans";
 
 const planPatchSchema = z.object({
   name: z.string().min(1).max(40).optional(),
   priceMonthly: z.number().min(0).optional(),
-  priceYearlyPerMonth: z.number().min(0).optional(),
   trialDays: z.number().int().min(0).max(90).optional(),
-  overagePerConversation: z.number().min(0).nullable().optional(),
+  // Editable, but PAID TIERS ONLY — applyConfig() drops it for `free`. A $0.50
+  // rate was once set on Free, a plan that can never be billed
+  // because charging needs a Shopify usage line and Free has no subscription;
+  // the card then advertised a charge the app would never make. null = this
+  // plan hard-caps at the quota instead of billing.
+  overagePerConversation: z.number().min(0).max(100).nullable().optional(),
   // Partial by design (a patch may set one dimension); enum-keyed z.record
   // would demand all 9 keys, so unknown keys are rejected via refine instead.
   quotas: z
@@ -184,6 +196,9 @@ const planPatchSchema = z.object({
   // been un-gated (e.g. auto_detect_language). Rejecting it would invalidate the
   // WHOLE config and silently drop every other override, so unknown names are
   // accepted here and filtered against GATED_FEATURES in applyConfig().
+  // Operator visibility switch — hides the plan from every merchant-facing
+  // list. Never affects a shop already on it (see PlanDefinition.hidden).
+  hidden: z.boolean().optional(),
   features: z.array(z.string()).optional(),
   // The gated-feature list as it existed when this override was SAVED. Without
   // it, a feature added to the product later is indistinguishable from one the
@@ -194,7 +209,6 @@ const planPatchSchema = z.object({
 });
 
 export const planConfigSchema = z.object({
-  enforcement: z.enum(["open", "enforced"]).optional(),
   plans: z
     .object({
       free: planPatchSchema.optional(),
@@ -207,22 +221,54 @@ export const planConfigSchema = z.object({
 
 export type PlanConfig = z.infer<typeof planConfigSchema>;
 
-let enforcement: "open" | "enforced" = DEFAULT_ENFORCEMENT;
+// Tolerant on READ (loadPlanConfig / getStoredPlanConfig): a stored override
+// may still name a quota dimension that has since been retired (e.g.
+// manual_qas → faqs). Rejecting it would invalidate the WHOLE
+// stored config and silently drop every other override — the same trap
+// documented for feature names above — so unknown quota keys are stripped
+// here instead. The strict refine stays on the SAVE path (savePlanConfig →
+// planConfigSchema), where an unknown dimension is an operator error.
+const storedPlanPatchSchema = planPatchSchema.extend({
+  quotas: z
+    .record(z.string(), z.number().int().min(0))
+    .transform((q) =>
+      Object.fromEntries(
+        Object.entries(q).filter(([k]) => (QUOTA_DIMENSIONS as string[]).includes(k)),
+      ),
+    )
+    .optional(),
+});
+
+export const storedPlanConfigSchema = z.object({
+  plans: z
+    .object({
+      free: storedPlanPatchSchema.optional(),
+      basic: storedPlanPatchSchema.optional(),
+      pro: storedPlanPatchSchema.optional(),
+      plus: storedPlanPatchSchema.optional(),
+    })
+    .optional(),
+});
+
 let lastLoadedAt = 0;
 let loading: Promise<void> | null = null;
 const REFRESH_TTL_MS = 30_000;
 
 function applyConfig(config: PlanConfig): void {
-  enforcement = config.enforcement ?? DEFAULT_ENFORCEMENT;
   for (const id of PLAN_IDS) {
     const merged = structuredClone(DEFAULT_PLANS[id]);
     const patch = config.plans?.[id];
     if (patch) {
       if (patch.name !== undefined) merged.name = patch.name;
       if (patch.priceMonthly !== undefined) merged.priceMonthly = patch.priceMonthly;
-      if (patch.priceYearlyPerMonth !== undefined) merged.priceYearlyPerMonth = patch.priceYearlyPerMonth;
       if (patch.trialDays !== undefined) merged.trialDays = patch.trialDays;
-      if (patch.overagePerConversation !== undefined) merged.overagePerConversation = patch.overagePerConversation;
+      if (patch.hidden !== undefined) merged.hidden = patch.hidden;
+      // FREE CAN NEVER BILL OVERAGE, so a stored rate for it is ignored rather
+      // than applied — the enforcement point for the whole app, since every
+      // reader goes through the live matrix.
+      if (patch.overagePerConversation !== undefined && id !== "free") {
+        merged.overagePerConversation = patch.overagePerConversation;
+      }
       for (const dim of QUOTA_DIMENSIONS) {
         const value = patch.quotas?.[dim];
         if (typeof value === "number") merged.quotas[dim] = value;
@@ -249,15 +295,15 @@ export async function loadPlanConfig(): Promise<void> {
     if (!row) {
       applyConfig({});
     } else {
-      const parsed = planConfigSchema.safeParse(JSON.parse(row.value));
+      const parsed = storedPlanConfigSchema.safeParse(JSON.parse(row.value));
       if (parsed.success) applyConfig(parsed.data);
-      else logError("platform_plan_config_invalid", parsed.error.issues[0]);
+      else logError("admin_plan_config_invalid", parsed.error.issues[0]);
     }
     lastLoadedAt = Date.now();
   } catch (error) {
     // Keep the last-known matrix; never break a gate check over a config read.
     lastLoadedAt = Date.now();
-    logError("platform_plan_config_load_error", error);
+    logError("admin_plan_config_load_error", error);
   }
 }
 
@@ -272,41 +318,56 @@ function maybeRefresh(): void {
 // Eager load at boot so the first requests already see stored overrides.
 void loadPlanConfig().catch(() => undefined);
 
-const UNLIMITED = UNLIMITED_QUOTA;
-
-export function planEnforcementMode(): "open" | "enforced" {
+/**
+ * The live plan matrix for screens that list every plan (admin overview, promo
+ * codes). Reading PLANS directly never triggers a refresh, so a page with no
+ * gate call on its path showed a stale matrix indefinitely (QA3-S3).
+ */
+export function currentPlans(): Record<PlanId, PlanDefinition> {
   maybeRefresh();
-  return enforcement;
+  return PLANS;
 }
 
-/** Feature gate. In "open" mode always passes (logs nothing). */
+function planDef(plan: string): PlanDefinition {
+  return PLANS[(plan as PlanId) in PLANS ? (plan as PlanId) : "free"];
+}
+
+/** Feature gate. Always the shop’s own plan — features are never grantable:
+ *  a bonus grant tops up a NUMBER, it does not unlock a capability. */
 export function hasFeature(plan: string, feature: GatedFeature): boolean {
   maybeRefresh();
-  if (enforcement === "open") return true;
-  const def = PLANS[(plan as PlanId) in PLANS ? (plan as PlanId) : "free"];
-  return def.features.includes(feature);
+  return planDef(plan).features.includes(feature);
 }
 
-/** Throwing gate for actions. In "open" mode never throws. */
+/** Throwing gate for actions. */
 export function requirePlan(plan: string, feature: GatedFeature): void {
   if (!hasFeature(plan, feature)) {
     throw new PlanGateError(feature);
   }
 }
 
-/** Quota for a dimension. In "open" mode everything is effectively unlimited. */
+/** Plan quota for a dimension. Per-shop bonus grants are added on top of this
+ *  at the enforcement points (see quota-grants.server.ts). */
 export function getQuota(plan: string, dimension: QuotaDimension): number {
   maybeRefresh();
-  if (enforcement === "open") return UNLIMITED;
-  const def = PLANS[(plan as PlanId) in PLANS ? (plan as PlanId) : "free"];
-  return def.quotas[dimension];
+  return planDef(plan).quotas[dimension];
 }
 
-/** Display quota (for meters) — the real matrix value even in open mode. */
-export function displayQuota(plan: string, dimension: QuotaDimension): number {
+/**
+ * The plans a merchant may be OFFERED, cheapest first. A hidden plan is left
+ * out unless it is the shop's own current plan — a merchant grandfathered onto
+ * a withdrawn tier must still see what they are paying for, or the page would
+ * claim they are on something they are not.
+ */
+export function offeredPlans(currentPlan?: string): PlanDefinition[] {
   maybeRefresh();
-  const def = PLANS[(plan as PlanId) in PLANS ? (plan as PlanId) : "free"];
-  return def.quotas[dimension];
+  return PLAN_IDS.map((id) => PLANS[id]).filter((def) => !def.hidden || def.id === currentPlan);
+}
+
+/** true when the plan exists but the operator has withdrawn it from sale. */
+export function planIsHidden(plan: string): boolean {
+  maybeRefresh();
+  return Boolean(PLANS[plan as PlanId]?.hidden);
 }
 
 /**
@@ -314,7 +375,7 @@ export function displayQuota(plan: string, dimension: QuotaDimension): number {
  * word every upgrade badge and banner shows the merchant.
  *
  * Derived from the live matrix rather than written into each component,
- * because the matrix is operator-editable from /platform: move a feature from
+ * because the matrix is operator-editable from /admin: move a feature from
  * Pro to Basic there and a hard-coded "Pro" badge starts lying, on a screen
  * nobody thought to update. Null when no plan has it (the operator switched it
  * off everywhere) — callers should then say nothing rather than invent a tier.
@@ -322,6 +383,7 @@ export function displayQuota(plan: string, dimension: QuotaDimension): number {
 export function requiredPlanName(feature: GatedFeature): string | null {
   maybeRefresh();
   for (const id of PLAN_IDS) {
+    if (PLANS[id].hidden) continue; // never advertise a withdrawn plan
     if (PLANS[id].features.includes(feature)) return PLANS[id].name;
   }
   return null;
@@ -335,8 +397,9 @@ export function requiredPlanName(feature: GatedFeature): string | null {
  */
 export function nextPlanNameForQuota(plan: string, dimension: QuotaDimension): string | null {
   maybeRefresh();
-  const current = displayQuota(plan, dimension);
+  const current = getQuota(plan, dimension);
   for (const id of PLAN_IDS) {
+    if (PLANS[id].hidden) continue; // never advertise a withdrawn plan
     if (PLANS[id].quotas[dimension] > current) return PLANS[id].name;
   }
   return null;

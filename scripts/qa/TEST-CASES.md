@@ -1,8 +1,9 @@
 # ChatConvert — Pre-Submission Test Cases
 
 > Written 2026-08-21 for the manual-QA pass that gates production deploy + App Store submission.
-> Execution results live in `scripts/qa/test-matrix.xlsx` (regenerate with
-> `npx tsx scripts/qa/make-test-matrix.ts`). Defects are logged in the PROGRESS.md decisions log.
+> Execution results live in `scripts/qa/make-test-matrix.ts`, which renders them to
+> `test-matrix.xlsx` (`npx tsx scripts/qa/make-test-matrix.ts`; the sheet is generated and
+> gitignored — edit the `.ts`). Defects are logged in the PROGRESS.md decisions log.
 >
 > **Scenario legend** — every case is run in as many of these as apply:
 > `H` happy path · `B` boundary/limit · `A` adversarial (forged input, replay, injection) ·
@@ -20,8 +21,8 @@
 | ID | Case | Steps | Expected | Scenarios |
 |---|---|---|---|---|
 | A-01 | Subscribe to each paid tier, monthly | For basic/pro/plus: `intent=subscribe`, interval=monthly → approve → callback | `Shop.plan`, `planStatus=trial`, `subscriptionId`, `billingInterval=monthly`, `trialEndsAt=+7d`, `usageLineItemId` all set; one `plan_changed` event | H, P |
-| A-02 | Subscribe to each paid tier, yearly | Same with interval=yearly | `billingInterval=yearly`; **no usage line item** (Shopify rejects usage lines on ANNUAL); price = `priceYearlyPerMonth × 12` | H, B |
-| A-03 | Yearly hard-caps at quota | Yearly Basic shop exceeds `conversations` quota | AI stops at cap — no overage billed, because there is no usage line. Merchant-facing copy must not promise overage | B |
+| A-02 | Monthly is the ONLY interval | Try to subscribe with anything but monthly | Impossible by construction — annual billing was removed 2026-09-07, `BillingIntervalId` is `"monthly"` alone, and every paid subscription carries a usage line so overage works | H, B |
+| A-03 | A legacy annual row still never bills | A pre-removal row with `billingInterval="yearly"` exceeds quota | `overageBillable()` stays false (Shopify rejects usage lines on ANNUAL), so it hard-caps rather than being charged for records Shopify would refuse | B |
 | A-04 | Upgrade | basic → pro | New subscription created; Shopify cancels + prorates the old one; plan updates; old subscription id replaced | H |
 | A-05 | Downgrade paid → paid | plus → basic | Same as A-04; over-quota data **kept**, new creates blocked, banner shown. No deletions | H, B |
 | A-06 | Downgrade to Free | `intent=subscribe` plan=free | `appSubscriptionCancel` called; all subscription fields reset; data kept | H |
@@ -34,9 +35,12 @@
 | A-13 | `app_subscriptions/update` ACTIVE | Webhook for the current subscription | Plan/interval/trial/usage-line backfilled; `plan_changed` only when something changed | H |
 | A-14 | Stale/out-of-order ACTIVE webhook | Webhook id ≠ live subscription id | Ignored + `app_subscription_stale_active_ignored` logged. A paying shop is never downgraded | A |
 | A-15 | CANCELLED/EXPIRED/DECLINED | Webhook for a **replaced** subscription | Ignored unless `shop.subscriptionId === subscriptionId` (a plan switch cancels the replaced sub) | A |
-| A-16 | FROZEN / PENDING status | Webhook with those statuses | **Known defect: ignored, so an unpaid frozen subscription keeps the paid plan** | A |
-| A-17 | Overage reporting | Exceed quota on a monthly paid plan | `PlanUsage.overageCount++`; `appUsageRecordCreate` at `overageRate(plan)`; errors logged, never thrown into chat | H, B |
+| A-16 | FROZEN / PENDING status | Webhook with those statuses | A FROZEN (unpaid) subscription drops the shop to free; it never keeps the paid plan. *(Fixed — was a known defect; `subscription-webhook.test.ts` asserts "FROZEN drops the shop to free", QA2-T3 2026-09-15)* | A |
+| A-17 | Overage reporting | Exceed quota on a monthly paid plan | `overageCount++`, one `appUsageRecordCreate` at `overageRate(plan)`, `overageReported++` on acceptance; errors logged, never thrown into chat | overage.test.ts |
 | A-18 | Conversation metering | One shopper session, many turns | Exactly one tick; `SESSION_INACTIVITY_MS`=30min creates a new billable session; `isTest` never ticks | H, B |
+| A-22 | Overage is never lost | A report fails (network/token/rate limit) | The debt survives as `overageCount - overageReported` and the hourly `overage-reconcile` job bills it; re-running never double-charges | overage.test.ts |
+| A-23 | Approved ceiling | Usage spend reaches `cappedAmount` | `aiAllowed()` returns false — the AI stops rather than serving unpaid conversations; Plan & Usage offers "Raise limit", which needs merchant approval | overage.test.ts |
+| A-24 | Merchant warnings | 80% of allowance / past allowance / ceiling reached | Three distinct banners on Plan & Usage, with the count, the rate and the spend — never a silent charge | overage.test.ts, B |
 | A-19 | Billing on the web surface | `intent=subscribe` from `/web` | 403 — `billing_manage` is admin-surface only for every role; a deep link to the admin is offered | S, A |
 | A-20 | Reinstall inside grace window | Uninstall then reinstall | Plan reset to free; a dead subscription is never resumed | B |
 
@@ -71,12 +75,12 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 | ID | Case | Steps | Expected | Scenarios |
 |---|---|---|---|---|
 | B-01 | Matrix matches published pricing | Compare `DEFAULT_PLANS` to the App Store listing pricing | Every price, trial, overage, quota and feature matches exactly | H |
-| B-02 | Operator edits a quota | `/platform/plans` → change `curated_answers` for Pro → save | `getQuota("pro","curated_answers")` returns the new value immediately in-process, and within `REFRESH_TTL_MS` (30s) in any other process | H |
+| B-02 | Operator edits a quota | `/admin/plans` → change `curated_answers` for Pro → save | `getQuota("pro","curated_answers")` returns the new value immediately in-process, and within `REFRESH_TTL_MS` (30s) in any other process | H |
 | B-03 | Propagation is app-wide | After B-02, check **every** installed shop on that tier | All shops on that plan see the new value — plans are global, only `Shop.plan` is per-shop | H, T |
-| B-04 | Operator toggles a feature | Uncheck `exports` for Plus → save | `hasFeature("plus","exports")` false; the export action returns a plan-gate error | H, P |
+| B-04 | Operator toggles a feature | Uncheck `remove_branding` for Plus → save | `hasFeature("plus","remove_branding")` false; the gated surface honors it (`exports` was un-gated 2026-09-10 and no longer exists as a feature) | H, P |
 | B-05 | Enforcement switch | Flip `open` ⇄ `enforced` | `open`: every gate passes, every quota `UNLIMITED`. `enforced`: real matrix values | H |
 | B-06 | Reset to defaults | "Reset all plans" | Row deleted; `PLANS` deep-equals `DEFAULT_PLANS` | H |
-| B-07 | Corrupt override row | Write invalid JSON to `platform:plans`, then save one plan | **Known defect: `getStoredPlanConfig()` returns `{}` on parse failure, so the save drops every other plan's overrides** | A |
+| B-07 | Corrupt override row | Write invalid JSON to `admin:plans`, then save one plan | **Known defect: `getStoredPlanConfig()` returns `{}` on parse failure, so the save drops every other plan's overrides** | A |
 | B-08 | Unknown feature name in a stored override | Override lists a since-removed feature | Tolerated on read and filtered against `GATED_FEATURES` — the whole config must not be invalidated | A |
 | B-09 | Unknown `Shop.plan` value | Set `plan="enterprise"` | All four accessors silently fall back to Free. Verify that is intentional and safe | A |
 | B-10 | Every quota gate bites | For each of the 11 dimensions, at each tier, create up to the limit then one more | The Nth+1 create is refused with a merchant-readable message and an upgrade path | B, P |
@@ -84,7 +88,7 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 | B-12 | Downgrade keeps over-quota data | Create 50 curated answers on Plus → downgrade to Free (quota 5) | All 50 rows survive; new creates blocked; banner explains. **No deletions** | B |
 | B-13 | Never-gated surfaces | On Free: inbox, human handover, GDPR flows, Test AI console | All fully functional — these must never be gated | P |
 | B-14 | Same LLM on every tier | Compare model used on free vs plus | Identical — plans differ on volume and tooling only | P |
-| B-15 | New seams enforce | `active_campaigns`, `analytics_range_days`, `survey`, `push_notifications`, `custom_recommendations`, `multi_language` | Each blocked at the right tier, server-side | B, P |
+| B-15 | New seams enforce | `active_campaigns`, `analytics_range_days`, `survey`, `push_notifications`, `cross_sell_pairs` + `recommendation_rules` quotas | Each blocked at the right tier, server-side. Un-gated by user decision: `multi_language` (2026-09-03), `custom_recommendations` (2026-09-10 — merged recommendation rules + cross-sell save on every plan; only the COUNTS are tiered: pairs 3/10/25/100, rules 5/10/25/50, refused past quota on new creates, editing at cap allowed) and `csv_import` (2026-09-10 — FAQ CSV import on every plan, bounded by the `faqs` quota) | B, P |
 | B-16 | Price change doesn't re-price existing subs | Change Pro price → check an existing Pro subscriber | Shopify keeps the agreed charge; only new subscriptions get the new price. UI copy must say so | B |
 
 ## C. Promo / coupon codes (spec 15)
@@ -114,13 +118,17 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 
 | ID | Case | Expected | Scenarios |
 |---|---|---|---|
-| D-01 | Golden set | `npm run eval:golden` passes 16/16 | H |
+| D-01 | Golden set | `npm run eval:golden` passes 19/19 (incl. the 3 precision cases — a product that only mentions the word in its prose is never carded) | H |
+| D-14 | Field-aware coverage (S12–S15, `features.test.ts`) | A word in the title scores 4, the same word only in the description 2.8; `headTerms` say where; `selectRelevant` keeps the literal match only; the snippet tells the model `in title/type/tags:` vs `in description:` | B |
+| D-15 | Picks protocol (P1–P4) | `PICKS: 3, 1` / `PICKS: none` parsed, markdown noise tolerated, prose never mistaken for picks; the stream splitter strips the line and blank lines, passes prose byte-for-byte, reports a picks-only reply | B |
+| D-16 | Router block guard (G1) | `configuredTopicNamedBy` matches configured topics prefix-tolerantly ("political opinions" → politics), rejects invented reasons ("BANNED TOPIC", "security devices") and bare filler | B |
+| D-17 | Question → catalogue rescue | A `question` with no knowledge hit but a product carrying a shopper word + vector agreement is answered from the catalogue; `PICKS: none` there serves fallbackMessage and feeds the unresolved queue (`npm run trace -- "how do I clean my bracelet" --shop …`) | H |
 | D-02 | gpt-4 family params unchanged | `samplingParams` returns exactly `{temperature, max_tokens}` for gpt-4o-mini/4o/4.1/4.1-mini/4.1-nano — byte-identical guarantee | B |
 | D-03 | Reasoning models | o1/o3-mini/o4-mini/gpt-5* → `max_completion_tokens`, no temperature/max_tokens | B |
-| D-04 | Switch chat model at runtime | Change `CHAT_MODEL` or the `/platform/ai` override → effective within the 30s cache, no code change, no redeploy | H |
-| D-05 | Platform temp/token override must not de-tune the router | Set temperature 1.2 globally → the router's strict-JSON call must keep its own tuning | A |
+| D-04 | Switch chat model at runtime | Change `CHAT_MODEL` or the `/admin/ai` override → effective within the 30s cache, no code change, no redeploy | H |
+| D-05 | Admin temp/token override must not de-tune the router | Set temperature 1.2 globally → the router's strict-JSON call must keep its own tuning | A |
 | D-06 | jsonObject + reasoning model | Router budget must not be consumed entirely by hidden reasoning tokens leaving empty content | B |
-| D-07 | Unpriced custom model | Free-text model at `/platform/ai` → warned, and `/platform/usage` doesn't silently show $0 | B |
+| D-07 | Unpriced custom model | Free-text model at `/admin/ai` → warned, and `/admin/usage` doesn't silently show $0 | B |
 | D-08 | Embedding model change | Different-dimension model must fail **loudly** at `toSqlVector`, never corrupt data; a re-embed path must exist for all four vector columns | A |
 | D-09 | Chat 429 backoff | A rate-limited chat call retries rather than surfacing instantly to the shopper | A |
 | D-10 | Router-first grounding | Every reply is grounded; no hallucinated products | H |
@@ -132,10 +140,10 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 
 | ID | Case | Expected | Scenarios |
 |---|---|---|---|
-| E-01 | All five source types | URL crawl, manual Q&A, CSV, file, Shopify pages ingest and become retrievable | H |
+| E-01 | All source types | URL crawl, file, Shopify pages ingest and become retrievable; LEGACY manual/csv rows (creation retired 2026-09-10, FAQ consolidation) still ingest, list, and delete | H |
 | E-02 | Chunking | ~1500 chars with 150 overlap, deterministic | B |
 | E-03 | SSRF rejection | Internal IPs, localhost, non-http schemes, redirects to internal hosts all refused | A |
-| E-04 | Quotas | `manual_qas`, `policy_pages`, `crawl_pages`, `file_uploads` enforced per tier | B, P |
+| E-04 | Quotas | `faqs` (25/50/100/250 — replaced `manual_qas` 2026-09-10; blocks FAQ create + import rows at cap, never edits), `policy_pages`, `crawl_pages`, `file_uploads` enforced per tier; FAQ CSV import un-gated (csv_import retired) | B, P |
 | E-05 | Unsupported file type | Errors cleanly (PDF/DOCX parsing is deferred by design) | B |
 | E-06 | Delete cascade | Deleting a source removes its knowledge rows and makes content unretrievable | H |
 | E-07 | Re-sync / weekly recrawl | Idempotent; no duplicate chunks | B |
@@ -213,7 +221,7 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 | I-04 | Actions | send, resolve, reopen, star, read, block, delete, assign | H |
 | I-05 | Delete conversation | Removes messages **and** the unresolved-question row | B |
 | I-06 | Contact classification | Re-evaluated on events; lead ↔ anonymous transitions correct | B |
-| I-07 | Contact CSV export | Formula-injection safe (`=`,`+`,`-`,`@` prefixed); plan-gated | A, P |
+| I-07 | Contact CSV export | Formula-injection safe (`=`,`+`,`-`,`@` prefixed); every plan (exports un-gated 2026-09-10) | A, P |
 | I-08 | Duplicate email | Case-insensitive duplicate rejected | B |
 | I-09 | Cross-session contact hijack | `proxy.prechat` binds writes to the caller's own `sessionId` | A, T |
 
@@ -223,14 +231,14 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 |---|---|---|---|
 | J-01 | Embedded admin (21 routes) | Each resolves, authenticates first, exports `boundary.error`/`boundary.headers` where it has a loader/action | H, A |
 | J-02 | Web (8 routes) | Each resolves; signed-out lands on `/web/login`; signed-in `/web` → `/app/inbox` | H, A |
-| J-03 | Platform (12 routes) | Each resolves; unauthenticated → `/platform/login`; never embedded (`frame-ancestors 'none'`) | H, A |
+| J-03 | Admin (12 routes) | Each resolves; unauthenticated → `/admin/login`; never embedded (`frame-ancestors 'none'`) | H, A |
 | J-04 | Proxy (11 routes) | Reject requests without a valid Shopify proxy signature | A |
 | J-05 | Webhooks (8 routes) | Invalid HMAC → 401 before any handler code; valid → 200 within 5s; enqueue-only | A |
 | J-06 | Deep links survive auth | `/app/inbox?c=<id>`, `/app/settings?tab=...` preserved across the bounce | H |
 | J-07 | Wrong HTTP method | Resource routes reject cleanly, no 500 | A |
-| J-08 | Logout is POST-only | GET must not log out (CSRF) — both web and platform | A |
+| J-08 | Logout is POST-only | GET must not log out (CSRF) — both web and admin | A |
 | J-09 | Nav integrity | Every `NAV` entry resolves; role filtering matches `can()` | H, S |
-| J-10 | No shop-domain login form | App Store req 2.3.1 — `_index` must never ask for `.myshopify.com` | A |
+| J-10 | Shop-domain login form | `_index` renders the field, posts it through `login()`, and rejects a bad domain in place; no *embedded* route asks for it | A |
 | J-11 | Embedded navigation | `Link`/`useSubmit`/`authenticate.admin`'s `redirect` — never raw `<a>` or react-router `redirect` | A |
 
 ## K. Sessions, auth, authorization & cookies (spec 18/19)
@@ -240,7 +248,7 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 | K-01 | Shopify session storage | Row written on OAuth; deleted on uninstall | H |
 | K-02 | TeamSession TTL | 30-day sliding, renewed at most once/day; expired rejected | B |
 | K-03 | Stale session cleanup | Expired `team_sessions` / `platform_sessions` are actually pruned, not accumulated | B |
-| K-04 | PlatformSession TTL | 7-day sliding; `reset-password` revokes all | B |
+| K-04 | AdminSession TTL | 7-day sliding; `reset-password` revokes all | B |
 | K-05 | Role matrix | agent → inbox+contacts only; admin → all but billing; billing_manage → admin surface only. Enforced by **direct URL**, not just nav | A, S |
 | K-06 | Cross-tenant | A member of shop A cannot read or mutate shop B through any route | A, T |
 | K-07 | Login anti-enumeration | Constant generic error + dummy hash burn for unknown/locked accounts | A |
@@ -249,10 +257,10 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 | K-10 | Token single-use | invite (7d), reset (1h), handoff (2min) — replay must fail | A |
 | K-11 | Password reset revokes other sessions | Only the resetting session survives | A |
 | K-12 | Disable member | Sessions revoked + push subscriptions deleted | A |
-| K-13 | Cookie flags | `cc_web_session` HttpOnly+Secure+SameSite=Lax+Max-Age; `cc_surface` deliberately not HttpOnly; platform cookie likewise | A |
+| K-13 | Cookie flags | `cc_web_session` HttpOnly+Secure+SameSite=Lax+Max-Age; `cc_surface` deliberately not HttpOnly; admin cookie likewise | A |
 | K-14 | Logout clears cookie | `Max-Age=0` | H |
 | K-15 | Iframe isolation | `SameSite=Lax` keeps the web cookie out of the admin iframe | A |
-| K-16 | CSRF | `sameOrigin` enforced on every platform + web mutation | A |
+| K-16 | CSRF | `sameOrigin` enforced on every admin + web mutation | A |
 
 ## L. Database efficiency
 
@@ -273,7 +281,7 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 |---|---|---|---|
 | M-01 | Plan matrix cache | 30s TTL; immediate in-process after a save | H |
 | M-02 | Shop config cache | 60s TTL; `invalidateShopConfig` called on **every** write path that changes cached data | A |
-| M-03 | Platform settings / runtime config | 30s TTL; dashboard beats env; secrets never returned to the browser | A |
+| M-03 | Admin settings / runtime config | 30s TTL; dashboard beats env; secrets never returned to the browser | A |
 | M-04 | Search lexicon | 10min TTL | B |
 | M-05 | Per-shop keying | No cross-tenant leak through any cache | T |
 | M-06 | Memory bounds | Every cache has an eviction policy — no unbounded growth | B |
@@ -308,7 +316,7 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 | O-11 | PII minimisation | Logs redact PII; no transcript in emails; order tracking never echoes order PII | A |
 | O-12 | Privacy policy | Names OpenAI and Resend as processors *(manual, pre-submission)* | — |
 
-## P. Platform admin & observability (specs 19/21)
+## P. Admin & observability (specs 19/21)
 
 | ID | Case | Expected | Scenarios |
 |---|---|---|---|
@@ -333,9 +341,10 @@ API this app uses. Suite: `scripts/qa/trial.test.ts` (33 checks).
 | Q-02 | Catalog sync (02) | Products/collections/discounts mirrored; webhooks enqueue-only; daily reconcile **prunes deleted items**; product cap per plan | H, B, P |
 | Q-03 | Chatbox settings (06) | All three tabs save; live preview has storefront parity | H |
 | Q-04 | AI training (07) | All five tabs; metafield opt-in quota; unresolved-question queue → FAQ/Q&A/curated prefill | H, P |
+| Q-04b | Metaobject-reference metafields (07, MR1–MR4 in `features.test.ts`) | Sync resolves enabled `metaobject_reference` / list refs to the metaobject's fields as text (batched `nodes(ids:)`, needs `read_metaobjects`); a reference entry renders ONLY resolved text (never the gid); deleted metaobjects and disabled definitions are skipped; toggle-apply resolves refs synced before enabling | B |
 | Q-05 | AI instructions (08) | Persona, guardrails, recommendation rules, handover config all persist and take effect | H |
 | Q-06 | Curated answers (09) | CRUD; quota; draft never served; published-without-embedding never matches; HTML stripped from talking points | H, B, P |
-| Q-07 | Analytics (14) | Series/donut/CSAT/funnel/top questions; test chats excluded; rollup idempotent; range gated by plan; exports gated | H, B, P |
+| Q-07 | Analytics (14) | Series/donut/CSAT/funnel/top questions; test chats excluded; rollup idempotent; range gated by plan; exports on every plan (gate removed 2026-09-10) | H, B, P |
 | Q-08 | Settings (16) | General, chatbox, privacy tabs; store info; auto-resolve; team; order tracking; retention | H |
 | Q-09 | Proactive campaigns (12) | Dashboard, templates, editor, metrics; revenue recomputed server-side (client beacon ignored); active-campaign quota | H, A, P |
 | Q-10 | Mobile responsive (20) | Every `/app` page usable at ~390px on both surfaces; desktop pixel-identical *(manual visual)* | S |
@@ -367,7 +376,7 @@ route files exist, never that their loaders run or their pages paint.
 | R-01 | Every `/app/*` loader runs | Resolves without throwing, for all 16 pages | H |
 | R-02 | Loader payload matches what the component destructures | No missing key (a missing key is a render crash, not a warning) | H |
 | R-03 | Every loader query is shop-scoped | `shopId` present on every query in the loader body | T |
-| R-04 | Renders on `free` **and** on `plus` with enforcement ON | Gates degrade; no page throws | P |
+| R-04 | Renders on `free` **and** on `plus` (gates always live) | Gates degrade; no page throws | P |
 | R-05 | Empty-data shop | No page throws with zero conversations/products/knowledge | B |
 | R-06 | Every action: valid input | Succeeds and persists | H |
 | R-07 | Every action: missing/invalid input | Rejected with a useful message; nothing persisted | B |
@@ -394,7 +403,7 @@ route files exist, never that their loaders run or their pages paint.
 | S-11 | CSRF | Foreign Origin/Referer refused on login, logout, forgot, reset | A |
 | S-12 | Multi-shop member | Shop picker; no id tampering can reach the other shop | T, A |
 
-## T. Platform console — every form takes effect (`scripts/qa/ui-platform.test.ts`)
+## T. Admin console — every form takes effect (`scripts/qa/ui-admin.test.ts`)
 
 | ID | Case | Expected | Scenarios |
 |---|---|---|---|
@@ -406,13 +415,18 @@ route files exist, never that their loaders run or their pages paint.
 | T-06 | Plans — corrupt stored config | Detected and archived, not silently dropping every override | A |
 | T-07 | AI overrides | Cannot de-tune the strict-JSON router or the summariser | A |
 | T-08 | Promo codes | CRUD plus percent/fixed, dates, max redemptions, plan/interval restrictions | H, B |
-| T-09 | Admins | Add/change role/remove; cannot remove the last operator | H, B |
+| T-09 | Access | Root = ADMIN_EMAIL/ADMIN_PASSWORD from .env (undeletable, password not in the DB); invited accounts add/remove/change-password and are unaffected when the .env pair changes; a stale env-managed row cannot sign in; removing an account cascades its sessions; "sign out other sessions" spares the caller | H, B, A |
 | T-10 | Logs | Filter, level, search, pagination all return correct rows | H |
 | T-11 | Usage drill-down | Figures match that shop's own Plan and Usage page; bogus shopId 404s, never leaks | H, A, T |
 | T-12 | Auth | Unauthenticated / bogus / expired all 302 to login | A |
 | T-13 | Not framable | Frame-ancestors none, including with a shop query param | A |
-| T-14 | Cookie isolation | Web cookie cannot open `/platform`; platform cookie cannot open `/app` or `/web` | A, T |
+| T-14 | Cookie isolation | Web cookie cannot open `/admin`; admin cookie cannot open `/app` or `/web` | A, T |
 | T-15 | Restore | Every global setting changed during T-02 to T-08 restored and verified | — |
+| T-16 | Coupons master switch | Off hides the discount card on Plan & Usage AND validatePromoCode refuses; existing discounted subscriptions untouched | H, A |
+| T-17 | Plan visibility | A hidden plan leaves offeredPlans() and is never named by an upgrade prompt; a shop already on it keeps its quotas and still sees it as its current plan | H, A |
+| T-18 | Admin theme | light / dark / auto persists in cc_admin_theme and is applied server-side on first paint (no flash); an unknown value falls back to auto | H |
+| T-19 | Debug is owner-only | The env root renders `/admin/debug` and each view writes a `turn_trace_list_viewed` audit row whose `by` is the operator's account; a signed-in non-owner operator gets 403 (other pages still open); cross-origin POST deletes nothing | A |
+| T-20 | Enforcement switch stays removed | No enforcement card; `intent=enforcement` refused; nothing enforcement-shaped stored (removed 2026-09-08 — gates always live) | A |
 
 ## U. Storefront — the full app-proxy contract (`scripts/qa/storefront.test.ts`)
 
@@ -458,11 +472,35 @@ Run from the repo root with `PRISMA_CLIENT_ENGINE_TYPE=binary npx tsx <path>`.
 Every suite prints `PASS`/`FAIL` per case, ends with `N passed, M failed`, and exits non-zero on
 failure. The HTTP suites additionally require `npm run dev` to be running on `:3000`.
 
+**Run the HTTP suites (routing, ui-embedded, ui-web, storefront, ui-admin) ONE AT A TIME against a
+quiet server** — one dev server (not several `dev:tunnel` instances), no other suite running, no
+sync in progress. Two runs against the same fixture shops, or a second dev server whose pg-boss
+worker picks up the jobs a suite queues, produce duplicate rows and missing fixtures that look like
+product bugs. `scripts/qa/http.ts` (QA-T4) retries the reachability gate with backoff (1→16 s) and
+gives every request a 30 s timeout with one retry on a connection failure (POSTs only when the
+connection was refused) — that absorbs a cold start, not a shared server. Run `npm run qa:preflight`
+first; it also checks the curated QA fixtures are in their intended state with no marker text (QA-T3).
+
+**AI engine.** Since spec 24 the **tools agent is the default** (`AI_AGENT_MODE` unset or `tools`):
+curated answers, recommendation rules, order status, handover and keyword guardrails still run
+deterministically first, then the tool-using agent answers (saved `sourceLayer` is `question` /
+`buy` / `chat` / `rag_fallback`, declines are `off_topic` / `banned_agent`). The previous router +
+lanes is an emergency rollback: run a suite against it with `AI_AGENT_MODE=pipeline` in the
+environment (PowerShell: `$env:AI_AGENT_MODE='pipeline'; npx tsx <suite>`, then
+`Remove-Item Env:AI_AGENT_MODE`), or `npm run eval:conversations -- --agent pipeline`. Two
+entry points pin the old engine because they assert router lanes: `pipeline-hardening.test.ts` and
+`npm run eval:golden` set `AI_AGENT_MODE=pipeline` themselves. The answer-level suites
+(data-sources, conversations, agent-quality) assert only what the shopper sees and hold in both.
+
 | Suite | Area | Needs dev server |
 |---|---|---|
 | `scripts/qa/plan-gates.test.ts` | B | no |
 | `scripts/qa/promo-codes.test.ts` | C | no |
 | `scripts/qa/subscription-webhook.test.ts` | A | no |
+| `scripts/qa/overage.test.ts` | A-02/03/17/18/22–24 — metering + overage billing (forces `BILLING_TEST_MODE`) | no |
+| `scripts/qa/trial.test.ts` | A-T — free-trial entitlement, once per shop | no |
+| `scripts/qa/tenancy-race.test.ts` | N — concurrent afterAuth `resolveShopId` P2002 guard (regression cover, not a reproduction) | no |
+| `scripts/qa/polaris-events.test.ts` | R — source guard: no `onChange` on Polaris `<s-*>` components (React 18 never delivers it) | no |
 | `scripts/qa/model-portability.test.ts` | D | no |
 | `scripts/qa/availability.test.ts` | H | no |
 | `scripts/qa/handover.test.ts` | G | no |
@@ -471,12 +509,349 @@ failure. The HTTP suites additionally require `npm run dev` to be running on `:3
 | `scripts/qa/cache.test.ts` | M | no |
 | `scripts/qa/perf-queries.test.ts` | L | no |
 | `scripts/qa/features.test.ts` | E, I, Q | no |
+| `scripts/qa/human-mode.test.ts` | G (HS1–HS11, AI off = human support) | no |
+| `scripts/qa/lookup-tables.test.ts` | LT1–LT43 — spec 28 lookup tables: CSV parsing, role guess, plan row limits (200,000-row fitment file on Plus, refused on Pro), import, exact/typo/prefix/range matching, narrow_by, SKU product links, edits, tenancy, delete + cleanupShop | no |
 | `scripts/qa/routing.test.ts` | J | **yes** |
 | `scripts/qa/auth-sessions.test.ts` | K | **yes** |
 | `scripts/qa/ui-embedded.test.ts` | R | **yes** |
 | `scripts/qa/ui-web.test.ts` | S | **yes** |
-| `scripts/qa/ui-platform.test.ts` | T | **yes** |
+| `scripts/qa/ui-admin.test.ts` | T | **yes** |
 | `scripts/qa/storefront.test.ts` | U | **yes** |
+| `scripts/qa/agent-quality.test.ts` | W | no |
+| `scripts/qa/widget-viewport.test.ts` | X | no |
+| `scripts/qa/detail-lane.test.ts` | Y | no |
+| `scripts/qa/quota-grants.test.ts` | Z | no |
+| `scripts/qa/preflight.ts` | — (environment health, run first) | no |
+| `scripts/qa/data-sources.test.ts` | AA — every data source reaches the answer; every switch removes it | only for the queued-rebuild check (the app's job worker) |
+| `scripts/qa/conversations.test.ts` | AB — real multi-turn shopper conversations, pass rates over N runs (`npm run eval:conversations`) | no |
+| `scripts/qa/pipeline-hardening.test.ts` | PH-1.1 … PH-4.8 — spec 23 acceptance criteria (fake model + stubbed Shopify; one live check when `OPENAI_API_KEY` is set) | no |
+| `scripts/qa/qa-fixes.test.ts` | QF-* — QA-FIX-PLAN-2026-09-14 gaps not covered elsewhere (Debug recording controls, erasure, webhook enqueue, landing page, config) | for the HTTP cases (skipped with a SKIP line when unreachable) |
+| `scripts/qa/sync-learning.test.ts` | SL-* — data sync → AI learning: every Shopify data type (products, variants/metafields, description passages + backfill, collections, discounts, pages/blogs, knowledge sources, store info/FAQ) flows sync/webhook → job handler → rows/embeddings → what the agent's tools return, and every update/delete/switch/tenant boundary propagates (fake scripted model + stubbed Shopify; never a queue worker) | no |
+| `scripts/qa/agent-tools.test.ts` | AT — AI agent tools mode (spec 24/25): engine switch + model resolution, grounding, tool gates, deterministic layers first, budget, context/privacy, passages, bootstrap/logAudit/usage upsert/purge, Debug capture, tenancy under concurrency (scripted fake model; AT-L1 live only with OPENAI_API_KEY) | no |
+| `scripts/eval-golden.ts` (`npm run eval:golden`) | D — router golden set; pins `AI_AGENT_MODE=pipeline` | no |
 
 Seeding: `scripts/qa/seed-curated.ts` (curated fixtures), `scripts/qa/perf-seed.ts` (synthetic
 volume — **remove it again afterwards**).
+
+---
+
+# Round 3 — recommendation quality on the real catalogue (2026-09-04)
+
+## W. Agent answer quality (`scripts/qa/agent-quality.test.ts`)
+
+The golden eval measures the **path** a turn takes on the clean 43-product seed
+fixture. This measures the **answer** on `jgw-check`'s 167-product mixed
+catalogue — crystal bracelets and a cosmetics range in one shop — which is where
+relevance gets hard, and it is the shop whose long SEO descriptions produced the
+field-aware-ranking work on 2026-09-01.
+
+| # | Area | Case | Expected |
+|---|---|---|---|
+| W1–W6 | cross-category | sunscreen for oily skin · shampoo for dandruff · hair fall · beard oil · red lipstick · vitamin C serum | the cosmetics half answers; **no bracelet card** |
+| W7–W12 | intent | money & wealth · calm my mind · evil eye · confidence & leadership · gift, she loves pink · focus & concentrate | the benefit in the title tail / description ranks; **no cosmetics card** |
+| W13–W16 | literal | lapis lazuli · moonstone · green aventurine · anklets | the named stone wins over prose that merely mentions it |
+| W17 | literal | tiger eye (**out of stock**) | reply says so in words; see the note below |
+| W18–W19 | budget | bracelets under 500 · perfume under 1500 | every card at or below the stated ceiling |
+| W20–W21 | honesty | running shoes · a laptop | no invented cards from an unrelated category |
+| W22–W25 | support | ship internationally · return policy · hello · "does this crystal cure cancer" | question / chat / **blocked** — never a product pitch |
+| W26 | multi-turn | "show me some bracelets" → "under 500" | subject and budget both carried |
+
+Result 2026-09-04: **26/26 pass.**
+
+### Notes this round found
+
+1. **Out-of-stock dominates this catalogue** — 126 of 167 products have
+   `stock = 0`, and `excludeOutOfStock` defaults to `true`, so Tiger Eye and
+   Green Jade genuinely cannot be recommended. Write cases against the in-stock
+   set (`select … where stock > 0`), or a correct agent looks broken.
+
+2. **`PICKS: none` is overridden by a generic category noun.** For "do you have
+   a tiger eye bracelet" the model answered *"we don't have a tiger eye bracelet
+   available right now"* and picked nothing — then `lexicalAnchor` fired on the
+   router keyword *bracelet*, which every candidate carries, and the mechanical
+   tier showed four unrelated bracelets anyway. The rule
+   (`index.server.ts:944`, `:1019`) exists so a real name match cannot be
+   contradicted by a stray "none"; it just does not distinguish the head noun
+   from the discriminating attribute. Not wrong enough to change under a frozen
+   prompt without a golden re-run — **logged for a decision**, not fixed.
+
+3. **Curated fixtures were left `draft`.** The golden eval parks the 14
+   `[qa-fixture]` curated answers while it runs and republishes them in a
+   `finally`; a killed run had left them parked, so `storefront.test.ts` failed
+   three curated cases against a shop that had no published curated answers to
+   match. Republished; storefront then passed 226/1.
+
+4. **`yearlyBilling: false` was left in `admin:plans`** — the same failure mode,
+   one step worse: a suite flipped a GLOBAL operator setting and an interrupted
+   run never restored it. (The setting itself is gone — annual billing was
+   removed entirely on 2026-09-07 — but the lesson stands for `enforcement`,
+   which `preflight.ts` still checks.)
+
+### Preflight — `npm run qa:preflight`
+
+Notes 3 and 4 are the same bug twice: a suite mutates global state, restores it
+in a `finally`, and a `finally` does not run when the process is killed. Rather
+than trust memory, `scripts/qa/preflight.ts` checks the four pieces of shared
+state any suite can leave dirty — parked curated fixtures, `admin:plans`
+overrides (`enforcement`), `platform:ai` temperature/maxTokens,
+and throwaway shops — and exits non-zero if the environment cannot be believed.
+`--fix` puts back everything that is safe to put back (it never deletes shops,
+which could race a live run). **Run it before a campaign and after any
+interrupted suite.**
+
+### Every suite MUST disconnect the app singleton (2026-09-10)
+
+A suite that runs the real pipeline touches TWO Prisma clients: its own
+`new PrismaClient()` and the `app/db.server` singleton the pipeline imports.
+Disconnecting only the first leaves the singleton’s pool holding the event loop
+open, so the process prints its results and then **hangs forever** — and with
+`npm run` in front of it the output is still sitting in a pipe buffer, so a
+run that PASSED is indistinguishable from one that is stuck. `eval-golden.ts`
+and `agent-quality.test.ts` both had this; two finished runs were found wedged,
+one for 80 minutes. Fixed in both:
+
+```ts
+.finally(async () => {
+  await prisma.$disconnect();
+  const appDb = (await import("../../app/db.server")).default;
+  await appDb.$disconnect().catch(() => undefined);
+});
+```
+
+Symptom to recognise: no output, near-zero CPU, and `pg_stat_activity` showing
+the suite’s connections `idle` on `ClientRead`. Postgres is not blocking — the
+client simply never closed. Redirect to a FILE rather than through `npm` when
+you need to watch a long run in progress.
+
+---
+
+## X. Storefront widget — the iOS soft keyboard (`scripts/qa/widget-viewport.test.ts`)
+
+Static suite, 38 checks, no server and no DB. It reads
+`extensions/chat-widget/assets/chat-widget.{js,css}` and asserts the mobile
+keyboard contract, because the failure it guards is invisible on every desktop
+browser **and** on Chrome for Android — including a desktop DevTools device
+emulator, which is why B4.15 kept passing while real iPhones did not.
+
+iOS does not shrink the layout viewport for the keyboard; it shrinks the
+**visual** viewport and slides it up to reveal the focused field. `position:
+fixed` is laid out against the **layout** viewport, so a panel pinned with
+`inset: 0` stays where the screen used to be while the visible area moves out
+from under it. Three separate fixes here only ever wrote the panel's `height`,
+which resizes the box and moves it not at all.
+
+| Case | Assertion |
+|---|---|
+| X-1 | `syncViewport` reads `offsetTop`/`offsetLeft`, not only `height` |
+| X-2 | It writes `top`/`left`/`width`/`height` and releases `bottom`/`right` to `auto` (`inset: 0` + a height is over-constrained) |
+| X-3 | It clears all six properties when the panel is closed or off-phone — a stale inline `top` survives into the desktop layout after a rotate |
+| X-4 | The `visualViewport` **scroll** listener is bound to a handler that repositions (it was previously bound to a height-only function, so it was a no-op) |
+| X-5 | Writes are coalesced with `requestAnimationFrame`, and a pending frame is cancelled on unbind |
+| X-6 | The body scroll lock uses `position: fixed` — `overflow: hidden` is not a scroll lock on iOS — is phone-only, and restores the shopper's scroll offset on close |
+| X-7 | `closePanel` unbinds the listeners, releases the lock, restores the viewport meta, and clears `cw-kbd` |
+| X-8 | `cw-kbd` (toggled on `focusin`/`focusout`, using `relatedTarget`) drops the `safe-area-inset-bottom` padding, which is dead space once the keyboard covers the gesture bar |
+| X-9 | `.cw-body` sets `overscroll-behavior: contain` — the rubber-band chain moves the visual viewport, which drags the panel |
+| X-11 | `watchKeyboard` polls the viewport across frames on **both** focus edges, stops after three identical frames, has a hard deadline, and is cancelled on unbind — iOS can fire its last `resize` mid-animation and send nothing after, which left the composer under the keys until the first keystroke (whose caret scroll fired the event that finally reported settled metrics) |
+| X-10 | `.cw-root` keeps `z-index: 2147483647` and has **no** `transform` (a transform makes it the containing block for its own fixed children) |
+
+The suite is written to fail loudly on regression: reverting any one of these
+turns the corresponding case red. Verified by mutation — replacing
+`vv.offsetTop` with a constant fails X-1 and nothing else.
+
+---
+
+## Y. Product-detail follow-ups (`scripts/qa/detail-lane.test.ts`)
+
+32 checks, dev Postgres only — no dev server, no LLM key.
+
+**The defect.** A shopper is shown three bracelets, asks *"what is this one made
+of?"*, and receives a fresh recommendation — three DIFFERENT products, with
+prose about them. Reported from the production app, 2026-09-07.
+
+**Why it happened.** The router has three intents and `question` means POLICY
+(shipping, returns, sizing, payment, warranty, care). So every product-shaped
+message lands in `buy`, and `buy` always means retrieve-and-recommend. A
+question *about* a product had no lane: it was re-run through hybrid search,
+whose query ("what is it made of") matches roughly arbitrary rows, and the model
+recommended them. Structural, not a tuning miss.
+
+| ID | Case | Expected |
+|---|---|---|
+| Y-1 | `DETAIL:` control line | id / `none` / markdown noise / lowercase parse; prose starting "Detailed…" is left alone; a `PICKS:` line is not a `DETAIL:` line; only the first id is taken (the lane answers about ONE product) |
+| Y-2 | Line stripping | The control line never reaches the shopper; the parsed subject survives |
+| Y-3 | Prompt contract | `PRODUCT_DETAIL` says *that product only*, forbids inventing a material or measurement, and explicitly forbids recommending, mentioning or comparing any other product — the exact production complaint |
+| Y-4 | Shown-product recovery | Cards from earlier turns are recovered, deduplicated across turns, most-recently-shown first |
+| Y-5 | Freshness | Products are re-read from the catalogue, never trusted from the stored card — the card is a snapshot and price/stock move underneath it |
+| Y-6 | Tenancy | Another shop sees nothing of the conversation; a blank `shopId` is rejected outright |
+| Y-7 | Fail-safe | No shown products ⇒ no confirm call at all (a first-turn shopper pays nothing); a confirm error keeps the buy lane |
+| Y-8 | Observability | Its own `sourceLayer: "detail"`, so a detail turn is distinguishable from a recommendation in analytics |
+| Y-9 | Additive | The buy lane still runs when the answer is no; `Learn products` off disables the lane with the rest of the catalogue |
+
+**The boundary, and how it was found.** The first version of the confirm
+question asked only "is this about a product above, rather than a request for
+different products?" The **golden set caught what that lets through**: after
+*"show me some jackets" → "under $100"*, the follow-up *"the waterproof one?"*
+was classified as a detail question. It is not — the shopper is CHOOSING among
+what they were shown, which is still browsing, and the buy lane's tuned
+selection behaviour has to keep it. The question was narrowed to facts about a
+settled product (material, size, contents, care, how it works, compatibility,
+warranty), with narrowing, comparing and picking all explicitly `no`.
+
+That is the case worth remembering: the lane must be narrow. A detail lane that
+swallows selection turns is a worse bug than the one it fixes, because it breaks
+shopping rather than an answer.
+
+---
+
+## Z. Bonus quota grants (`scripts/qa/quota-grants.test.ts`)
+
+42 checks, dev Postgres only — no dev server, no LLM key, no Shopify call.
+
+**One rule: a live grant RAISES that store’s cap.** Effective limit = plan
+allowance + live grants; nothing is consumed one at a time. Withdrawing or
+expiring a grant drops the cap back, and nothing already created under the
+higher cap is deleted — only new work stops.
+
+**Only `conversations` and `products_synced` are grantable.** A grant does
+something only where the check site adds `bonusQuota()`; `grantQuota()` refuses
+any other dimension rather than storing a no-op an operator would never see fail.
+
+**Why the feature exists.** Free plans hard-cap at their quota: Shopify permits
+usage charges on monthly cycles only, so there is nothing to bill and the AI
+simply stops. Until now the only way to help a specific merchant who ran out was
+to hand-edit their plan.
+
+**Z-3 is the case that matters:** a conversation inside the bonus is served and
+NOT billed, and past plan + bonus overage resumes. This also replaced the global
+open/enforced enforcement switch — same goal (give more), but targeted at one
+store instead of every merchant at once.
+
+| ID | Case | Expected |
+|---|---|---|
+| Z-1 | Grant + balance | A second grant ADDS rather than replacing; the ledger records amount, remaining, reason, grantedBy, createdAt |
+| Z-2 | Validation | 0, negative and fractional amounts refused; a single grant capped at 100,000 so a typo cannot uncap a shop |
+| Z-3 | **Ordering** | A billable shop one conversation past quota spends a credit and records **zero** overage |
+| Z-4 | Exhaustion | Falls through to normal behaviour; a spent grant stays on the ledger with `remaining = 0` for audit |
+| Z-5 | Expiry | An expired grant counts for nothing and cannot be spent, but stays visible marked expired; a **dated grant is spent before an open-ended one**, so credits that would be lost are used first |
+| Z-6 | `aiAllowed` | A Free shop at its cap is stopped → a grant starts it answering → withdrawing the grant stops it again |
+| Z-7 | Tenancy | One shop's credits never reach another; revoke cannot cross shops; a blank `shopId` is rejected |
+| Z-7b | **Dimensions are independent** | A `products_synced` grant never touches the conversations balance, and vice versa |
+| Z-8 | Source guard | `consumeQuota` appears **before** the `overageCount` increment in `usage.server.ts`; overage is skipped when a credit paid; `aiAllowed` checks credits before any billing path; the product cap adds the bonus in **both** enforcement sites (bulk sync AND the webhook create path — QA D7) |
+
+Z-8 exists because Z-3 can be broken by a refactor that still passes every
+behavioural test on a shop that happens to have no credits. The source order is
+the invariant.
+
+**Concurrency:** `consumeCredit` decrements with a conditional `updateMany`
+guarded on `remaining > 0`, so two conversations arriving together cannot both
+spend the last credit — the loser sees `count 0` and tries the next row.
+
+**Fails closed:** any error in the credits path returns "no credit spent" and
+the caller falls through to its normal quota handling. A broken credits table
+must never serve free conversations that nothing is tracking.
+
+---
+
+# Round 4 — does the agent learn from every source, and forget on command? (2026-09-11)
+
+## AA. Data-source learning (`scripts/qa/data-sources.test.ts`)
+
+features.test.ts proves each source is ingested and retrievable. This suite asks the agent
+and reads the answer. Every source carries one invented fact ("14 Larkspur Lane",
+"MOONRAKER47") no model could know, so presence and absence in a reply are unambiguous;
+knowledge sources are also checked at the retrieval layer (deterministic). A presence check
+gets one retry for wording variance; an absence check never retries.
+
+| Source | ON → answered | per-row / status OFF | master "Learn …" OFF | deleted |
+|---|---|---|---|---|
+| Product | card | learnEnabled off → no card, rules too | no card, rules too | — |
+| Collection | named | learnEnabled off | not named | — |
+| Discount | code quoted | learnEnabled off; expired | not quoted | — |
+| Store page | answered | learnEnabled off → not retrieved/answered | bridge emptied, not errored | — |
+| Blog article | answered | — | not answered | — |
+| FAQ | answered | draft → gone; republish → back | — | gone |
+| File (TXT) | answered | inactive → gone | — | gone, no orphan chunks |
+| Policy | answered (snapshot fallback with no Shopify session) | — | — | — |
+| Curated answer | served | draft → not served | Learn products OFF → text still served, no card | — |
+| Recommendation rule | fires | inactive → does not fire | Learn products OFF → no card | — |
+
+Instructions: the **Behaviours** box is followed in small talk and in a knowledge answer;
+a banned topic is refused; a configured store scope serves the merchant's own off-topic
+message and still answers an in-catalogue product. Queued rebuild (the path a merchant's click
+takes): while a toggle's job is queued the bridge **keeps serving its last good chunks** (spec 23
+§1.2 — an enabled `pending` source is servable; until 2026-09-15 this row said the bridge went
+dark, which was the pre-hardening behaviour, QA2-T2); the APP's worker drains the job and the
+switched-off page is then gone from retrieval and the answer; switched back on through the same
+queue, it returns. A merchant-**inactive** source stays inactive across a re-ingest and is never
+served (QA2-A1). Runs in the default tools engine (see the Suite index). Purge: the uninstall purge leaves no shop-scoped row, grants included.
+
+### Defects this round found (all fixed)
+
+1. **The persona prompt ignored the Behaviours box** — it read `guidelines`/`avoid`, which no
+   screen could edit (identical install defaults on every shop). Frozen-prompt change; golden 20/20.
+2. **A store question routed to small talk got an invented answer** ("visits are not available
+   to the public" against a page saying Saturdays 10–2). ROUTER now counts questions about the
+   store itself as `question`; CHAT_REPLY states no store facts. New golden case.
+3. **Rules, curated cards and cross-sell ignored the learn switches** and could card draft /
+   archived / unpublished products (a 404 link). One `SHOWABLE_PRODUCT` filter for every
+   by-id lookup; rules skip when Learn products is off; curated keeps its text. Campaigns now
+   require `publishedOnline` too.
+4. **Bonus grants survived the uninstall purge** — added to `cleanupShop` and the redact audit.
+
+### Tests must never become job workers
+
+`enqueue()` starts the app's queue, and `start()` registers EVERY handler — so a test that
+enqueues turns its own process into a worker on the shared queue. It may then drain the job
+itself (proving nothing about the app's worker), and because an open pg-boss client keeps the
+event loop alive it never exits: three data-sources runs stayed alive as workers for up to an
+hour, able to pick up real shops' jobs. A suite that needs to enqueue installs a send-only
+client first and stops it in `finally`:
+
+```ts
+const { PgBoss } = await import("pg-boss");
+sender = new PgBoss({ connectionString: process.env.DATABASE_URL!, supervise: false, schedule: false });
+await sender.start();
+global.pgBossGlobal = { boss: sender, started: Promise.resolve() };
+// … finally: await sender.stop({ graceful: false }); global.pgBossGlobal = undefined;
+```
+
+### Background jobs do not hot-reload in dev
+
+Page requests pick up edits live; the job worker registered at boot keeps the code it booted
+with (`knowledge-jobs.server.ts` imports its handler statically). Seen 2026-09-11: a Privacy
+policy connected after an edit failed with `unknown source type "policy"` because the worker
+predated the new type. **After changing anything a job runs — ingestion, sync, bridge rebuild —
+restart the dev server before testing it through the UI.**
+
+### A crash mid-suite can erase operator data
+
+Suites that pin shared state (features, plan-gates, overage, admin-check pin `admin:plans`) restore it
+in a `finally` — which never runs if the process dies. On Windows the Prisma query engine is a
+separate process, and under memory pressure it can die mid-run (`ECONNREFUSED 127.0.0.1:<port>` /
+`P1017`). On 2026-09-11 that happened inside features.test.ts: the operator's plan matrix was left
+as `{}`, and the next suite faithfully "restored" the `{}` it found. It was recovered byte-for-byte
+from the table's un-vacuumed previous row version (`pageinspect`, superuser on the dev container).
+**Run suites one at a time, with memory to spare; after any crashed run, read preflight's plan
+matrix section before trusting the environment.**
+
+## AB. Real conversations, measured as pass rates (`scripts/qa/conversations.test.ts`)
+
+`npm run eval:conversations` replays whole shopper conversations (`scripts/qa/conversation-cases.ts`,
+taken from real jgw-check chats) turn by turn through the real pipeline as isTest turns, N runs each.
+Expectations are shopper-visible only — cards (`cardsInclude` / `cardsOnly` / `cardsExclude`), reply
+text, dead ends, blocks, handovers — plus an optional plain-English rubric graded by an LLM judge
+(REST call, never recorded against merchant usage). Lane names are never asserted, so the pipeline
+and the spec-24 agent are measured by the same cases. Cases are tagged `pipeline` (the engine's
+responsibility) or `data` (merchant configuration). Results land in git-ignored `scripts/qa/results/`.
+
+Flags: `--runs N` · `--case <id>` · `--agent pipeline|tools` · `--agent-model <id>` · `--no-judge` ·
+`--judge-model <id>` (default gpt-4.1; gpt-4.1-mini is ~5× cheaper) · `--compare <results.json>` · `--verbose`.
+A full 3-run eval costs ≈ $0.2 (gpt-4.1-mini agent + mini judge) to ≈ $0.75 (gpt-4.1 agent + gpt-4.1 judge).
+Aborts (exit 2) when the shop's AI is switched off.
+
+Judge caveat: rubrics must carry the facts (the judge sees the conversation, not the catalogue) and
+should grade cards rather than prose where possible — a judge given the full discount list still
+flagged a real automatic "Buy 1 Get 1" as invented, so that turn is checked mechanically only.
+
+Baseline 2026-09-14 (3 runs): pipeline 56% · agent gpt-4.1-mini 87% · agent gpt-4.1 97% of
+pipeline-tagged turns (spec 24 results table).

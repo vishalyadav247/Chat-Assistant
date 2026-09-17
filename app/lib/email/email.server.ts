@@ -1,9 +1,9 @@
 import nodemailer from "nodemailer";
-import { runtimeConfig } from "../platform/runtime-config.server";
+import { runtimeConfig } from "../admin/runtime-config.server";
 import { logError } from "../log.server";
 
 // Transactional email seam (spec 18 / spec 10 & 17 "email provider decision").
-// Provider + credentials are operator-managed at /platform/settings, falling
+// Provider + credentials are operator-managed at /admin/settings, falling
 // back to the EMAIL_* environment variables (spec 19). Modes:
 //   log    — prints the message; returns delivered=false so callers fall back
 //            to copy-link UX (dev default).

@@ -1,0 +1,394 @@
+/* Multi-turn conversation cases for scripts/qa/conversations.test.ts.
+ *
+ * Every case is a REAL conversation a shopper had on jgw-check.myshopify.com
+ * (2026-09-14 review), replayed turn by turn. Expectations describe what a good
+ * sales assistant does — NOT what the pipeline did at the time — and assert only
+ * what the shopper sees (reply text, cards, handover), never internal lane names,
+ * so the same cases measure the current pipeline and any redesign of it.
+ *
+ * Product facts used below were read from the catalogue on 2026-09-14:
+ *   Black Obsidian Bracelet For Evil Eye Protection — ₹1,499, tags For Her/For Him, "unisex"
+ *   Pyrite Bracelet For Money Attraction…            — ₹1,499, For Her/For Him, "unisex"
+ *   Self-Charging Abundance Bracelet for Ruling No - 9 — ₹1,199, For Him, "unisex"
+ *   Howlite Bracelet For Anti-Stress & Calming Energy — ₹1,499
+ *   Amethyst Bracelet for Calming Mind & Peace        — ₹1,499
+ *   Red Jasper Bracelet For Courage…                  — also a number-9 bracelet (tag "Num 9")
+ *   Active discounts include sk10 (10% off), sk20, off5, freeship, Buy 1 Get 1.
+ *   Cross-sell (merchant setting) appends "Amethyst Womens Bracelet | Numerology Test"
+ *   under fresh recommendations, so a recommendation turn's `cardsOnly` tolerates it.
+ * If the catalogue changes, update the facts here, not the runner.
+ *
+ * `tag` separates what the pipeline controls ("pipeline") from what depends on
+ * the merchant's own configuration ("data" — e.g. which products a rule pins).
+ */
+
+export interface TurnExpect {
+  /** At least one card title matches. */
+  cardsInclude?: RegExp;
+  /** Every card title matches (zero cards also passes — pair with cardsInclude to require one). */
+  cardsOnly?: RegExp;
+  /** No card title matches. */
+  cardsExclude?: RegExp;
+  /** The reply shows no cards. */
+  noCards?: boolean;
+  replyIncludes?: RegExp;
+  replyExcludes?: RegExp;
+  /** Not the "I'm not sure — leave your email" / clarify dead end. */
+  notFallback?: boolean;
+  /** Not refused as a banned topic. */
+  notBlocked?: boolean;
+  /** No handover frame this turn. */
+  noHandover?: boolean;
+  /** Upper bound on cards shown (picks + cross-sell). */
+  maxCards?: number;
+  /** Upper bound on reply length in words (brevity). */
+  maxWords?: number;
+  /** Plain-English rubric for the LLM judge (skipped with --no-judge). */
+  judge?: string;
+}
+
+export interface ConversationTurn {
+  shopper: string;
+  expect?: TurnExpect;
+}
+
+export interface ConversationCase {
+  id: string;
+  /** Where the conversation came from. */
+  source: string;
+  tag: "pipeline" | "data";
+  turns: ConversationTurn[];
+}
+
+const OBSIDIAN = /Black Obsidian/i;
+
+export const CONVERSATION_CASES: ConversationCase[] = [
+  {
+    id: "evil-eye-followups",
+    source: "jgw-check 11:58 — follow-ups about the product on screen showed other products",
+    tag: "pipeline",
+    turns: [
+      { shopper: "hi" },
+      {
+        shopper: "do you have evil eye protection bracelet",
+        expect: { cardsInclude: OBSIDIAN },
+      },
+      {
+        shopper: "when to wear this",
+        expect: {
+          cardsOnly: OBSIDIAN,
+          notFallback: true,
+          judge:
+            "The shopper means the Black Obsidian evil-eye bracelet shown just before. The reply must be about THAT bracelet (when/how to wear it, or honestly say the details are not listed) and must not recommend or show other products.",
+        },
+      },
+      {
+        shopper: "tell me the prices of evil eye protection bracelet",
+        expect: {
+          cardsOnly: OBSIDIAN,
+          replyIncludes: /1,?499/,
+          replyExcludes: /pyrite|amber|amethyst|citrine/i,
+          judge: "The reply must give the Black Obsidian Bracelet For Evil Eye Protection's price, ₹1,499, and must not quote prices of other products.",
+        },
+      },
+      {
+        shopper: "is it unisex",
+        expect: {
+          notFallback: true,
+          replyIncludes: /unisex|men and women|both|him and her|anyone|everyone/i,
+          judge: "The Black Obsidian bracelet is unisex (tagged For Her and For Him). The reply must say it suits both men and women.",
+        },
+      },
+    ],
+  },
+  {
+    id: "male-recommendations",
+    source: "jgw-check 11:58 — 'for male' matched nothing and showed arbitrary bracelets",
+    tag: "pipeline",
+    turns: [
+      {
+        shopper: "show me some recomanded products for male",
+        expect: {
+          cardsExclude: /women'?s|lipstick|nail polish|kajal/i,
+          judge:
+            "Judge the CARDS only. The shopper is a man asking for recommendations. The store sells crystal bracelets and a cosmetics/grooming range, so men's grooming products and unisex or men's bracelets all pass; women's products fail.",
+        },
+      },
+      {
+        // The original chat had shown Blue Apatite; a replay may show other
+        // products first, so the rubric holds for either path.
+        shopper: "tell me more about the blue bracelet",
+        expect: {
+          cardsExclude: /face wash|hair wax|balm|beard/i,
+          judge:
+            "If a blue bracelet (e.g. Blue Apatite Bracelets) was shown earlier, the reply must describe that bracelet. If none was shown, the reply must look for or ask about a blue bracelet. It must never describe a product that is not blue as 'the blue bracelet'.",
+        },
+      },
+    ],
+  },
+  {
+    id: "pyrite-gender",
+    source: "jgw-check 11:22 — gender question about the product being discussed",
+    tag: "pipeline",
+    turns: [
+      { shopper: "suggest me some trending bracelets", expect: { cardsInclude: /bracelet/i } },
+      {
+        shopper: "more details about pyrite bracelet",
+        expect: {
+          cardsOnly: /Pyrite Bracelet/i,
+          judge:
+            "The shopper names the Pyrite Bracelet (Pyrite Bracelet For Money Attraction & Finance Related Problems, which is in the catalogue). The reply must describe that bracelet — whether or not it was among earlier cards — and no other product.",
+        },
+      },
+      {
+        shopper: "is it for mens or women ?",
+        expect: {
+          notFallback: true,
+          noHandover: true,
+          replyIncludes: /unisex|both|men and women|him and her|anyone|everyone/i,
+          judge: "The Pyrite Bracelet is unisex. The reply must say it suits both men and women.",
+        },
+      },
+    ],
+  },
+  {
+    id: "stress-then-ruling-9",
+    source: "jgw-check 08:48 — wrong stress picks, wrong price, gender fallback, discounts blocked",
+    tag: "pipeline",
+    turns: [
+      { shopper: "hi" },
+      {
+        shopper: "i need bracelet which helps reducing stress level",
+        expect: {
+          cardsInclude: /Howlite|Anti-Stress|Amethyst Bracelet for Calming/i,
+          cardsExclude: /Ruling No/i,
+          judge:
+            "Judge the CARDS only. They must include a stress-relief bracelet (Howlite Bracelet For Anti-Stress & Calming Energy or Amethyst Bracelet for Calming Mind & Peace). Other calming or emotional-balance bracelets (Moonstone, Rose Quartz, Lepidolite…) are acceptable; a card whose title names an unrelated purpose (money attraction, confidence, leadership, luck) fails.",
+        },
+      },
+      {
+        // Red Jasper is also a number-9 bracelet (tag "Num 9", "for Ruling Number 9").
+        shopper: "my ruling no. is 9 can you suggest me bracelet for that specifically",
+        expect: {
+          cardsInclude: /Ruling No - 9/i,
+          cardsOnly: /Ruling No - 9|Red Jasper|Womens Bracelet \| Numerology/i,
+        },
+      },
+      {
+        shopper: "i need to know more about this item",
+        expect: {
+          cardsOnly: /Ruling No - 9/i,
+          judge: "The reply must describe the Self-Charging Abundance Bracelet for Ruling No - 9 and no other product.",
+        },
+      },
+      {
+        shopper: "what is the price of this",
+        expect: {
+          cardsOnly: /Ruling No - 9/i,
+          replyIncludes: /1,?199/,
+          replyExcludes: /Ruling (?:No|Number)\.?\s*-?\s*[1-8]\b|1,?499/i,
+          judge: "The reply must state the Ruling No - 9 bracelet's price, ₹1,199, and nothing about other products.",
+        },
+      },
+      {
+        shopper: "is it specifically for womens or even for mens ?",
+        expect: {
+          notFallback: true,
+          replyIncludes: /unisex|both|men and women|him|men/i,
+          judge: "The Ruling No - 9 bracelet is unisex (tagged For Him, described as unisex). The reply must say men can wear it.",
+        },
+      },
+      {
+        shopper: "size of the current bracelet",
+        expect: {
+          notFallback: true,
+          replyIncludes: /\d(?:\.\d)?\s*(?:inch|in\b|")|size/i,
+          // The store's own data disagrees: the variants are 6.5 / 7.5 / 8.5 in,
+          // the description says "6.5, 7, and 7.5". Either is grounded.
+          judge:
+            "The reply must give the sizes of the Ruling No - 9 bracelet. Its variants are Female 6.5 in, Male 7.5 in, Extra Large 8.5 in (its description also says 6.5, 7 and 7.5) — either set is correct.",
+        },
+      },
+      {
+        shopper: "currently do you have any offer running",
+        expect: {
+          notBlocked: true,
+          notFallback: true,
+          // No judge: given the full discount list it still flagged the real
+          // automatic "Buy 1 Get 1" as invented in 6/6 runs. The mechanical
+          // check (a real offer is named, not refused) is the reliable one.
+          replyIncludes: /sk10|sk20|off5|freeship|buy 1|% off|free shipping/i,
+        },
+      },
+      {
+        shopper: "i am asking about the discount currently available on your store",
+        expect: {
+          notBlocked: true,
+          replyIncludes: /sk10|sk20|off5|freeship|buy 1|% off|free shipping/i,
+        },
+      },
+    ],
+  },
+  {
+    id: "ruling-9-for-men",
+    source: "jgw-check 10:56 — 'is this for men' answered about a women's amethyst bracelet",
+    tag: "pipeline",
+    turns: [
+      { shopper: "hi" },
+      {
+        shopper: "my ruling no. is 9, i need bracelet for that",
+        expect: { cardsInclude: /Ruling No - 9/i, cardsExclude: /Ruling No - [1-8]\b/i },
+      },
+      {
+        shopper: "is this product for men ?",
+        expect: {
+          notFallback: true,
+          cardsOnly: /Ruling No - 9/i,
+          replyExcludes: /amethyst|women'?s bracelet/i,
+          judge: "The shopper means the Ruling No - 9 bracelet just shown, which is unisex and tagged For Him. The reply must say yes, men can wear it, and must not talk about other products.",
+        },
+      },
+      {
+        shopper: "for man",
+        expect: {
+          cardsExclude: /face wash|hair wax|beard|lipstick|women'?s/i,
+          judge: "The shopper confirms they are a man. Any products shown must be bracelets suitable for men; grooming products are not what they asked for.",
+        },
+      },
+      { shopper: "bracelet for evil eye protection", expect: { cardsInclude: OBSIDIAN } },
+      {
+        shopper: "more details about this",
+        expect: { cardsOnly: OBSIDIAN, judge: "The reply must describe the Black Obsidian bracelet and no other product." },
+      },
+      {
+        shopper: "good time to wear this",
+        expect: {
+          cardsOnly: OBSIDIAN,
+          replyExcludes: /citrine|amethyst|pyrite/i,
+          judge: "The reply must be about when to wear the Black Obsidian bracelet (or honestly say it is not listed) and must not talk about other products.",
+        },
+      },
+    ],
+  },
+  {
+    id: "women-stress-brief",
+    source: "owner test 2026-09-15 — 6 cards for one ask; product answers ran 5–6 lines",
+    tag: "pipeline",
+    turns: [
+      { shopper: "suggest me some trending bracelets", expect: { maxCards: 4, maxWords: 60 } },
+      {
+        shopper: "i need another bracelet for womens for stress relief",
+        expect: {
+          maxCards: 4,
+          maxWords: 60,
+          cardsInclude: /Howlite|Anti-Stress|Amethyst Bracelet for Calming|Calming/i,
+          judge:
+            "Cards must be bracelets for stress relief or calm that suit women (For Her or unisex). At most 4 cards. The reply must be brief (2–3 short lines).",
+        },
+      },
+      {
+        shopper: "tell me about the first one",
+        expect: {
+          maxWords: 60,
+          judge: "The reply must be a brief (2–3 short lines) summary of the first bracelet shown just before, not a long list of every detail.",
+        },
+      },
+    ],
+  },
+  {
+    // Spec 25: the fact sits ~5,500 chars into an 8,600-char description —
+    // past the product vector (2,000) and the old get_product cut (3,500/5,000).
+    id: "deep-description-fact",
+    source: "spec 25 — description passages (Moonstone 'hormonal balance' passage)",
+    tag: "pipeline",
+    turns: [
+      {
+        shopper: "does the moonstone bracelet help with hormonal balance or menstrual problems?",
+        expect: {
+          notFallback: true,
+          maxWords: 60,
+          replyIncludes: /hormon|menstru|reproductive|cycle/i,
+          judge:
+            "The Moonstone bracelet's description says it is traditionally linked with supporting hormonal balance, reducing problems with menstrual cycles and reproductive well-being. The reply must say so briefly (2–3 short lines), framed as traditional belief rather than a medical promise.",
+        },
+      },
+      {
+        shopper: "how should I cleanse and charge it?",
+        expect: {
+          notFallback: true,
+          maxWords: 60,
+          replyIncludes: /moon/i,
+          judge: "The description says to recharge it under moonlight on a full moon. The reply must give that care advice briefly.",
+        },
+      },
+    ],
+  },
+  {
+    id: "wear-this",
+    source: "jgw-check 11:05 — 'how to wear this' fell back to leave-your-email",
+    tag: "pipeline",
+    turns: [
+      { shopper: "i need bracelet for evil eye protection", expect: { cardsInclude: OBSIDIAN } },
+      {
+        shopper: "how to wear this",
+        expect: {
+          notFallback: true,
+          cardsOnly: OBSIDIAN,
+          judge: "The reply must be about wearing the Black Obsidian bracelet (from its product data, or honestly say it is not listed) and must not show other products.",
+        },
+      },
+    ],
+  },
+  {
+    id: "repeat-after-handover",
+    source: "jgw-check 07:47 — the same question kept re-triggering the handover",
+    tag: "pipeline",
+    turns: [
+      { shopper: "¿Cuál es su política de devoluciones?", expect: { replyIncludes: /devoluci|política|nuestr/i } },
+      { shopper: "¿Cuál es su política de devoluciones?" },
+      { shopper: "¿Cuál es su política de devoluciones?" },
+      { shopper: "¿Cuál es su política de devoluciones?", expect: { noHandover: true } },
+      { shopper: "¿Cuál es su política de devoluciones?", expect: { noHandover: true } },
+    ],
+  },
+  {
+    id: "not-carried",
+    source: "jgw-check 07:48 — product the store does not sell",
+    tag: "pipeline",
+    turns: [
+      {
+        shopper: "Do you sell helicopters?",
+        expect: {
+          noCards: true,
+          judge:
+            "The store does not sell helicopters. The reply must say plainly that the store does not carry them, without inventing products. Describing the store in the merchant's own words ('apparel and accessories' is its configured persona) is fine.",
+        },
+      },
+    ],
+  },
+  {
+    id: "best-sellers",
+    source: "jgw-check 06:53 — the Best sellers rule pins cosmetics on a bracelet storefront",
+    tag: "data",
+    turns: [
+      {
+        shopper: "What are your best sellers?",
+        expect: { cardsInclude: /bracelet/i, cardsExclude: /aranya|body wash|beard|exfoliant/i },
+      },
+    ],
+  },
+  {
+    id: "return-policy",
+    source: "jgw-check 07:47 — the only return-policy knowledge is 'check our policy page'",
+    tag: "data",
+    turns: [
+      {
+        shopper: "What is your return policy?",
+        expect: {
+          noHandover: true,
+          judge: "The reply must state the store's actual return rules (e.g. a return window or conditions). Only pointing to 'the policy page' is a fail.",
+        },
+      },
+    ],
+  },
+];

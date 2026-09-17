@@ -124,8 +124,65 @@ class LiveTrace implements Trace {
   }
 }
 
+/**
+ * Storefront turns: stage names and milliseconds, nothing else.
+ *
+ * The Test AI trace is far too heavy for the hot path (it sanitizes every
+ * retrieved row), and the noop tells us nothing — which is why "the first
+ * message is slow" could only be answered by reasoning about the code and
+ * timing message rows in the database. This sits in between: one small object
+ * per turn, no payloads, no shopper text, so a slow turn can name the stage
+ * that ate the time. Read by proxy.chat.tsx, which logs only the slow ones.
+ */
+export class TimingTrace implements Trace {
+  readonly enabled = false; // no `trace` frame is ever emitted for these turns
+  private readonly startedAt = Date.now();
+  private lastAt = Date.now();
+  private readonly stages: Record<string, number> = {};
+  private readonly purposes: Record<string, number> = {};
+
+  step(layer: string): void {
+    const now = Date.now();
+    const ms = now - this.lastAt;
+    this.lastAt = now;
+    // A stage can be reported twice on a lane that loops; keep the total.
+    if (ms > 0) this.stages[layer] = (this.stages[layer] ?? 0) + ms;
+  }
+
+  countLlm(purpose: string): void {
+    this.purposes[purpose] = (this.purposes[purpose] ?? 0) + 1;
+  }
+
+  steps(): TraceStep[] {
+    return [];
+  }
+
+  summary(): TraceSummary {
+    const byPurpose = { ...this.purposes };
+    const embeddingCalls = byPurpose.embedding ?? 0;
+    const llmCalls = Object.entries(byPurpose)
+      .filter(([purpose]) => purpose !== "embedding")
+      .reduce((total, [, count]) => total + count, 0);
+    return { totalMs: Date.now() - this.startedAt, llmCalls, embeddingCalls, byPurpose };
+  }
+
+  /** Total plus the slowest stages, ready for a log context. */
+  report(): { totalMs: number; slowest: Record<string, number>; calls: Record<string, number> } {
+    const slowest = Object.fromEntries(
+      Object.entries(this.stages)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 6),
+    );
+    return { totalMs: Date.now() - this.startedAt, slowest, calls: { ...this.purposes } };
+  }
+}
+
 const NOOP = new NoopTrace();
 
 export function createTrace(enabled: boolean): Trace {
   return enabled ? new LiveTrace() : NOOP;
+}
+
+export function createTimingTrace(): TimingTrace {
+  return new TimingTrace();
 }

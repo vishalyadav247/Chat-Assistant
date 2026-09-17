@@ -1,17 +1,14 @@
 import type { ShopSettingsData } from "../lib/settings/schemas";
 import { ChipInput } from "./ChipInput";
-import { PlanBanner } from "./ui/PlanGate";
 
 // Settings → Chatbox → Satisfaction survey sub-view (spec 16, ?tab=survey):
 // format (stars/emoji), content, trigger criteria (on-resolve + keywords).
+// On every plan since 2026-09-11 — no plan banner.
 
 type SurveyData = ShopSettingsData["survey"];
 
 export function SettingsSurvey(props: {
   value: SurveyData;
-  /** Tier that unlocks the survey, or null when this plan has it. Settings
-   *  stay editable — proxy.survey is what actually withholds it. */
-  planLock: string | null;
   onChange: (value: SurveyData) => void;
   onCancel: () => void;
 }) {
@@ -28,10 +25,6 @@ export function SettingsSurvey(props: {
         />
         <s-heading>Satisfaction survey</s-heading>
       </s-stack>
-
-      <PlanBanner plan={props.planLock} heading="Satisfaction surveys need a higher plan">
-        You can set the survey up now — shoppers will start seeing it once your plan includes it.
-      </PlanBanner>
 
       <s-section heading="Survey format">
         <s-choice-list

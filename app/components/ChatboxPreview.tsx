@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { WidgetSettingsData } from "../lib/settings/schemas";
 import { useIsMobile } from "../lib/ui/use-mobile";
 import { ensureWidgetPreviewAssets } from "../lib/ui/widget-preview-assets";
+import { DEFAULT_APP_STORE_HANDLE } from "../lib/review";
 import type { ChatTeamMember } from "./ChatboxChatPage";
 
 // Live preview (spec 06) with parity BY CONSTRUCTION: it injects the exact
@@ -55,7 +56,7 @@ interface Renderer {
     survey: { format: string; intro: string; thanks: string },
     cb: unknown,
   ) => HTMLElement;
-  footer: (showBranding: boolean) => HTMLElement;
+  footer: (showBranding: boolean, url?: string) => HTMLElement;
   /** Bot identity on message bubbles (null → default chat icon, no caption). */
   setAvatar?: (identity: { url: string | null; name: string } | null) => void;
 }
@@ -163,6 +164,10 @@ export function ChatboxPreview(props: {
       widget: settings,
       availability,
       featuredFaqs,
+      // The storefront sets this from a PUBLISHED count; the preview only has
+      // the featured list, which is the right signal here. Omitting it hid the
+      // FAQ block in the preview entirely when the gate landed.
+      faqAvailable: featuredFaqs.length > 0,
       welcomeMessage: settings.welcomeMessage,
       currency: props.currency,
       showBranding,
@@ -201,6 +206,22 @@ export function ChatboxPreview(props: {
       panel.appendChild(head.el);
 
       const body = R.el("div", "cw-body");
+      // Deep links (#cc-track / #cc-chat) are handled by chat-widget.js on the
+      // storefront, which the preview never loads — so without this the
+      // merchant clicks the link they just authored, the hash lands in the
+      // admin URL, and a working feature looks broken. Bound to `body`, which
+      // is rebuilt on every render, so the listener cannot stack up. Same
+      // fallbacks as availableScreen() in the widget.
+      body.addEventListener("click", (e) => {
+        const target = e.target as HTMLElement | null;
+        const anchor = target?.closest?.("a[href^='#cc-']");
+        if (!anchor) return;
+        e.preventDefault();
+        const key = (anchor.getAttribute("href") || "").slice(1).toLowerCase();
+        if (key === "cc-track" || key === "cc-tracking") setScreen(settings.orderTracking ? "tracking" : "home");
+        else if (key === "cc-chat") setScreen(settings.liveChat ? "chat" : "home");
+        else setScreen("home");
+      });
       if (screen === "home") {
         body.appendChild(
           R.homeScreen(config, {}, {
@@ -246,7 +267,7 @@ export function ChatboxPreview(props: {
       panel.appendChild(body);
 
       if (screen === "chat") panel.appendChild(R.inputBar({}).el);
-      panel.appendChild(R.footer(showBranding));
+      panel.appendChild(R.footer(showBranding, `https://apps.shopify.com/${DEFAULT_APP_STORE_HANDLE}`));
       root.appendChild(panel);
     }
 

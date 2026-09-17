@@ -1,6 +1,7 @@
 import type { Guardrails, Persona } from "@prisma/client";
 import db from "../../db.server";
 import { requireShopId } from "../tenancy.server";
+import { hasFeature } from "../billing/plans.server";
 import {
   widgetSettingsSchema,
   shopSettingsSchema,
@@ -59,16 +60,24 @@ export async function getShopConfig(shopId: string): Promise<ShopConfig> {
     db.handoverConfig.findUnique({ where: { shopId } }),
   ]);
 
+  const plan = shop?.plan ?? "free";
+  const widget = widgetSettingsSchema.parse(widgetRow?.settings ?? {});
+  // Plan gate (order_tracking), applied HERE so every reader — widget config,
+  // the pipeline's track_order action, the tracking screen — sees the EFFECTIVE
+  // value. The stored switch is untouched: after an upgrade it comes back as the
+  // merchant left it.
+  widget.orderTracking = widget.orderTracking && hasFeature(plan, "order_tracking");
+
   const config: ShopConfig = {
     shopId,
-    plan: shop?.plan ?? "free",
+    plan,
     aiEnabled: shop?.aiEnabled ?? true,
     currency: shop?.currency ?? "USD",
     timezone: shop?.timezone ?? "UTC",
     shopName: shop?.name ?? "",
     persona,
     guardrails,
-    widget: widgetSettingsSchema.parse(widgetRow?.settings ?? {}),
+    widget,
     settings: shopSettingsSchema.parse(settingsRow?.settings ?? {}),
     handover: handoverConfigSchema.parse(handoverRow?.config ?? {}),
   };

@@ -1,18 +1,29 @@
 import OpenAI from "openai";
 import { env } from "../env.server";
-import { getAiOverrides } from "../platform/platform-settings.server";
-import { runtimeConfig } from "../platform/runtime-config.server";
+import { getAiOverrides } from "../admin/admin-settings.server";
+import { runtimeConfig } from "../admin/runtime-config.server";
 import { samplingParams, supportsJsonObject } from "./model-compat";
 import { recordLlmUsage, type LlmPurpose } from "./usage.server";
-import type { ChatMessage, ChatOptions, LlmCallContext, LlmProvider, ShopContext } from "./types";
-import type { AiOverrides } from "../platform/platform-settings.server";
+import type {
+  AgentEvent,
+  AgentMessage,
+  ChatMessage,
+  ChatOptions,
+  LlmCallContext,
+  LlmProvider,
+  ShopContext,
+  ToolCall,
+  ToolDefinition,
+} from "./types";
+import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import type { AiOverrides } from "../admin/admin-settings.server";
 import { logError, logWarn } from "../log.server";
 
 // The ONLY file that imports the openai SDK.
-// The chat MODEL can be overridden globally from the /platform dashboard
+// The chat MODEL can be overridden globally from the /admin dashboard
 // (spec 19): per-call `options.model` → dashboard override → env CHAT_MODEL.
 //
-// temperature/maxTokens resolve differently, on purpose (QA fix 2026-08-21):
+// temperature/maxTokens resolve differently, on purpose:
 // the dashboard override applies only to calls whose params are NOT pinned.
 // See `resolveSampling` — an operator must not be able to de-tune strict-JSON
 // routing for every tenant from a text box.
@@ -20,10 +31,15 @@ import { logError, logWarn } from "../log.server";
 // Embeddings deliberately stay on env EMBEDDING_MODEL (vectors are pinned to
 // 1536 dims; switching embedding models requires a re-embed migration, not a
 // toggle — `scripts/reembed-products.ts`).
-// Every call reports exact token usage to llm_usage_daily (spec 19 · platform
+// Every call reports exact token usage to llm_usage_daily (spec 19 · admin
 // usage analytics) — including streamed replies, via stream_options.
 
 const EMBED_BATCH_LIMIT = 100;
+
+/** Per request, until the response starts (streams then run to completion). */
+const REQUEST_TIMEOUT_MS = 30_000;
+/** Whole agent round including the stream body. */
+const STREAM_HARD_LIMIT_MS = 45_000;
 
 const DEFAULT_TEMPERATURE = 0.3;
 const DEFAULT_MAX_TOKENS = 300;
@@ -99,11 +115,18 @@ function report(
 export class OpenAiProvider implements LlmProvider {
   private cached: { key: string; client: OpenAI } | null = null;
 
-  /** Rebuilt when the operator rotates the key at /platform/settings. */
+  /** Rebuilt when the operator rotates the key at /admin/settings. */
   private get client(): OpenAI {
     const apiKey = runtimeConfig().openaiApiKey;
     if (!this.cached || this.cached.key !== apiKey) {
-      this.cached = { key: apiKey, client: new OpenAI({ apiKey }) };
+      // The SDK defaults (10-minute timeout, 2 internal retries) stacked with
+      // withBackoff below let one stuck request hold a shopper's reply for
+      // minutes — and an agent turn makes several calls. Retries live in ONE
+      // place (withBackoff) and every request is time-boxed.
+      this.cached = {
+        key: apiKey,
+        client: new OpenAI({ apiKey, maxRetries: 0, timeout: REQUEST_TIMEOUT_MS }),
+      };
     }
     return this.cached.client;
   }
@@ -144,12 +167,114 @@ export class OpenAiProvider implements LlmProvider {
         stream_options: { include_usage: true },
       }),
     );
-    for await (const chunk of stream) {
-      // The usage chunk carries no choices; record it and keep going.
-      if (chunk.usage) report(ctx, model, chunk.usage);
-      const token = chunk.choices[0]?.delta?.content;
-      if (token) {
-        yield token;
+    let reported = false;
+    let emittedChars = 0;
+    try {
+      for await (const chunk of stream) {
+        // The usage chunk carries no choices; record it and keep going.
+        if (chunk.usage) {
+          report(ctx, model, chunk.usage);
+          reported = true;
+        }
+        const token = chunk.choices[0]?.delta?.content;
+        if (token) {
+          emittedChars += token.length;
+          yield token;
+        }
+      }
+    } finally {
+      // The usage-only chunk arrives LAST, so a consumer that stops iterating
+      // (widget closed, navigation) never reported anything — the most
+      // expensive purpose under-counted under real abandonment rates (spec 23
+      // §4.7). Record a ~4-chars-per-token estimate instead of nothing.
+      if (!reported) {
+        const promptChars = messages.reduce((sum, m) => sum + m.content.length, 0);
+        report(ctx, model, {
+          prompt_tokens: Math.ceil(promptChars / 4),
+          completion_tokens: Math.ceil(emittedChars / 4),
+        });
+        try {
+          stream.controller.abort();
+        } catch {
+          // already closed
+        }
+      }
+    }
+  }
+
+  async *agentStream(
+    messages: AgentMessage[],
+    tools: ToolDefinition[],
+    ctx: LlmCallContext,
+    options: ChatOptions = {},
+  ): AsyncIterable<AgentEvent> {
+    const ai = await getAiOverrides();
+    const model = options.model || ai.chatModel || env().CHAT_MODEL;
+    // The client timeout stops once the response starts; a stream that stalls
+    // mid-way needs its own hard limit, or one agent round could hold a
+    // shopper's reply indefinitely.
+    const stream = await withBackoff(() =>
+      this.client.chat.completions.create({
+        model,
+        messages: messages.map(toOpenAiMessage),
+        // Tool arguments are parsed by code, so the operator's global sampling
+        // lever must not reach them (same reasoning as router calls).
+        ...resolveSampling(model, ctx, { pinnedParams: true, ...options }, ai),
+        ...(tools.length > 0
+          ? {
+              tools: tools.map((t) => ({
+                type: "function" as const,
+                function: { name: t.name, description: t.description, parameters: t.parameters },
+              })),
+            }
+          : {}),
+        stream: true,
+        stream_options: { include_usage: true },
+      }, { signal: AbortSignal.timeout(STREAM_HARD_LIMIT_MS) }),
+    );
+    // Tool-call deltas arrive in fragments keyed by index: id and name first,
+    // then the JSON arguments a few characters at a time.
+    const pending = new Map<number, ToolCall>();
+    let reported = false;
+    let emittedChars = 0;
+    try {
+      for await (const chunk of stream) {
+        if (chunk.usage) {
+          report(ctx, model, chunk.usage);
+          reported = true;
+        }
+        const delta = chunk.choices[0]?.delta;
+        if (!delta) continue;
+        if (delta.content) {
+          emittedChars += delta.content.length;
+          yield { type: "text", text: delta.content };
+        }
+        for (const part of delta.tool_calls ?? []) {
+          const call = pending.get(part.index) ?? { id: "", name: "", arguments: "" };
+          if (part.id) call.id = part.id;
+          if (part.function?.name) call.name += part.function.name;
+          if (part.function?.arguments) call.arguments += part.function.arguments;
+          pending.set(part.index, call);
+        }
+      }
+      if (pending.size > 0) {
+        yield {
+          type: "tool_calls",
+          calls: [...pending.entries()].sort((a, b) => a[0] - b[0]).map(([, call]) => call),
+        };
+      }
+    } finally {
+      if (!reported) {
+        const promptChars = messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
+        report(ctx, model, {
+          prompt_tokens: Math.ceil(promptChars / 4),
+          completion_tokens: Math.ceil(emittedChars / 4),
+        });
+        try {
+          stream.controller.abort();
+        } catch {
+          // already closed
+        }
       }
     }
   }
@@ -202,6 +327,29 @@ export class OpenAiProvider implements LlmProvider {
   }
 }
 
+/** Provider-neutral agent turn → OpenAI chat message. */
+function toOpenAiMessage(message: AgentMessage): ChatCompletionMessageParam {
+  if (message.role === "tool") {
+    return { role: "tool", tool_call_id: message.toolCallId, content: message.content };
+  }
+  if (message.role === "assistant") {
+    return {
+      role: "assistant",
+      content: message.content,
+      ...(message.toolCalls && message.toolCalls.length > 0
+        ? {
+            tool_calls: message.toolCalls.map((c) => ({
+              id: c.id,
+              type: "function" as const,
+              function: { name: c.name, arguments: c.arguments },
+            })),
+          }
+        : {}),
+    };
+  }
+  return { role: message.role, content: message.content };
+}
+
 /** Unit-normalize so cosine similarity is a plain dot product / pgvector <=> works uniformly. */
 function normalize(vector: number[]): number[] {
   const norm = Math.sqrt(vector.reduce((sum, x) => sum + x * x, 0)) || 1;
@@ -210,11 +358,10 @@ function normalize(vector: number[]): number[] {
 
 /**
  * Retry 429s and 5xx with exponential backoff. Applied to EVERY OpenAI call
- * that the shopper waits on — chat, chat streaming and embeddings (QA fix
- * 2026-08-21: chat was previously unprotected, so a single rate-limit blip
- * surfaced in the widget as a failed reply).
+ * that the shopper waits on — chat, chat streaming and embeddings — so a
+ * single rate-limit blip never surfaces in the widget as a failed reply.
  */
-async function withBackoff<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
+async function withBackoff<T>(fn: () => Promise<T>, retries = 2): Promise<T> {
   let delay = 1000;
   for (let attempt = 0; ; attempt++) {
     try {

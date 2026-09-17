@@ -218,7 +218,7 @@ export function ChatboxChatPage(props: {
             onChange({ ...value, starters: { ...starters, enabled: e.currentTarget.checked } })
           }
         />
-        {/* Question-only rows with light dividers (user request 2026-08-13);
+        {/* Question-only rows with light dividers;
             the answer stays behind the edit modal. One wrapper div so the
             section s-stack gap doesn't spread the rows apart. */}
         <div>
@@ -370,7 +370,7 @@ export function ChatboxChatPage(props: {
               details="Description helps to convey the purpose of collecting user information"
               onInput={(e) => setPrechat({ description: e.currentTarget.value })}
             />
-            {/* Checkboxes (user request 2026-08-12 — replaces the add/remove
+            {/* Checkboxes (not an add/remove
                 dropdown): tick a field to collect it. Email is always on. */}
             <s-stack gap="small">
               <s-text type="strong">Information to be collected</s-text>

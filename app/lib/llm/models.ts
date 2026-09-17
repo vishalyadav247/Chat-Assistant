@@ -1,8 +1,8 @@
-// The chat models the platform console offers (spec 19). Client-safe: pure
+// The chat models the admin console offers (spec 19). Client-safe: pure
 // data, imported by the settings UI and by the compatibility check script.
 //
 // Every entry here MUST be request-compatible with app/lib/llm/openai.server.ts
-// and priced in app/lib/platform/llm-pricing.ts, so picking any of them from
+// and priced in app/lib/admin/llm-pricing.ts, so picking any of them from
 // the dropdown works with no code change. Reasoning models (o-series, gpt-5)
 // are deliberately absent: the provider can now talk to them, but they reject
 // sampling params, cost up to ~13x more on output, and are markedly slower —
@@ -11,7 +11,7 @@
 // Imports below are pure (no DB, no SDK) so this file stays client-safe.
 
 import { isReasoningModel } from "./model-compat";
-import { priceFor } from "../platform/llm-pricing";
+import { priceFor } from "../admin/llm-pricing";
 
 export interface ChatModelOption {
   id: string;
@@ -21,19 +21,19 @@ export interface ChatModelOption {
 }
 
 export const CHAT_MODEL_OPTIONS: ChatModelOption[] = [
-  { id: "gpt-4o-mini", label: "gpt-4o-mini", note: "Current default. Cheapest, and the only model verified 16/16 on the golden set." },
-  { id: "gpt-4.1-nano", label: "gpt-4.1-nano", note: "Cheaper than 4o-mini on input; smallest of the 4.1 family." },
-  { id: "gpt-4.1-mini", label: "gpt-4.1-mini", note: "~2.7x the cost of 4o-mini. Scored 15/16 — misroutes one follow-up (decisions log)." },
-  { id: "gpt-4o", label: "gpt-4o", note: "Stronger, ~17x the output cost of 4o-mini." },
-  { id: "gpt-4.1", label: "gpt-4.1", note: "Strongest of the family, ~13x the output cost of 4o-mini." },
+  { id: "gpt-4.1-mini", label: "gpt-4.1-mini", note: "Default (spec 24). 87% on the real-conversation eval; ~$1 per 1,000 shopper messages." },
+  { id: "gpt-4.1", label: "gpt-4.1", note: "Most accurate: 97% on the real-conversation eval, same speed, ~5x the cost of 4.1-mini." },
+  { id: "gpt-4o-mini", label: "gpt-4o-mini", note: "Cheapest. Not measured with the AI agent — run npm run eval:conversations before using it." },
+  { id: "gpt-4.1-nano", label: "gpt-4.1-nano", note: "Cheaper than 4o-mini on input. Not measured with the AI agent." },
+  { id: "gpt-4o", label: "gpt-4o", note: "Stronger, ~17x the output cost of 4o-mini. Not measured with the AI agent." },
 ];
 
 export const CHAT_MODEL_IDS = CHAT_MODEL_OPTIONS.map((m) => m.id);
 
 // ── "Custom…" model ids ─────────────────────────────────────────────────────
-// The free-text field at /platform/ai used to accept ANY string, so a typo or
+// The free-text field at /admin/ai used to accept ANY string, so a typo or
 // a pasted sentence became every tenant's chat model and only showed up as a
-// 400 in the widget (and as "unpriced" rows in /platform/usage). Two gates,
+// 400 in the widget (and as "unpriced" rows in /admin/usage). Two gates,
 // both pure so the route and the check script share them:
 //   chatModelError()   — refuse to save (it cannot be a model id)
 //   chatModelWarning() — save, but say plainly what will be off

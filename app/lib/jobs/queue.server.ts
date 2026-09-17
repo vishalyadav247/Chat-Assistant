@@ -68,9 +68,40 @@ export function startQueueOnBoot(): void {
   }
 }
 
-/** Enqueue a job (webhook handlers call ONLY this — fast, <10ms). */
-export async function enqueue(name: string, data: object): Promise<void> {
+/**
+ * Enqueue a job (webhook handlers call ONLY this — fast, <10ms).
+ *
+ * `options` passes pg-boss 12 SendOptions through (types in
+ * node_modules/pg-boss/dist/types.d.ts): `group` for per-key serial processing,
+ * `singletonKey` + `singletonSeconds` to throttle duplicates (send returns null
+ * for a throttled duplicate — not an error).
+ */
+export async function enqueue(
+  name: string,
+  data: object,
+  options?: { group?: { id: string }; singletonKey?: string; singletonSeconds?: number; startAfter?: number },
+): Promise<boolean> {
   const { boss, started } = getQueue();
   await started;
-  await boss.send(name, data);
+  // send resolves null when a singleton/throttle rule refused the duplicate.
+  return (await boss.send(name, data, options ?? {})) !== null;
+}
+
+/** One manual sync per store + type per window (QA-U1). */
+export const SYNC_THROTTLE_SECONDS = 60;
+
+/**
+ * Enqueue a merchant-triggered full sync, throttled per store + job type
+ * (QA-U1): a double click, or Sync now on the dashboard right after the
+ * Training tab's button, used to queue a second complete re-read of the whole
+ * catalogue. pg-boss `singletonKey` + `singletonSeconds` keeps one job per key
+ * per window; a throttled duplicate is simply not queued. Returns whether a job
+ * was actually queued.
+ */
+export async function enqueueSync(name: string, shopDomain: string): Promise<boolean> {
+  return enqueue(
+    name,
+    { shopDomain },
+    { singletonKey: `${shopDomain}:${name}`, singletonSeconds: SYNC_THROTTLE_SECONDS },
+  );
 }

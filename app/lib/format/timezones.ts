@@ -8,7 +8,7 @@
 // The list is built ON THE SERVER and passed through the loader on purpose:
 // an offset depends on today's DST state, so computing it independently in
 // the SSR pass and again on hydration risks a mismatch — the failure mode
-// this app has already been bitten by (decisions log 2026-08-19).
+// this app has already been bitten by.
 
 export interface TimezoneOption {
   value: string;

@@ -14,6 +14,16 @@ export const ANALYTICS_RANGE_LABELS: Record<AnalyticsRange, string> = {
   "12m": "Last 12 months",
 };
 
+/** Days behind each range. The ONE definition — reports.server, dashboard.server
+ *  and the operator's plan editor all read it, so `analytics_range_days` can
+ *  only ever be set to a number the range picker can actually use. */
+export const ANALYTICS_RANGE_DAYS: Record<AnalyticsRange, number> = {
+  "7d": 7,
+  "30d": 30,
+  "3m": 90,
+  "12m": 365,
+};
+
 export interface SeriesPoint {
   date: string; // yyyy-mm-dd
   ai: number;

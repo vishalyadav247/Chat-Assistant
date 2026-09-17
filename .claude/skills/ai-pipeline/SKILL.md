@@ -5,6 +5,14 @@ description: Conventions for the AI agent pipeline — prompts, grounding, thres
 
 # AI pipeline conventions
 
+> **Since 2026-09-15 the default engine is the tool-using AI agent (spec 24,
+> `app/lib/pipeline/agent.server.ts`, explained in `docs/AI-AGENT.md`).** The router + lanes
+> described below run only with `AI_AGENT_MODE=pipeline` (rollback). For the agent: fix
+> misbehaviour through tools, data and the category-neutral `AGENT_SYSTEM` — never per-phrase
+> prompt rules — and measure every prompt/tool/model change with `npm run eval:conversations`
+> (real multi-turn conversations, pass rates over runs). The golden set pins the pipeline engine.
+> Grounding, shop-scoping, key handling and the privacy rules below still apply to both engines.
+
 Spec: `.claude/specs/03-ai-pipeline.md`. Reference implementation: `.claude/resources/demo/chatconvert_ui.py` (validated); prompts: `.claude/resources/demo/prompts.json` (ported verbatim to `app/lib/pipeline/prompts.ts`, which is the live tuning surface). **The design source is not retained** — it shipped; the running app is the reference. (In git history before commit 36b7161 if ever needed.)
 
 ## Iron rules
@@ -19,10 +27,13 @@ Spec: `.claude/specs/03-ai-pipeline.md`. Reference implementation: `.claude/reso
 - Prompts live ONLY in `app/lib/pipeline/prompts.ts` — never inline in handlers. Changing one is a tuning event: run the golden-set eval first, note it in PROGRESS.md.
 - Thresholds come from the shop's `guardrails` row (defaults: minMeaningScore 0.30, curatedMatchThreshold 0.80, curatedBorderline 0.65, bannedMatchThreshold 0.35) — never hard-code in logic.
 - Router: temp 0, `response_format: json_object`, ~160 max tokens. Parse failure → retry once → chat-lane clarify (never default to buy — known demo bug).
-- Generation temps (demo-validated, chatconvert_ui.py chat_call): chat 0.5 (60 tok), RAG 0.3 (220 tok), recommend 0.3 (90 tok — compact, no titles/prices in text; user decision 2026-08-18).
+- Generation temps (demo-validated, chatconvert_ui.py chat_call): chat 0.5 (60 tok), RAG 0.3 (220 tok), recommend 0.3 (110 tok = the 90-token compact reply + the PICKS line; no titles/prices in text; user decision 2026-08-18).
 - History: last 10 messages verbatim for BOTH router and generation + rolling summary; the current shopper message is excluded from the window by id and appended once (`loadHistory(..., { excludeMessageId })`).
-- Router prompt: BANNED TOPICS / STORE SCOPE lines only when configured (never a generic default scope — it over-triggers off_topic).
-- Product search (accuracy batch 2026-08-17): keyword = OR of router keywords (ANY qualifies, weighted title>type/tags>description) + lower tier of the shopper's own words; vector = full-text product embedding (`productEmbeddingText` = title · type · vendor · tags · description · enabled metafields text); fused by reciprocal rank; the model gets `{title, price, snippet}` per candidate (snippet = type · tags · `ts_headline` fragment over description+metafields · enabled metafields ≤300 chars · matched words). Cards = top-4 fused. Descriptions are never truncated in the index/embedding.
+- Reply language (2026-09-03): `languageInstruction(persona)` is appended to the persona prompt for every generation lane; available on every plan (multi_language un-gated the same day). Auto-detect ON → mirror the shopper's LATEST message (switches mid-chat); OFF → "Reply ONLY in {default} …" (the soft phrasing loses to mirroring). Router keywords are requested in English so non-Latin messages still reach the keyword lane. Canned strings and cross-language RAG recall are known limitations.
+- Router prompt: BANNED TOPICS / STORE SCOPE lines only when configured (never a generic default scope — it over-triggers off_topic). The router may only ENFORCE what the merchant configured: `blocked` needs configured topics + a `blocked_reason` naming one (`configuredTopicNamedBy`) + a yes/no confirm call (`blockConfirmUser`, "advice about the topic, not a product?"); `off_topic` needs a non-empty persona.scope. gpt-4o-mini blocks "something that blocks rfid" as "weapons" about half the time — the confirm is what makes that harmless (embedding similarity can't: 0.23 there vs 0.28 for a real medical-advice paraphrase).
+- Product search (accuracy batch 2026-08-17, field-aware 2026-09-01): keyword = OR of router keywords (ANY qualifies) + lower tier of the shopper's own words; **coverage is field-aware** — a word in title/type/vendor/tags counts in full, a word only in the description/metafields counts `DESC_WEIGHT` 0.4 (long SEO prose names other products' colours/stones: "pairs with black outfits"); vector = full-text product embedding (`productEmbeddingText` = title · type · vendor · tags · description · enabled metafields text); fused coverage-first then reciprocal rank, with 3 of the 8 slots reserved for vector-lane rows. The model gets `{id, title, price, snippet}` per candidate — `price` pre-formatted in the shop's currency (`formatMoney`, "₹1,499"; a bare number reads as dollars) — (snippet = type · tags · `ts_headline` fragment over description+metafields for all query words · enabled metafields ≤300 chars · `in title/type/tags:` / `in description:` word lists). Descriptions are never truncated in the index/embedding.
+- Model picks (`picks.server.ts`, 2026-09-01): the reply opens with `PICKS: 3, 1` / `PICKS: none`; code strips the line from the stream and builds the cards from it (allow-list ids only, ≤4, then cross-sell) — still 2 chat calls per buy turn. Guards: literal-complete match (every router keyword in some head), or the top candidate alone (within its tier) satisfying every router keyword anywhere ("february" lives in the prose) ⇒ picks can only narrow the mechanical tier (`selectRelevant`, `TIER_MARGIN` 0.5); `none` stands only when no candidate has a router keyword in its head; no/unparseable line ⇒ mechanical tier. Browse / hand-picked pools ignore picks.
+- Question → catalogue rescue: a `question` turn with nothing grounded (no knowledge ≥ minMeaningScore, no discount/collection facts) runs product search over the shopper's own words; if the best product contains a shopper word AND the vector lane agrees, the buy lane takes over (keywords []); `PICKS: none` there = fallbackMessage + unresolved queue, exactly like the RAG miss.
 - Handover defaults (schemas.ts): repeatedQuestion 3, cannotAnswer 3, aiWhileWaiting "always"; explicit-ask patterns need an intent verb (a bare "customer service" is a question).
 
 ## Cost budget (enforced in tests)
@@ -50,8 +61,11 @@ Before merging any prompt/threshold/model/search change, run the eval script ove
 | "show me some jackets" → "under $100" → "the waterproof one?" | 3-turn buy, cards ≤ $100 incl. a waterproof item |
 | "do you ship to Canada?" ×2 in one conversation | question both times (no repeated-question handover at default 3) |
 | history window | current message excluded, ends with assistant turn, router == generation window |
+| "show me black bracelets" | buy → card = Black Onyx Beaded Bracelet; Rose Quartz ("pairs with black outfits") must NOT be carded |
+| "do you have selenite bracelets" | buy → card = Selenite Crystal Bracelet; Rose Quartz ("recharge on a selenite plate") must NOT be carded |
+| "which bracelet is good for love" | buy (router, or question → catalogue rescue) → card = Rose Quartz |
 
-Assert path via logged `sourceLayer`/intent, not reply text. Add a case whenever a real-world miss is fixed.
+Assert path via logged `sourceLayer`/intent, not reply text. Add a case whenever a real-world miss is fixed. For a live store, `npm run trace -- "<message>" --shop <domain>` prints the whole decision trail (router output, ranked candidates with coverage/headTerms/vector score, the PICKS line, the cards) — the shop's AI toggle must be on for the turn to run.
 
 ## Prompt-injection posture
 

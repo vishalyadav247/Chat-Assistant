@@ -33,7 +33,7 @@ export async function pushConfigured(): Promise<boolean> {
 }
 
 /** Send one payload to every subscription of the given members. Prunes dead
- *  endpoints (404/410) and stamps lastUsedAt on success. */
+ *  endpoints (404/410); any other failure is logged and the endpoint kept. */
 export async function sendPushToMembers(shopId: string, memberIds: string[], payload: PushPayload): Promise<{ sent: number; pruned: number }> {
   requireShopId(shopId);
   if (memberIds.length === 0 || !(await pushConfigured())) return { sent: 0, pruned: 0 };
@@ -50,7 +50,6 @@ export async function sendPushToMembers(shopId: string, memberIds: string[], pay
           topic: payload.tag.slice(0, 32).replace(/[^A-Za-z0-9_-]/g, ""),
         });
         sent += 1;
-        await db.pushSubscription.update({ where: { id: sub.id }, data: { lastUsedAt: new Date(), failedAt: null } }).catch(() => undefined);
       } catch (error) {
         const status = (error as { statusCode?: number })?.statusCode;
         if (status === 404 || status === 410) {
@@ -58,7 +57,6 @@ export async function sendPushToMembers(shopId: string, memberIds: string[], pay
           await db.pushSubscription.delete({ where: { id: sub.id } }).catch(() => undefined);
         } else {
           logError("push_send_failed", (error as Error)?.message, { status, shopId });
-          await db.pushSubscription.update({ where: { id: sub.id }, data: { failedAt: new Date() } }).catch(() => undefined);
         }
       }
     }),

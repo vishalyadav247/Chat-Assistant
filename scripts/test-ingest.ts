@@ -14,6 +14,12 @@ for (const line of readFileSync(join(process.cwd(), ".env"), "utf-8").split(/\r?
     process.env[match[1]] = match[2].replace(/^["']|["']$/g, "");
   }
 }
+// The store-info chain (instructions/settings save → files.server) imports
+// shopify.server, which throws on an empty app URL / API key (QA-T1).
+process.env.SHOPIFY_API_KEY ||= "qa-placeholder-key";
+process.env.SHOPIFY_API_SECRET ||= "qa-placeholder-secret";
+process.env.SHOPIFY_APP_URL ||= "http://localhost:3000";
+process.env.SCOPES ||= "read_products";
 
 const DEV_SHOP_DOMAIN = "dev-shop.myshopify.com";
 let passed = 0;
@@ -44,15 +50,12 @@ async function main() {
   const { chunkText, ingestSource, syncFaqKnowledge } = await import(
     "../app/lib/ingestion/knowledge-ingest.server"
   );
-  const { safeFetch, crawl } = await import("../app/lib/ingestion/fetchers.server");
+  const { safeFetch, fetchPageText } = await import("../app/lib/ingestion/fetchers.server");
   const {
     createSource,
     deleteSource,
     resyncSource,
     listSources,
-    listSuggested,
-    approveSuggested,
-    dismissSuggested,
     parseCsvContent,
     QuotaError,
   } = await import("../app/lib/ingestion/sources.server");
@@ -95,11 +98,11 @@ async function main() {
     /private|reserved|blocked/i,
   );
 
-  // Positive path: public fetch + page-scope crawl.
+  // Positive path: public fetch + single-page fetch (the only URL mode since spec 22).
   const example = await safeFetch("https://example.com/");
   ok("public fetch works", /Example Domain/i.test(example.text));
-  const crawled = await crawl("https://example.com/", "page", 5);
-  ok("crawl scope=page → 1 page", crawled.length === 1 && crawled[0].title.length > 0, crawled[0]?.title);
+  const page = await fetchPageText("https://example.com/");
+  ok("single-page fetch → titled text", page.title.length > 0 && page.text.length > 0, page.title);
 
   // ── DB round-trips (acceptance 1) ─────────────────────────────────────────
   console.log("\n[round-trips]");
@@ -111,19 +114,23 @@ async function main() {
   const shopId = shop.id;
   const createdSourceIds: string[] = [];
 
-  // manual
-  const manual = await createSource(
-    shopId,
-    {
+  // manual (LEGACY type — creation retired 2026-09-10, FAQ consolidation;
+  // rows are seeded directly via db to prove old rows still ingest + retrieve)
+  const manual = await db.dataSource.create({
+    data: {
+      shopId,
       type: "manual",
-      question: "What is the ChatConvert test warranty period?",
-      synonyms: ["guarantee length", "warranty duration"],
-      answer: "All ChatConvert test products include a 2-year zorblatt warranty covering manufacturing defects.",
+      name: "What is the ChatConvert test warranty period?",
+      status: "pending",
+      metadata: {
+        question: "What is the ChatConvert test warranty period?",
+        synonyms: ["guarantee length", "warranty duration"],
+        answer: "All ChatConvert test products include a 2-year zorblatt warranty covering manufacturing defects.",
+      },
     },
-    { enqueueIngest: false },
-  );
+  });
   createdSourceIds.push(manual.id);
-  ok("manual source created pending", manual.status === "pending");
+  ok("legacy manual row created pending", manual.status === "pending");
   await ingestSource(shopId, manual.id);
   const manualAfter = await db.dataSource.findFirst({ where: { id: manual.id, shopId } });
   ok("manual ingested → active", manualAfter?.status === "active" && (manualAfter?.chunkCount ?? 0) >= 1, `chunks=${manualAfter?.chunkCount}`);
@@ -197,7 +204,10 @@ async function main() {
   ok("csv bad row reported", withHeader.badRows.length === 1 && withHeader.badRows[0].reason === "missing question");
   const noHeader = parseCsvContent('"How long do gliftors last?","About 10 years with care."\n"Are gliftors waterproof?","Only the marine edition."');
   ok("csv headerless mapped", !noHeader.hadHeader && noHeader.rows.length === 2);
-  const csvSource = await createSource(shopId, { type: "csv", name: "Gliftor FAQ import", rows: noHeader.rows }, { enqueueIngest: false });
+  // LEGACY csv type — created directly via db (creation retired 2026-09-10).
+  const csvSource = await db.dataSource.create({
+    data: { shopId, type: "csv", name: "Gliftor FAQ import", status: "pending", metadata: { rows: noHeader.rows } },
+  });
   createdSourceIds.push(csvSource.id);
   await ingestSource(shopId, csvSource.id);
   const csvAfter = await db.dataSource.findFirst({ where: { id: csvSource.id, shopId } });
@@ -230,45 +240,17 @@ async function main() {
   );
   createdSourceIds.push(pdfSource.id);
   const pdfMeta = (pdfSource.metadata ?? {}) as { error?: string };
-  ok("pdf → status error 'parser pending'", pdfSource.status === "error" && /parser pending/i.test(pdfMeta.error ?? ""), pdfMeta.error);
+  // The PDF parser shipped after spec 04 ("parser pending" era) — a broken
+  // PDF now fails with a real read error instead.
+  ok("pdf with invalid bytes → status error", pdfSource.status === "error" && /pdf/i.test(pdfMeta.error ?? ""), pdfMeta.error);
 
   // quota seams (acceptance 4) — open mode: seams called, creation passes
   console.log("\n[quota seams]");
-  ok("QuotaError shape", new QuotaError("manual_qas", 10, 10).message.includes("manual_qas"));
+  ok("QuotaError shape", new QuotaError("file_uploads", 10, 10).message.includes("file_uploads"));
   const list = await listSources(shopId);
-  ok("listSources excludes suggested + shows created", list.length >= createdSourceIds.length);
+  ok("listSources shows created", list.length >= createdSourceIds.length);
   const manualOnly = await listSources(shopId, "manual");
-  ok("listSources type filter", manualOnly.every((s) => s.type === "manual"));
-
-  // suggested queue mechanics
-  console.log("\n[suggested queue]");
-  const suggested1 = await db.dataSource.create({
-    data: {
-      shopId,
-      type: "manual",
-      name: "Do you offer plumbus engraving?",
-      status: "suggested",
-      metadata: { question: "Do you offer plumbus engraving?", answer: "Yes — free plumbus engraving on orders over $50." },
-    },
-  });
-  const suggested2 = await db.dataSource.create({
-    data: {
-      shopId,
-      type: "manual",
-      name: "dismiss me",
-      status: "suggested",
-      metadata: { question: "dismiss me", answer: "n/a" },
-    },
-  });
-  const queue = await listSuggested(shopId);
-  ok("listSuggested shows queue", queue.some((q) => q.id === suggested1.id) && queue.some((q) => q.id === suggested2.id));
-  const approved = await approveSuggested(shopId, suggested1.id, { enqueueIngest: false });
-  createdSourceIds.push(approved.id);
-  ok("approve → active manual source", approved.status === "active" && approved.type === "manual" && (approved.chunkCount ?? 0) >= 1);
-  const plumbusHits = await knowledgeSearch(shopId, await embedText("can I get my plumbus engraved?", { shopId }), 3);
-  ok("approved suggestion retrievable", plumbusHits.some((h) => /plumbus/i.test(h.topic)), `top: ${plumbusHits[0]?.topic}`);
-  ok("dismiss deletes", await dismissSuggested(shopId, suggested2.id));
-  ok("dismissed gone", (await listSuggested(shopId)).every((q) => q.id !== suggested2.id));
+  ok("listSources type filter (legacy manual rows still listed)", manualOnly.every((s) => s.type === "manual"));
 
   // FAQ bridge
   console.log("\n[faq bridge]");

@@ -14,19 +14,27 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useAppBridge } from "../lib/ui/surface";
 import db from "../db.server";
 import { resolveShopId } from "../lib/tenancy.server";
+import { runtimeConfig } from "../lib/admin/runtime-config.server";
 import {
+  GATED_FEATURES,
   PLANS,
-  displayQuota,
+  QUOTA_DIMENSIONS,
+  isUnlimitedQuota,
+  offeredPlans,
   overageRate,
+  type GatedFeature,
   type PlanDefinition,
+  type QuotaDimension,
 } from "../lib/billing/plans.server";
-import { currentUsage, overageBillable } from "../lib/billing/usage.server";
+import { currentUsage, overageBillable, usageStatus } from "../lib/billing/usage.server";
+import { invalidateUsageBalance } from "../lib/billing/usage-cap.server";
 import {
   downgradeToFree,
   getBillingProvider,
   isBillingInterval,
   isPaidPlan,
-  yearlyTotal,
+  nextUsageCap,
+  raiseUsageCap,
 } from "../lib/billing/shopify-billing.server";
 import { QuotaMeter } from "../components/QuotaMeter";
 import {
@@ -40,7 +48,7 @@ import {
   recordPendingRedemption,
   validatePromoCode,
 } from "../lib/billing/promo-codes.server";
-import { PlanDiscountCard, PlanDoneForYouCard } from "../components/PlanExtras";
+import { PlanDiscountCard, PlanSupportCard } from "../components/PlanExtras";
 import { PlanFaq } from "../components/PlanFaq";
 import { trialDaysByPlan } from "../lib/billing/trial.server";
 import { requireShopAccess } from "../lib/access.server";
@@ -67,41 +75,88 @@ const PLAN_DESCRIPTIONS: Record<string, string> = {
   plus: "For large stores with high-volume conversations and unlimited AI capabilities.",
 };
 
-/** Design bullet copy with all numbers taken from the plan matrix. */
+const n = (value: number) => value.toLocaleString("en-US");
+const amount = (value: number) => (isUnlimitedQuota(value) ? "Unlimited" : n(value));
+
+/** One line per quota dimension, taking the whole definition so a bullet can
+ *  read more than one quota. `null` = deliberately NOT a card line: the card
+ *  carries the headline limits only, not every dimension the matrix enforces.
+ *  A `0` is skipped by the caller — a pricing card lists what you get. */
+const QUOTA_BULLET: Record<QuotaDimension, (def: PlanDefinition) => string | null> = {
+  conversations: (d) => `${amount(d.quotas.conversations)} conversations / month`,
+  products_synced: (d) =>
+    isUnlimitedQuota(d.quotas.products_synced)
+      ? "Unlimited products synced"
+      : `Up to ${n(d.quotas.products_synced)} products synced`,
+  pages_synced: (d) =>
+    isUnlimitedQuota(d.quotas.pages_synced)
+      ? "Unlimited store pages synced"
+      : `Up to ${n(d.quotas.pages_synced)} store pages synced`,
+  articles_synced: (d) =>
+    isUnlimitedQuota(d.quotas.articles_synced)
+      ? "Unlimited blog articles synced"
+      : `Up to ${n(d.quotas.articles_synced)} blog articles synced`,
+  curated_answers: (d) => `${amount(d.quotas.curated_answers)} curated answers`,
+  faqs: (d) => `${amount(d.quotas.faqs)} FAQs (CSV import included)`,
+  // One URL source = one web page (spec 22) — there is no crawl.
+  crawl_pages: (d) =>
+    isUnlimitedQuota(d.quotas.crawl_pages)
+      ? "Unlimited URL sources"
+      : d.quotas.crawl_pages <= 1
+        ? "1 URL source"
+        : `${n(d.quotas.crawl_pages)} URL sources`,
+  file_uploads: (d) => `PDF / document upload (${amount(d.quotas.file_uploads)} files)`,
+  csv_upload_mb: (d) =>
+    d.quotas.csv_upload_mb <= 0 ? null : `CSV knowledge files up to ${n(d.quotas.csv_upload_mb)}MB`,
+  lookup_rows: (d) =>
+    d.quotas.lookup_rows <= 0
+      ? null
+      : isUnlimitedQuota(d.quotas.lookup_rows)
+        ? "Unlimited lookup-table rows"
+        : `Lookup tables up to ${n(d.quotas.lookup_rows)} rows`,
+  metafields_enabled: () => null,
+  team_seats: (d) =>
+    d.quotas.team_seats <= 1
+      ? "1 team seat (owner only)"
+      : `${amount(d.quotas.team_seats)} team seats`,
+  active_campaigns: (d) => `${amount(d.quotas.active_campaigns)} active proactive campaigns`,
+  recommendation_rules: (d) => `${amount(d.quotas.recommendation_rules)} recommendation rules`,
+  analytics_range_days: (d) =>
+    isUnlimitedQuota(d.quotas.analytics_range_days)
+      ? "Full analytics history"
+      : `${n(d.quotas.analytics_range_days)} days of analytics history`,
+};
+
+/** One line per gated feature. `null` = not card copy — either a quota line
+ *  above already states it with a number, or it is a detail rather than a
+ *  headline reason to choose a tier. The gate itself is unaffected either way;
+ *  every one of these is still enforced and still surfaced in-product by the
+ *  PlanBadge / PlanBanner on the screen that owns the feature. */
+const FEATURE_BULLET: Record<GatedFeature, string | null> = {
+  remove_branding: null,
+  unanswered_analytics: null,
+  premium_campaign_templates: null,
+  inbox_cart_view: null,
+  push_notifications: "Browser push notifications",
+  order_tracking: "Order tracking in chat",
+};
+
+/** GENERATED from the live plan matrix, never hand-written per plan id.
+ *  The matrix is operator-editable at /admin/plans, so hand-authored copy
+ *  silently stops matching what the app enforces the moment a limit or a
+ *  feature moves between tiers — which is exactly how every card came to
+ *  advertise "Multi-language", a feature only Plus has ever granted. */
 function bulletsFor(def: PlanDefinition): string[] {
-  const n = (value: number) => value.toLocaleString("en-US");
-  const bullets = [
-    `${n(def.quotas.conversations)} conversations / month`,
-    `Up to ${n(def.quotas.products_synced)} products synced`,
-    `${n(def.quotas.curated_answers)} curated answers · ${n(def.quotas.manual_qas)} manual Q&As`,
-    `${n(def.quotas.policy_pages)} policy pages`,
-    // Available on every plan (not gated) — listed on all cards so the
-    // comparison stays factual.
-    "Multi-language + auto language detection",
-  ];
-  switch (def.id) {
-    case "free":
-      bullets.push(
-        `${def.quotas.crawl_pages} website page source (this page only)`,
-      );
-      break;
-    case "basic":
-    case "pro":
-      bullets.push(
-        `Website crawl: this page + linked pages (${def.quotas.crawl_pages} pages)`,
-        "Unanswered-questions analytics",
-        "Remove ChatConvert branding",
-      );
-      break;
-    case "plus":
-      bullets.push(
-        `Full-site website crawl (${def.quotas.crawl_pages} pages)`,
-        // No csv-row quota dimension exists in the plan matrix — don't invent
-        // one in the copy (QA D10); file_uploads covers the PDF side.
-        `CSV import + PDF upload (${def.quotas.file_uploads} files)`,
-        "Analytics CSV + conversation exports",
-      );
-      break;
+  const bullets: string[] = [];
+  for (const dimension of QUOTA_DIMENSIONS) {
+    if (!def.quotas[dimension]) continue; // 0 = not included on this plan
+    const line = QUOTA_BULLET[dimension](def);
+    if (line) bullets.push(line);
+  }
+  for (const feature of GATED_FEATURES) {
+    if (!def.features.includes(feature)) continue;
+    const line = FEATURE_BULLET[feature];
+    if (line) bullets.push(line);
   }
   return bullets;
 }
@@ -109,6 +164,10 @@ function bulletsFor(def: PlanDefinition): string[] {
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const access = await requireShopAccess(request, { permission: "plan" });
   const { shopId, shopDomain } = access;
+
+  // One read of the metering picture for the whole loader (it may call Shopify
+  // for the spend balance, so never twice).
+  const status = await usageStatus(shopId);
 
   const [shop, usage] = await Promise.all([
     db.shop.findUnique({
@@ -143,13 +202,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     Object.keys(PLANS) as (keyof typeof PLANS)[],
   );
 
-  const plans: PlanCardData[] = Object.values(PLANS).map((def) => ({
+  // Withdrawn tiers (/admin/plans) are not offered — except the shop's own,
+  // which must still appear or the page would claim it is on something else.
+  const plans: PlanCardData[] = offeredPlans(plan).map((def) => ({
     id: def.id,
     name: def.name,
     description: PLAN_DESCRIPTIONS[def.id] ?? "",
     priceMonthly: def.priceMonthly,
-    priceYearlyPerMonth: def.priceYearlyPerMonth,
-    yearlyTotal: def.id === "free" ? 0 : yearlyTotal(def.id),
     trialDays: trialDays[def.id] ?? 0,
     overagePerConversation: def.overagePerConversation,
     bullets: bulletsFor(def),
@@ -163,8 +222,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     billingInterval: shop?.billingInterval,
     trialEndsAt: shop?.trialEndsAt ? shop.trialEndsAt.toISOString() : null,
     activePromo,
+    couponsEnabled: runtimeConfig().promoCodesEnabled,
     usage,
-    quota: displayQuota(plan, "conversations"),
+    // Plan allowance PLUS any live bonus grant — the SAME number the meter is
+    // held to. `status.quota` already sums them; reading the plan alone here is
+    // what made the count exclude a bonus the banner was announcing.
+    quota: status.quota,
+    // Everything the merchant needs to understand metering: how close they are,
+    // whether they are being charged, and whether the AI has stopped because
+    // their approved spend limit is full (spec 15).
+    usageStatus: status,
+    // Computed here: nextUsageCap lives in a .server module and the banner is
+    // client code.
+    nextUsageCap: nextUsageCap(status.capped),
     // FAQ copy reads the overage rate from the matrix, never a literal (D10).
     // It must reflect what this shop can ACTUALLY be billed, not just the
     // tier's headline rate: Shopify rejects usage line items on ANNUAL
@@ -202,6 +272,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return result.ok
       ? { ok: true as const, promo: result.promo }
       : { ok: false as const, error: result.error, field: "code" as const };
+  }
+
+  // Raise the usage ceiling (spec 15). Only the merchant can approve a higher
+  // limit, so this returns Shopify's confirmation URL and the page breaks out
+  // of the iframe for it, exactly like subscribing.
+  if (intent === "raise_cap") {
+    const shop = await db.shop.findUnique({
+      where: { id: shopId },
+      select: { usageLineItemId: true },
+    });
+    if (!shop?.usageLineItemId) {
+      return { ok: false as const, error: "This subscription has no usage limit to raise." };
+    }
+    const status = await usageStatus(shopId);
+    const result = await raiseUsageCap(shopDomain, shop.usageLineItemId, nextUsageCap(status.capped));
+    if (!result.ok) return { ok: false as const, error: result.error };
+    invalidateUsageBalance(shopId);
+    return { ok: true as const, confirmationUrl: result.confirmationUrl };
   }
 
   if (intent === "subscribe") {
@@ -295,10 +383,8 @@ export default function PlanUsagePage() {
   const shopify = useAppBridge();
   const fetcher = useFetcher<typeof action>();
 
-  const [interval, setInterval] = useState<"monthly" | "yearly">(
-    data.billingInterval === "yearly" ? "yearly" : "monthly",
-  );
   const [subscribingPlan, setSubscribingPlan] = useState<string | null>(null);
+  const [raisingCap, setRaisingCap] = useState(false);
   const [promo, setPromo] = useState<PlanPromo | null>(null);
 
   const upgraded = useMemo(
@@ -327,6 +413,7 @@ export default function PlanUsagePage() {
       return;
     }
     setSubscribingPlan(null);
+    setRaisingCap(false);
     if (
       fetcher.data.ok &&
       "downgraded" in fetcher.data &&
@@ -343,15 +430,21 @@ export default function PlanUsagePage() {
       {
         intent: "subscribe",
         plan: planId,
-        interval,
         // Carry an already-redeemed code into the new subscription so an
-        // upgrade doesn't silently drop a "forever" discount and force the
+        // upgrade does not silently drop a "forever" discount and force the
         // merchant to retype it. The server re-validates it against the
-        // chosen plan+interval either way.
+        // chosen plan either way.
         code: promo?.code ?? data.activePromo?.code ?? "",
       },
       { method: "post" },
     );
+  };
+
+  const usage = data.usageStatus;
+  const nextCap = data.nextUsageCap;
+  const raiseCap = () => {
+    setRaisingCap(true);
+    fetcher.submit({ intent: "raise_cap" }, { method: "post" });
   };
 
   const pct = data.quota > 0 ? Math.round((data.usage / data.quota) * 100) : 0;
@@ -377,18 +470,82 @@ export default function PlanUsagePage() {
           </s-banner>
         ) : null}
 
+        {/* Metering is money, so it says so out loud (spec 15).
+            Three states, in the order they can happen: approaching the
+            allowance, being charged past it, and stopped because the approved
+            spend limit is full. */}
+        {usage.ceilingReached ? (
+          <s-banner tone="critical" heading="AI replies are paused — spending limit reached">
+            <s-paragraph>
+              You&apos;ve used the ${usage.capped} extra-conversation limit you approved for this
+              billing cycle, so the AI has stopped answering new conversations. Raise the limit to
+              switch it back on — Shopify will ask you to approve the new amount, and you&apos;re
+              only ever charged for conversations actually handled.
+            </s-paragraph>
+            <s-button
+              slot="primary-action"
+              variant="primary"
+              loading={raisingCap}
+              onClick={raiseCap}
+            >
+              Raise limit to ${nextCap}
+            </s-button>
+          </s-banner>
+        ) : usage.overage > 0 ? (
+          <s-banner tone="warning" heading="You're past your plan allowance">
+            <s-paragraph>
+              {usage.overage.toLocaleString("en-US")} extra conversation
+              {usage.overage === 1 ? "" : "s"} this month
+              {usage.rate ? ` at $${usage.rate.toFixed(2)} each` : ""}
+              {usage.spend > 0 ? ` — $${usage.spend.toFixed(2)} so far` : ""}, billed by Shopify on
+              your next invoice. Your limit for this cycle is ${usage.capped}.
+              {usage.unbilled > 0
+                ? " A few are still being reported to Shopify; they'll appear shortly."
+                : ""}{" "}
+              Upgrading raises the included allowance.
+            </s-paragraph>
+          </s-banner>
+        ) : usage.nearCap ? (
+          <s-banner tone="warning" heading="You're close to your monthly allowance">
+            <s-paragraph>
+              {usage.used.toLocaleString("en-US")} of {data.quota.toLocaleString("en-US")}{" "}
+              conversations used.{" "}
+              {usage.billable && usage.rate
+                ? `After that the AI keeps replying and extra conversations are billed at $${usage.rate.toFixed(2)} each, up to the $${usage.capped} limit you approved.`
+                : "After that the AI stops replying until the 1st. Upgrade for a bigger allowance."}
+            </s-paragraph>
+          </s-banner>
+        ) : null}
+
         <s-section heading="Usage this month">
           <s-paragraph>
             Resets on the 1st. Conversations are your plan meter.
           </s-paragraph>
+           {usage.credits > 0 ? (
+            <s-banner tone="success">
+              The count above includes <b>{usage.credits.toLocaleString("en-US")}</b> bonus
+              conversation{usage.credits === 1 ? "" : "s"} on top of your {data.planName} plan, added
+              by the ChatConvert team. They are never charged, and your limit returns to the plan
+              amount if they are withdrawn.
+            </s-banner>
+          ) : null}
           <QuotaMeter
             used={data.usage}
             quota={data.quota}
             label="conversations used"
           />
           <s-paragraph>
-            You&apos;re at <b>{pct}%</b> of the {data.planName} allowance.
+            You&apos;re at <b>{pct}%</b> of{" "}
+            {usage.credits > 0 ? "your allowance including bonus" : `the  allowance`}.
           </s-paragraph>
+          {usage.overage > 0 ? (
+            <s-paragraph>
+              Plus <b>{usage.overage.toLocaleString("en-US")}</b> extra conversation
+              {usage.overage === 1 ? "" : "s"}
+              {usage.rate ? ` at $${usage.rate.toFixed(2)} each` : ""} — <b>${usage.spend.toFixed(2)}</b>{" "}
+              of your ${usage.capped} limit for this billing cycle.
+            </s-paragraph>
+          ) : null}         
         </s-section>
 
         <s-section heading="Your plan">
@@ -415,8 +572,6 @@ export default function PlanUsagePage() {
           <PlanCards
             plans={data.plans}
             currentPlan={data.plan}
-            interval={interval}
-            onIntervalChange={setInterval}
             onSelect={
               data.billingManageable
                 ? selectPlan
@@ -430,13 +585,17 @@ export default function PlanUsagePage() {
           />
         </s-section>
 
-        <PlanDiscountCard
-          applied={promo}
-          onApplied={setPromo}
-          onRemove={() => setPromo(null)}
-          disabled={!data.billingManageable}
-        />
-        <PlanDoneForYouCard contactHref={CONTACT_HREF} />
+        {/* Coupons are an operator-level feature switch (/admin/promo-codes).
+            Off = no field at all, rather than a field that always fails. */}
+        {data.couponsEnabled ? (
+          <PlanDiscountCard
+            applied={promo}
+            onApplied={setPromo}
+            onRemove={() => setPromo(null)}
+            disabled={!data.billingManageable}
+          />
+        ) : null}
+        <PlanSupportCard />
         <PlanFaq
           contactHref={CONTACT_HREF}
           overagePerConversation={data.overagePerConversation}

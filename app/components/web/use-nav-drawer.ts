@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router";
 
 // The ≤900px nav drawer behaviour shared by the web shell (spec 18) and the
-// operator console (spec 19). Extracted so /platform gets the identical drawer
+// operator console (spec 19). Extracted so /admin gets the identical drawer
 // instead of a rail that CSS hides off-screen with no way to open it.
 //
 // Contract: scroll lock + focus trap + Escape while open, focus returned to the

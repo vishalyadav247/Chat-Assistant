@@ -34,6 +34,16 @@ const EXPLICIT_PATTERNS = [
 ];
 
 const NEGATIVE_EMOJI = /[👎😠😡💩🤬]/u;
+// Frustration WORDS (spec 23 §3.5): the caps/punctuation heuristics alone
+// fired on enthusiastic shoppers — "SHOW ME RED BRACELETS" is a typing habit
+// and "do you ship to canada???" is impatience at worst. Caps/punctuation now
+// need a negative word alongside; a negative emoji still stands on its own.
+// Deliberately excludes legitimate support topics (refund, complaint) — asking
+// about a refund is a question, not frustration.
+const NEGATIVE_WORDS =
+  /\b(angry|furious|annoyed|annoying|frustrat\w*|ridiculous|terrible|awful|horrible|worst|useless|pathetic|unacceptable|disappoint\w*|broken|damaged|fed up|sick of|waste of|never arrived|still waiting|no response|no reply)\b/i;
+/** Fallback only — the live value comes from the shop's handover config
+ *  (handoverConfigSchema.intentRuleThreshold, spec 23 §4.1). */
 const INTENT_RULE_THRESHOLD = 0.5;
 
 /** Cheap pre-router detection: explicit ask, sentiment, repeated question, intent rules. */
@@ -50,16 +60,32 @@ export async function detectHandover(args: {
   // Explicit ask — always on.
   if (EXPLICIT_PATTERNS.some((p) => p.test(message))) return "explicit_ask";
 
-  // Negative sentiment (opt-in): ALL-CAPS ratio, repeated punctuation, emojis.
+  // Negative sentiment (opt-in). A negative emoji stands on its own; the
+  // caps-ratio / repeated-punctuation heuristics also need a negative WORD
+  // (spec 23 §3.5 — all-caps typers and "???" are not frustration). Either way
+  // the conversation must already hold an AI reply: frustration implies a
+  // prior interaction, and firing pre-answer hands the shopper off before the
+  // shop's best answer even ran.
   if (handover.triggers.negativeSentiment.enabled) {
     const letters = message.replace(/[^a-zA-Z]/g, "");
     const capsRatio = letters.length >= 8 ? letters.replace(/[^A-Z]/g, "").length / letters.length : 0;
-    if (capsRatio > 0.8 || /[!?]{3,}/.test(message) || NEGATIVE_EMOJI.test(message)) {
-      return "negative_sentiment";
+    const heuristic =
+      NEGATIVE_EMOJI.test(message) ||
+      ((capsRatio > 0.8 || /[!?]{3,}/.test(message)) && NEGATIVE_WORDS.test(message));
+    if (heuristic) {
+      const priorAiTurns = await db.message.count({
+        where: { shopId: args.shopId, conversationId: args.conversationId, role: "out" },
+      });
+      if (priorAiTurns > 0) return "negative_sentiment";
     }
   }
 
-  // Repeated question: same normalized text among recent shopper messages.
+  // Repeated question: same normalized text among recent shopper messages —
+  // or nearly the same (trigram ≥ 0.85, spec 23 §3.5): "do you ship to
+  // canada?" asked again as "do you ship to canada??" or with one word changed
+  // is the same repeat, and exact equality never caught it. True paraphrases
+  // ("can you deliver…") stay uncaught — matching those needs embeddings the
+  // turn budget doesn't allow for past messages.
   if (handover.triggers.repeatedQuestion.enabled) {
     const recent = await db.message.findMany({
       where: { shopId: args.shopId, conversationId: args.conversationId, role: "in" },
@@ -69,7 +95,10 @@ export async function detectHandover(args: {
     });
     const normalized = normalize(message);
     // recent includes the just-saved current message — count all occurrences.
-    const repeats = recent.filter((m) => normalize(m.content) === normalized).length;
+    const repeats = recent.filter((m) => {
+      const other = normalize(m.content);
+      return other === normalized || (other.length > 4 && trigramSimilarity(other, normalized) >= 0.85);
+    }).length;
     if (normalized.length > 4 && repeats >= handover.triggers.repeatedQuestion.threshold) {
       return "repeated_question";
     }
@@ -80,8 +109,9 @@ export async function detectHandover(args: {
     const topics = handover.intentRules.map((r) => r.topic).filter((t) => t.trim().length > 0);
     if (topics.length > 0) {
       const vectors = await intentRuleVectors(args.shopId, topics);
+      const threshold = handover.intentRuleThreshold ?? INTENT_RULE_THRESHOLD;
       for (let i = 0; i < topics.length; i++) {
-        if (dot(args.queryEmbedding, vectors[i]) >= INTENT_RULE_THRESHOLD) return "intent_rule";
+        if (dot(args.queryEmbedding, vectors[i]) >= threshold) return "intent_rule";
       }
     }
   }
@@ -102,10 +132,15 @@ export async function detectCannotAnswer(
     take: handover.triggers.cannotAnswer.threshold,
     select: { sourceLayer: true },
   });
-  const fallbackLayers = new Set(["clarify", "rag_fallback", "banned_router"]);
+  // Every banned_* layer counts (spec 23 §3.5): blocked turns save as
+  // `banned_${layer}` (keyword/meaning/router/moderation), and only counting
+  // banned_router meant three keyword-guardrail blocks in a row never
+  // escalated while the identical situation via the router did.
+  const isFallbackLayer = (layer: string) =>
+    layer === "clarify" || layer === "rag_fallback" || layer.startsWith("banned_");
   return (
     recentOut.length >= handover.triggers.cannotAnswer.threshold &&
-    recentOut.every((m) => fallbackLayers.has(m.sourceLayer ?? ""))
+    recentOut.every((m) => isFallbackLayer(m.sourceLayer ?? ""))
   );
 }
 
@@ -268,6 +303,23 @@ function normalize(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
 }
 
+/** Same trigram construction as the product-search typo layer: near-identical
+ *  repeats ("…canada?" vs "…canada??" post-normalization survives word edits)
+ *  count as repeats without any embedding cost. */
+function trigramSimilarity(a: string, b: string): number {
+  const grams = (word: string) => {
+    const padded = `  ${word} `;
+    const out = new Set<string>();
+    for (let i = 0; i < padded.length - 2; i++) out.add(padded.slice(i, i + 3));
+    return out;
+  };
+  const ta = grams(a);
+  const tb = grams(b);
+  let shared = 0;
+  for (const t of ta) if (tb.has(t)) shared++;
+  return shared / (ta.size + tb.size - shared);
+}
+
 declare global {
   // eslint-disable-next-line no-var
   var intentRuleVectorCache: Map<string, number[][]> | undefined;
@@ -289,4 +341,48 @@ function dot(a: number[], b: number[]): number {
   let sum = 0;
   for (let i = 0; i < a.length; i++) sum += a[i] * b[i];
   return sum;
+}
+
+/**
+ * The leave-your-email form on its own, with none of the handover side effects.
+ *
+ * WHY: the fallback reply literally says "leave your email
+ * and our team will get back to you" — and nothing appeared. The form existed,
+ * but only after `cannotAnswer.threshold` CONSECUTIVE dead ends (3 by default),
+ * so the first two shoppers to hit it were invited to do something the widget
+ * never offered. Typing an email into the composer did nothing either: the chat
+ * lane has no idea it was meant to be collecting one.
+ *
+ * Deliberately NOT executeHandover(): that marks the conversation handed over,
+ * can silence the AI and notifies the team. Doing all of that on every single
+ * unanswered question would page a merchant for a typo. This is the form only —
+ * submitting it goes through the same `/handover-form` endpoint and DOES create
+ * the lead and notify, which is the point at which the shopper has actually
+ * asked for a person.
+ *
+ * Returns null when the merchant collects nothing here (contact-methods
+ * destination), so the fallback stays a plain message rather than growing an
+ * empty box.
+ */
+export function fallbackLeaveMessageForm(
+  handover: HandoverConfigData,
+): HandoverFrameData["form"] {
+  if (!handover.triggers.cannotAnswer.enabled) return null;
+  if (handover.destination === "collect_email") {
+    return {
+      replyTime: handover.collectEmail.replyTime,
+      fields: collectToFields(handover.collectEmail.collect),
+      formMessage: handover.collectEmail.formMessage,
+      postSubmitMessage: handover.collectEmail.postSubmitMessage,
+    };
+  }
+  if (handover.destination === "inbox") {
+    return {
+      replyTime: handover.inbox.leaveMessage.replyTime,
+      fields: collectToFields(handover.inbox.leaveMessage.collect),
+      formMessage: handover.inbox.leaveMessage.formMessage,
+      postSubmitMessage: handover.inbox.leaveMessage.postSubmitMessage,
+    };
+  }
+  return null;
 }

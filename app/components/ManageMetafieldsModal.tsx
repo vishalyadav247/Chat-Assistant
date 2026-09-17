@@ -8,14 +8,14 @@ import { BRAND } from "./ui/tokens";
 import { useDateTime } from "../lib/format/context";
 
 // Manage metafields modal (spec 07 → Products tab, reference
-// resources/other/productMetafields.png, 2026-08-19): Product / Variant
+// resources/other/productMetafields.png): Product / Variant
 // metafield tabs (no Order tab — user decision) with "Sync now" on their right
 // (definitions + used-in counts, also refreshed by product sync and
 // metafield_definitions/* webhooks), "Last synced …" on the modal heading row,
 // plan-cap banner, search + All/Enabled/Disabled filter, table
 // Metafield · Used in · Status (switch; unsupported types can't be enabled).
-// Structured (defined) metafields only — user decision 2026-08-19; unsupported
-// types are HIDDEN from the list (footnote count) — user decision; footer link
+// Structured (defined) metafields only; unsupported
+// types are HIDDEN from the list (footnote count); footer link
 // opens a second popup listing supported types. Enabling re-embeds the affected
 // products in a background job (server action `metafield-toggle`).
 
@@ -33,6 +33,7 @@ const SUPPORTED_TYPES: { label: string; types: string }[] = [
   { label: "Numbers", types: "integer, decimal, rating, money" },
   { label: "Measurements", types: "dimension, volume, weight" },
   { label: "Other", types: "true/false, date, date & time, URL, link, color" },
+  { label: "References", types: "metaobject — its entry's fields become readable text (e.g. Specifications, Ingredients)" },
   { label: "Lists", types: "lists of any type above" },
 ];
 
@@ -62,14 +63,16 @@ export function ManageMetafieldsModal(props: {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");
   const [limitDismissed, setLimitDismissed] = useState(false);
+  /** Multi-select for bulk enable/disable (owner 2026-09-16). */
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const enabledCount = rows.filter((r) => r.enabled).length;
   const atLimit = props.quota > 0 && enabledCount >= props.quota;
   const pendingId =
     pendingIntent === "metafield-toggle" ? String(fetcher.formData?.get("id") ?? "") : "";
 
-  // Unsupported types (references, files, JSON…) are hidden — user decision
-  // 2026-08-19 — and counted in a footnote so nothing goes silently missing.
+  // Unsupported types (references, files, JSON…) are hidden, and counted
+  // in a footnote so nothing goes silently missing.
   const supportedRows = useMemo(() => rows.filter((r) => r.supported), [rows]);
   const hiddenCount = rows.filter((r) => r.ownerType === tab && !r.supported).length;
   const visible = useMemo(() => {
@@ -83,6 +86,30 @@ export function ManageMetafieldsModal(props: {
           `${r.namespace}.${r.key}`.toLowerCase().includes(needle)),
     );
   }, [supportedRows, tab, q, status]);
+
+  // Selection follows what is on screen: switching tab or filter clears rows
+  // the merchant can no longer see, so a bulk action can never hit them.
+  const visibleIds = useMemo(() => visible.map((r) => r.id), [visible]);
+  useEffect(() => {
+    setSelected((prev) => {
+      const next = new Set([...prev].filter((id) => visibleIds.includes(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [visibleIds]);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
+  const toggleAll = () =>
+    setSelected(allVisibleSelected ? new Set() : new Set(visibleIds));
+  const toggleOne = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const bulk = (enabled: boolean) => {
+    submit("metafield-bulk-toggle", { ids: [...selected].join(","), enabled: enabled ? "true" : "false" });
+    setSelected(new Set());
+  };
 
   return (
     <BrowseModalShell
@@ -135,8 +162,8 @@ export function ManageMetafieldsModal(props: {
           >
             Sync now
             <s-tooltip>
-              Refresh the metafield list from Shopify. Auto sync follows Products auto sync and
-              Shopify webhooks.
+              Refresh the metafield list from Shopify. It also updates automatically whenever a
+              metafield definition changes in Shopify.
             </s-tooltip>
           </s-button>
         </s-grid>
@@ -176,6 +203,29 @@ export function ManageMetafieldsModal(props: {
           />
         </s-grid>
 
+        {selected.size > 0 ? (
+          <s-box padding="small-200" background="subdued" borderRadius="base">
+            <s-stack direction="inline" gap="small-200" alignItems="center">
+              <s-text type="strong">{selected.size} selected</s-text>
+              <s-button
+                disabled={pendingIntent === "metafield-bulk-toggle"}
+                onClick={() => bulk(true)}
+              >
+                Enable learning
+              </s-button>
+              <s-button
+                disabled={pendingIntent === "metafield-bulk-toggle"}
+                onClick={() => bulk(false)}
+              >
+                Disable learning
+              </s-button>
+              <s-button variant="tertiary" onClick={() => setSelected(new Set())}>
+                Clear
+              </s-button>
+            </s-stack>
+          </s-box>
+        ) : null}
+
         {visible.length === 0 ? (
           <s-box padding="large">
             <s-stack gap="small-200" alignItems="center">
@@ -189,20 +239,39 @@ export function ManageMetafieldsModal(props: {
         ) : (
           <s-table>
             <s-table-header-row>
+              <s-table-header>
+                <s-checkbox
+                  accessibilityLabel="Select all metafields"
+                  checked={allVisibleSelected}
+                  indeterminate={selected.size > 0 && !allVisibleSelected}
+                  onChange={() => toggleAll()}
+                />
+              </s-table-header>
               <s-table-header>Metafield</s-table-header>
               <s-table-header>Used in</s-table-header>
-              <s-table-header>Status</s-table-header>
+              <s-table-header>Learning</s-table-header>
             </s-table-header-row>
             <s-table-body>
               {visible.map((row) => (
                 <s-table-row key={row.id}>
                   <s-table-cell>
-                    <s-stack gap="small-500">
-                      <s-text type="strong">{row.name}</s-text>
-                      <s-text color="subdued">
-                        {row.namespace}.{row.key} · {typeLabel(row.type)}
-                      </s-text>
-                    </s-stack>
+                    <s-checkbox
+                      accessibilityLabel={`Select ${row.name}`}
+                      checked={selected.has(row.id)}
+                      onChange={() => toggleOne(row.id)}
+                    />
+                  </s-table-cell>
+                  <s-table-cell>
+                    {/* Capped so the name column can't squeeze "Used in" and
+                        "Learning" out of the row (owner 2026-09-16). */}
+                    <div style={{ maxWidth: 320 }}>
+                      <s-stack gap="small-500">
+                        <s-text type="strong">{row.name}</s-text>
+                        <s-text color="subdued">
+                          {row.namespace}.{row.key} · {typeLabel(row.type)}
+                        </s-text>
+                      </s-stack>
+                    </div>
                   </s-table-cell>
                   <s-table-cell>
                     <s-text tone="neutral">
@@ -261,9 +330,9 @@ export function ManageMetafieldsModal(props: {
             </s-table-body>
           </s-table>
           <s-paragraph color="subdued">
-            Not supported yet: references (products, variants, collections, files, pages,
-            metaobjects) and JSON — their values are IDs or raw data, not text. Only metafields
-            with a definition (Shopify Settings → Custom data) are listed.
+            Not supported yet: references to products, variants, collections, files and pages, and
+            JSON — their values are IDs or raw data, not text. Only metafields with a definition
+            (Shopify Settings → Custom data) are listed.
           </s-paragraph>
         </s-stack>
         <s-button slot="primary-action" onClick={() => modalEl(TYPES_MODAL_ID)?.hideOverlay()}>

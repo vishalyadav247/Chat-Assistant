@@ -127,6 +127,10 @@
   }
 
   var SESSION_KEY = "cc:session";
+  // Stable per-browser id, no expiry. SESSION_KEY rotates after 30 idle minutes
+  // because that is the billing session rule (spec 15) — which also made the
+  // agent forget the shopper. Identity gets its own key so it can outlive it.
+  var VISITOR_KEY = "cc:visitor";
   var CONVO_KEY = "cc:convo";
   var PRECHAT_KEY = "cc:prechat";
   var CONFIG_KEY = "cc:config";
@@ -137,7 +141,12 @@
   var OPEN_KEY = "cc:open"; // "1" = panel open — survives page navigation
   var SCREEN_KEY = "cc:screen";
   var DEFAULT_PLACEHOLDER = "Type your message…";
-  var HUMAN_PLACEHOLDER = "A team member will reply here…";
+  // A placeholder is an instruction to the person about to type, not a status
+  // line. "A team member will reply here…" read as the latter — it told the
+  // shopper what the BOX was for rather than what to do with it, and the same
+  // fact is already in the thread as the handover message
+  // (settings/schemas.ts afterHandoverMessage).
+  var HUMAN_PLACEHOLDER = "Message the team…";
   var BLOCKED_PLACEHOLDER = "This chat has been closed.";
   var CONFIG_TTL = 5 * 60 * 1000;
   var SESSION_IDLE = 30 * 60 * 1000; // billing session rule (spec 15)
@@ -230,6 +239,20 @@
     if (touch) s.at = now;
     store(localStorage, SESSION_KEY, JSON.stringify(s));
     return s.id;
+  }
+
+  /** The browser's long-lived visitor id, minted on first use. Never rotated:
+   *  it is what lets the agent recognise a shopper who comes back tomorrow.
+   *  Undefined when localStorage is unavailable (private mode, blocked
+   *  storage) — the server falls back to sessionId exactly as before. */
+  function visitorId() {
+    var stored = read(localStorage, VISITOR_KEY);
+    if (stored) return stored;
+    var minted = uuid();
+    store(localStorage, VISITOR_KEY, minted);
+    // A write that silently failed must not be sent as if it had stuck, or
+    // every page view would claim a different identity.
+    return read(localStorage, VISITOR_KEY) || undefined;
   }
 
   /** Read-only form used at boot: expires a stale record (a delete, not a
@@ -377,7 +400,15 @@
     if (!data || data.active === false || !data.widget) return;
     config = data;
     initPrivacy(); // resolve consent state before any beacon can fire
-    ensureCss().then(mountLauncher).then(initCampaigns).then(maybeRestoreOpen);
+    // Deep links go in right after the launcher — the only thing they need —
+    // rather than at the end of the chain, where a campaign failure would
+    // silently take them down with it.
+    ensureCss()
+      .then(mountLauncher)
+      .then(mountDebug) // no-op unless the URL carries ccdebug=1
+      .then(initDeepLinks)
+      .then(initCampaigns)
+      .then(maybeRestoreOpen);
   });
 
   /** Reopen the panel after a page navigation when it was open on the last
@@ -444,6 +475,266 @@
     ui.launcher = btn;
   }
 
+  // ── mobile viewport: the soft keyboard ───────────────────────────────────
+  /* The keyboard shrinks the VISUAL viewport; by default the LAYOUT viewport
+   * keeps its full height. `position: fixed` is laid out against the layout
+   * viewport, so a full-height panel keeps its full size, the composer sits
+   * behind the keys, and the browser scrolls the storefront trying to reveal
+   * the focused field.
+   *
+   * `interactive-widget=resizes-content` tells the browser to shrink the
+   * LAYOUT viewport instead. `inset: 0` then means "the area above the
+   * keyboard" and there is nothing left to compute — earlier versions of this
+   * file tried to derive the keyboard height from window.innerHeight and
+   * visualViewport, and were wrong three times running.
+   *
+   * Chrome 108+ and Firefox 132+ honour it — Android needs no JavaScript here
+   * at all, and is confirmed working on device. Safari does not honour it, and
+   * that is the only reason applyViewport() below exists. */
+  var scrollUnlock = null;
+  var viewportMetaRestore = null;
+  var vvLoop = null;
+
+  /** `innerWidth` as well as the media query: they agree in every normal case,
+   *  but if a theme's viewport meta makes them disagree, the CSS full-bleed
+   *  layout is what matters and matchMedia is what decides it — so a mismatch
+   *  must not leave the panel full-bleed with nothing sizing it. */
+  function isPhone() {
+    return Boolean(
+      (window.matchMedia && window.matchMedia("(max-width: 480px)").matches) ||
+        window.innerWidth <= 480,
+    );
+  }
+
+  /** Set while the panel is open on a phone, restored on close. Skipped when
+   *  the theme already chose a value — that is the merchant's call, not ours. */
+  function lockInteractiveWidget() {
+    if (viewportMetaRestore || !isPhone()) return;
+    var meta = document.querySelector('meta[name="viewport"]');
+    if (!meta) return;
+    var original = meta.getAttribute("content") || "";
+    if (original.indexOf("interactive-widget") !== -1) return;
+    var head = original.replace(/[, ]+$/, "");
+    meta.setAttribute("content", (head ? head + "," : "") + "interactive-widget=resizes-content");
+    viewportMetaRestore = function () {
+      meta.setAttribute("content", original);
+      viewportMetaRestore = null;
+    };
+  }
+
+  /* THE SPLIT, and why this is a frame loop rather than event handlers.
+   *
+   * Android works with no JavaScript at all: Chrome honours
+   * `interactive-widget=resizes-content` (set above), which shrinks the LAYOUT
+   * viewport for the keyboard, so `inset: 0` already means "the area above the
+   * keys" and the CSS alone is correct.
+   *
+   * iOS honours none of it. Safari leaves the layout viewport at full height
+   * and shrinks the VISUAL viewport instead, so a `position: fixed` panel keeps
+   * its full height and the composer ends up behind the keys. The panel's
+   * geometry therefore has to be written by hand — and the only source for it
+   * is `window.visualViewport`.
+   *
+   * Two attempts drove that from `visualViewport`'s own resize/scroll events
+   * and BOTH failed on real hardware, in the same way: the panel stayed the
+   * wrong size until the shopper typed, because typing makes Safari scroll the
+   * caret into view and that finally produced an event carrying settled
+   * numbers. Which event to trust, and when, turned out to be unanswerable —
+   * every guess was wrong on the device even when it was right on paper.
+   *
+   * So stop subscribing and start reading. While the panel is open on a phone,
+   * measure the viewport every animation frame and write only when it changed.
+   * There is no event to miss, no settle timer to mistune, and no ordering to
+   * get wrong. It costs one property read per frame while a full-screen modal
+   * is up — nothing is animating behind it — and the write is skipped on the
+   * overwhelming majority of frames because the geometry is unchanged. */
+  var appliedGeometry = "";
+
+  function applyViewport() {
+    var p = ui.panel;
+    if (!p) return;
+    var s = p.style;
+    var vv = window.visualViewport;
+
+    if (!vv || !state.open || !isPhone()) {
+      if (appliedGeometry === "") return; // already clear — do not touch layout
+      appliedGeometry = "";
+      s.top = s.left = s.right = s.bottom = s.width = s.height = s.transform = "";
+      return;
+    }
+
+    var w = Math.round(vv.width);
+    var h = Math.round(vv.height);
+    var x = Math.round(vv.offsetLeft);
+    var y = Math.round(vv.offsetTop);
+    var geometry = w + "x" + h + "@" + x + "," + y;
+    if (geometry === appliedGeometry) return;
+    var grew = appliedGeometry !== "" && h > parseInt(appliedGeometry.split("x")[1], 10);
+    appliedGeometry = geometry;
+
+    // `inset: 0` leaves top AND bottom set; adding a height over-constrains the
+    // box and the browser silently drops one of the three. State the origin and
+    // the size, and let the other two edges go.
+    s.top = "0px";
+    s.left = "0px";
+    s.right = "auto";
+    s.bottom = "auto";
+    s.width = w + "px";
+    s.height = h + "px";
+    // The offset is applied as a TRANSFORM, not as `top`. Moving the layout box
+    // makes Safari re-run its own "scroll the focused field into view" against
+    // the new position, which moves the visual viewport again, which moves the
+    // panel again — a loop that settles somewhere wrong. A transform moves only
+    // what is painted, so Safari's measurement stays put and the loop cannot
+    // start. Usually a no-op: with the body pinned, the offset is 0.
+    s.transform = x || y ? "translate3d(" + x + "px," + y + "px,0)" : "";
+
+    // The thread just changed height. Keep the newest message against the
+    // composer — but only when the panel SHRANK (the keyboard opening). On the
+    // way back out there is new room below, and yanking the scroll then would
+    // fight a shopper who had deliberately scrolled up to read.
+    if (!grew && state.screen === "chat") scroll();
+  }
+
+  function startViewportLoop() {
+    if (vvLoop !== null) return;
+    var step = function () {
+      applyViewport();
+      vvLoop = requestAnimationFrame(step);
+    };
+    vvLoop = requestAnimationFrame(step);
+  }
+
+  function stopViewportLoop() {
+    if (vvLoop === null) return;
+    cancelAnimationFrame(vvLoop);
+    vvLoop = null;
+  }
+
+  // ── on-device diagnostic (?ccdebug=1) ────────────────────────────────────
+  /* Never rendered for a shopper: it mounts only when the URL carries
+   * `ccdebug=1`. It exists because the iOS keyboard geometry cannot be
+   * reproduced on any emulator or desktop browser, so the only way to see what
+   * Safari actually reports — rather than what the spec says it should — is to
+   * read it off the phone. `heights` is the important line: it records every
+   * DISTINCT visualViewport height with the millisecond it arrived, which
+   * answers the one question guesswork cannot, namely whether the settled
+   * height is ever reported at all, and if so how late. */
+  var dbg = { resize: 0, scroll: 0, frames: 0, heights: [], t0: Date.now() };
+  var dbgEl = null;
+
+  function debugEnabled() {
+    try {
+      return /[?&]ccdebug=1/.test(window.location.search);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function mountDebug() {
+    if (dbgEl || !debugEnabled()) return;
+    dbgEl = document.createElement("pre");
+    // Appended AFTER .cw-root, so an equal z-index still paints it on top; the
+    // panel is what we are measuring, so it must not cover the readout.
+    dbgEl.style.cssText =
+      "position:fixed;top:0;left:0;right:0;z-index:2147483647;margin:0;padding:5px 7px;" +
+      "font:10.5px/1.32 ui-monospace,Menlo,Consolas,monospace;white-space:pre;" +
+      "background:rgba(0,0,0,.85);color:#8ef5a8;pointer-events:none;";
+    document.body.appendChild(dbgEl);
+    debugTick();
+  }
+
+  function debugTick() {
+    if (!dbgEl) return;
+    dbg.frames++;
+    var vv = window.visualViewport;
+    var p = ui.panel;
+    var cs = p ? getComputedStyle(p) : null;
+    var meta = document.querySelector('meta[name="viewport"]');
+    var px = function (v) { return Math.round(parseFloat(v) || 0); };
+
+    if (vv) {
+      var h = Math.round(vv.height);
+      var lastSeen = dbg.heights.length ? dbg.heights[dbg.heights.length - 1].h : -1;
+      if (h !== lastSeen) {
+        dbg.heights.push({ h: h, t: Date.now() - dbg.t0 });
+        if (dbg.heights.length > 6) dbg.heights.shift();
+      }
+    }
+
+    dbgEl.textContent = [
+      vv
+        ? "vv    " + Math.round(vv.width) + "x" + Math.round(vv.height) +
+          "  off " + Math.round(vv.offsetLeft) + "," + Math.round(vv.offsetTop) +
+          "  pageTop " + Math.round(vv.pageTop) +
+          "  scale " + Math.round(vv.scale * 100) / 100
+        : "vv    ABSENT",
+      "win   " + window.innerWidth + "x" + window.innerHeight +
+        "  scrollY " + Math.round(window.pageYOffset || 0),
+      "inline t=" + ((p && p.style.top) || "-") + " h=" + ((p && p.style.height) || "-") +
+        " w=" + ((p && p.style.width) || "-"),
+      "real   t=" + (cs ? px(cs.top) : "-") + " h=" + (cs ? px(cs.height) : "-") +
+        " padB=" + (cs ? px(cs.paddingBottom) : "-"),
+      "flags  phone=" + (isPhone() ? 1 : 0) + " open=" + (state.open ? 1 : 0) +
+        " kbd=" + (p && p.classList.contains("cw-kbd") ? 1 : 0) +
+        " body=" + (document.body.style.position || "static") +
+        " loop=" + (vvLoop === null ? 0 : 1) + " applied=" + (appliedGeometry || "-"),
+      "meta   " + (meta ? (meta.getAttribute("content") || "").slice(-38) : "NONE"),
+      "ev     resize " + dbg.resize + "  scroll " + dbg.scroll + "  frames " + dbg.frames,
+      "heights " + dbg.heights.map(function (e) { return e.h + "@" + e.t; }).join(" "),
+    ].join("\n");
+    requestAnimationFrame(debugTick);
+  }
+
+  /** Counters for the diagnostic only — the panel no longer depends on these
+   *  events for anything, which is the entire point of the frame loop. */
+  function bindViewport() {
+    var vv = window.visualViewport;
+    if (!vv || !dbgEl) return;
+    vv.addEventListener("resize", function () { dbg.resize++; });
+    vv.addEventListener("scroll", function () { dbg.scroll++; });
+  }
+
+  /** Stop the storefront scrolling behind a full-screen panel.
+   *
+   *  `overflow: hidden` on the body — all this used to do — is not a scroll
+   *  lock on iOS. Safari scrolls the document anyway to bring the focused
+   *  composer into view, and THAT scroll is what dragged the panel around.
+   *  Pinning the body is the lock that actually holds. It was avoided before
+   *  because it discards the merchant's scroll position; stashing the offset
+   *  in `top` and restoring it on close is what buys that back. */
+  function lockBodyScroll() {
+    if (scrollUnlock || !isPhone()) return;
+    var body = document.body;
+    var y = window.pageYOffset || document.documentElement.scrollTop || 0;
+    var prev = {
+      overflow: body.style.overflow,
+      position: body.style.position,
+      top: body.style.top,
+      left: body.style.left,
+      right: body.style.right,
+      width: body.style.width,
+    };
+    body.style.overflow = "hidden";
+    body.style.position = "fixed";
+    body.style.top = -y + "px";
+    body.style.left = "0";
+    body.style.right = "0";
+    body.style.width = "100%";
+    scrollUnlock = function () {
+      body.style.overflow = prev.overflow;
+      body.style.position = prev.position;
+      body.style.top = prev.top;
+      body.style.left = prev.left;
+      body.style.right = prev.right;
+      body.style.width = prev.width;
+      // Pinning the body parked the document at 0 — put the shopper back where
+      // they were, or closing the chat teleports them to the top of the page.
+      window.scrollTo(0, y);
+      scrollUnlock = null;
+    };
+  }
+
   // ── panel lifecycle ──────────────────────────────────────────────────────
   function togglePanel() {
     if (state.open) return closePanel();
@@ -486,6 +777,11 @@
     refreshCartSnapshot(); // first message's pageContext carries the cart
     state.open = true;
     store(sessionStorage, OPEN_KEY, "1");
+    lockInteractiveWidget(); // before the first measurement — it resizes it
+    bindViewport(); // diagnostic counters only
+    lockBodyScroll();
+    applyViewport(); // first frame now, rather than waiting for the loop
+    startViewportLoop();
     var focusChat = config.widget.chatFocusMode && config.widget.liveChat;
     showScreen(focusChat ? "chat" : state.screen === "chat" ? "chat" : "home");
     if (state.pollTimer === null && state.conversationId) startPolling();
@@ -499,7 +795,19 @@
   }
 
   function closePanel() {
-    if (ui.panel) ui.panel.style.display = "none";
+    stopViewportLoop();
+    if (scrollUnlock) scrollUnlock();
+    if (viewportMetaRestore) viewportMetaRestore();
+    if (ui.panel) {
+      // Every property applyViewport can write has to come back off, not just
+      // the height — a stale inline `top`/`width`/`transform` would survive
+      // into the next open (and onto the desktop layout after a rotate).
+      var ps = ui.panel.style;
+      ps.top = ps.left = ps.right = ps.bottom = ps.width = ps.height = ps.transform = "";
+      appliedGeometry = "";
+      ui.panel.classList.remove("cw-kbd");
+      ps.display = "none";
+    }
     ui.launcher.style.display = "";
     ui.launcher.setAttribute("aria-expanded", "false");
     state.open = false;
@@ -538,7 +846,22 @@
     ui.inputBar.style.display = "none";
     panel.appendChild(ui.inputBar);
 
-    panel.appendChild(R.footer(config.showBranding));
+    panel.appendChild(R.footer(config.showBranding, config.brandingUrl));
+
+    // The home-indicator inset is dead space once the keyboard covers it — it
+    // lifts the composer off the top of the keys by ~34px, which reads as the
+    // panel sitting in the wrong place. Drop it while a field holds focus.
+    // `relatedTarget` keeps the padding from flashing back when focus moves
+    // between two fields (composer → pre-chat), where focusout precedes focusin.
+    // Only the safe-area class is driven from focus now. The panel's geometry
+    // is not: the frame loop is already watching, so there is no moment to
+    // catch and nothing here that can be mistimed.
+    panel.addEventListener("focusin", function (e) {
+      if (isTextField(e.target)) panel.classList.add("cw-kbd");
+    });
+    panel.addEventListener("focusout", function (e) {
+      if (!isTextField(e.relatedTarget)) panel.classList.remove("cw-kbd");
+    });
 
     panel.addEventListener("keydown", function (e) {
       if (e.key === "Escape") {
@@ -551,6 +874,16 @@
 
     ui.root.insertBefore(panel, ui.launcher);
     ui.panel = panel;
+  }
+
+  /** A field that summons the soft keyboard. Buttons and checkboxes take focus
+   *  without one, so they must not claim the keyboard-open state. */
+  function isTextField(node) {
+    if (!node || !node.tagName) return false;
+    var tag = node.tagName.toLowerCase();
+    if (tag === "textarea") return true;
+    if (tag !== "input") return false;
+    return !/^(button|submit|reset|checkbox|radio|file|range|color|image)$/i.test(node.type || "text");
   }
 
   /** Focusable descendants of the panel that are actually rendered. */
@@ -623,6 +956,78 @@
 
   function onBack() {
     showScreen("home");
+  }
+
+  // ── deep links ───────────────────────────────────────────────────────────
+  /** Links that open the panel on a screen instead of navigating:
+   *    #cc-track  → order tracking      #cc-chat → chat      #cc-open → home
+   *  They work from merchant-authored HTML INSIDE the panel (FAQ answers,
+   *  campaign messages — sanitize.server.ts allow-lists the `#cc-` href) and
+   *  from anywhere on the storefront: a theme menu item pointing at
+   *  `/#cc-track` lands on the home page with tracking already open. */
+  var DEEP_LINKS = {
+    "cc-track": "tracking",
+    "cc-tracking": "tracking",
+    "cc-chat": "chat",
+    "cc-open": "home",
+  };
+
+  function deepLinkScreen(hash) {
+    var key = String(hash || "").replace(/^#/, "").toLowerCase();
+    return Object.prototype.hasOwnProperty.call(DEEP_LINKS, key) ? DEEP_LINKS[key] : null;
+  }
+
+  /** Tracking and live chat are merchant toggles — a link left in an FAQ after
+   *  one is turned off must not open a screen the store no longer offers. */
+  function availableScreen(screen) {
+    var w = (config && config.widget) || {};
+    if (screen === "tracking" && !w.orderTracking) return "home";
+    if (screen === "chat" && !w.liveChat) return "home";
+    return screen;
+  }
+
+  function openPanelOn(screen) {
+    var target = availableScreen(screen);
+    removeCampaignBubble();
+    ensureModules()
+      .then(function () {
+        if (!state.open) {
+          state.screen = target;
+          openPanel();
+        }
+        showScreen(target);
+      })
+      .catch(function () { /* modules failed — nothing to open */ });
+  }
+
+  function initDeepLinks() {
+    // Delegated, so it also catches links rendered later (FAQ answers, campaign
+    // bodies) without every renderer having to wire them up.
+    document.addEventListener("click", function (e) {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+      if (!a) return;
+      var href = a.getAttribute("href") || "";
+      var bare = href.charAt(0) === "#"; // fragment-only: always this page
+      var screen = deepLinkScreen(bare ? href : a.hash);
+      if (!screen) return;
+      // A `/#cc-track` link pointing at another page (or another site) must
+      // still navigate; only swallow the click when it targets this page.
+      if (!bare && (a.host !== location.host || a.pathname !== location.pathname)) return;
+      e.preventDefault();
+      openPanelOn(screen);
+    });
+
+    // Landing with the hash already set (cross-page link, shared URL), then
+    // clearing it so the same link works again later in the session.
+    var onHash = function () {
+      var screen = deepLinkScreen(location.hash);
+      if (!screen) return;
+      history.replaceState(null, "", location.pathname + location.search);
+      openPanelOn(screen);
+    };
+    window.addEventListener("hashchange", onHash);
+    onHash();
   }
 
   // ── chat flow ────────────────────────────────────────────────────────────
@@ -781,6 +1186,10 @@
     appendEl(typing);
 
     var botBubble = null;
+    // Tokens stream in as plain text (formatting cannot be parsed half a word
+    // at a time); the accumulated reply is re-rendered once at the end so
+    // **bold** and links come out as bold and links instead of raw markdown.
+    var botText = "";
     function bot() {
       if (!botBubble) {
         if (typing.parentNode) typing.parentNode.removeChild(typing);
@@ -789,11 +1198,15 @@
       }
       return botBubble.bubbleEl;
     }
+    function renderBotText() {
+      if (botBubble && botText) R.setRichText(botBubble.bubbleEl, botText);
+    }
 
     T.streamChat(
       base,
       {
         sessionId: sessionId(true),
+        visitorId: visitorId(),
         conversationId: state.conversationId || undefined,
         message: text,
         pageContext: {
@@ -803,13 +1216,20 @@
         },
       },
       {
-        onToken: function (t) { bot().appendChild(document.createTextNode(t)); scroll(); },
-        onMessage: function (m) { R.setText(bot(), m); scroll(); },
+        onToken: function (t) {
+          botText += t;
+          bot().appendChild(document.createTextNode(t));
+          scroll();
+        },
+        onMessage: function (m) { botText = m; R.setRichText(bot(), m); scroll(); },
         onCards: function (cards) {
           appendEl(R.productCards(cards, config.currency, { onAdd: onCardAdd }));
         },
+        onActions: function (actions) {
+          appendEl(R.actionChips(actions, { onAction: onChatAction }));
+        },
         onHandover: handleHandover,
-        onDone: function (frame) { finishTurn(typing, frame, echoDone); },
+        onDone: function (frame) { renderBotText(); finishTurn(typing, frame, echoDone); },
         onError: function () { failTurn(typing, botBubble); },
       },
     );
@@ -817,6 +1237,14 @@
 
   function scroll() {
     ui.body.scrollTop = ui.body.scrollHeight;
+  }
+
+  /** An action button under a reply. The agent only ever chose a KEY from the
+   *  screens this shop has switched on; where that key goes is decided here,
+   *  through the same guard the `#cc-track` deep links use. */
+  function onChatAction(action) {
+    beacon("chat_action_clicked", { key: action.key });
+    openPanelOn(action.screen || "home");
   }
 
   function finishTurn(typing, frame, maybePrechat) {
@@ -971,6 +1399,127 @@
   }
 
   // ── product cards ────────────────────────────────────────────────────────
+  /** The card's variant as a GID. Cards replayed from history were stored
+   *  before variantGid existed, so derive it from the numeric id when absent. */
+  function variantGid(card) {
+    if (card.variantGid) return card.variantGid;
+    return card.variantId ? "gid://shopify/ProductVariant/" + card.variantId : null;
+  }
+
+  /** True when this storefront exposes the standard cart actions. They ship on
+   *  every Liquid storefront and are ready after DOMContentLoaded, so this is a
+   *  readiness check rather than a real capability question. */
+  function hasCartActions() {
+    return Boolean(
+      window.Shopify &&
+        window.Shopify.actions &&
+        typeof window.Shopify.actions.updateCart === "function",
+    );
+  }
+
+  /**
+   * Which cart path to take. The merchant's Settings → Theme choice decides;
+   * "auto" (the default, and right for nearly everyone) probes as before.
+   *
+   *   horizon → Shopify.actions. Horizon has no <cart-drawer>.renderContents,
+   *             so the Dawn-shaped path finds no drawer and ends up navigating
+   *             the shopper to /cart, straight out of the chat.
+   *   dawn    → /cart/add.js with `sections`, which is what renderContents and
+   *             the cart-icon-bubble swap are built on.
+   *
+   * The setting exists because detection can only ever probe what a theme
+   * exposes: a Dawn fork that also ships the actions runtime looks like both.
+   */
+  function preferCartActions() {
+    var theme = config && config.theme;
+    if (theme === "horizon") return hasCartActions();
+    if (theme === "dawn") return false;
+    return hasCartActions();
+  }
+
+  /**
+   * Add via Shopify.actions — the theme decides how its cart renders, so this
+   * is the path that works on Horizon.
+   *
+   * The /cart/add.js route below it is Dawn-shaped: it re-renders a
+   * `<cart-drawer>` through `renderContents`, which Horizon does not have
+   * (it uses `<cart-drawer-component>` / `<cart-items-component>` / `<cart-icon>`).
+   * On Horizon that path found no drawer, dispatched an event nothing listens
+   * for, and navigated the shopper to /cart — straight out of the chat.
+   */
+  function addViaActions(card) {
+    return window.Shopify.actions
+      .updateCart({ lines: [{ merchandiseId: variantGid(card), quantity: 1 }] })
+      .then(function (result) {
+        // The cart can reject a line without the call failing (sold out, a
+        // limit) — that is a product-page problem, not a silent no-op.
+        if (result && result.userErrors && result.userErrors.length) {
+          throw new Error(result.userErrors[0].message || "cart rejected the line");
+        }
+        return refreshCartSnapshot().then(function (snapshot) {
+          beaconAdd(card, snapshot);
+          if (config.cartDrawer) {
+            closePanel();
+            // The drawer OPENED AND IMMEDIATELY CLOSED AGAIN on Horizon.
+            //
+            // updateCart does not open anything. On a Horizon-shaped theme its
+            // default "dispatches a cart:update event on document for those
+            // components to pick up" (Shopify's Configure-actions reference) —
+            // the theme re-renders its own cart asynchronously, AFTER the
+            // promise we are inside has already resolved. openCart() called
+            // here opened a drawer that the pending re-render then replaced,
+            // which reads as an instant close.
+            //
+            // So let the re-render land first. That is also the order asked
+            // for: update the item, THEN open the drawer.
+            return afterCartRender().then(function () {
+              return window.Shopify.actions.openCart();
+            });
+          }
+          appendSys("Added " + card.title + " to your cart ✓");
+        });
+      });
+  }
+
+  /**
+   * Resolve once the theme has finished re-rendering its cart after an update.
+   *
+   * `updateCart` emits `shopify:cart:lines-update` on success and the theme's
+   * own components re-render from it — but that work happens after our promise
+   * resolves, so anything we do in the same tick races it. Waiting for the
+   * event is the precise signal; the timeout is the escape hatch for a theme
+   * that re-renders without emitting, so an add can never hang on the drawer.
+   */
+  function afterCartRender() {
+    return new Promise(function (resolve) {
+      var settled = false;
+      var finish = function () {
+        if (settled) return;
+        settled = true;
+        document.removeEventListener("shopify:cart:lines-update", onUpdate);
+        // One more frame after the event: the listener that re-renders is a
+        // sibling of ours and may not have run yet.
+        requestAnimationFrame(function () {
+          requestAnimationFrame(resolve);
+        });
+      };
+      var onUpdate = function () { finish(); };
+      document.addEventListener("shopify:cart:lines-update", onUpdate);
+      setTimeout(finish, 400);
+    });
+  }
+
+  /** The analytics that ride every successful add, whichever path made it. */
+  function beaconAdd(card, snapshot) {
+    beacon("added_to_cart", { product: card.title, variantId: card.variantId }, snapshot);
+    // The add belongs to the campaign that opened this chat, if any — one
+    // credit per campaign, not one per item added.
+    if (attributedCampaignId) {
+      beacon("campaign_atc", { campaignId: attributedCampaignId, product: card.title });
+      attributedCampaignId = null;
+    }
+  }
+
   function onCardAdd(card) {
     // Cards carry a numeric variantId (first available variant) when the
     // catalog mirror has variant data; fall back to the product page when not
@@ -979,7 +1528,13 @@
       window.location.href = "/products/" + card.handle;
       return;
     }
-    fetch("/cart/add.js", {
+    if (preferCartActions()) {
+      return addViaActions(card).catch(function () {
+        // Theme or cart rejected it — let the product page handle it.
+        window.location.href = "/products/" + card.handle;
+      });
+    }
+    return fetch("/cart/add.js", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
@@ -996,13 +1551,7 @@
         // Fresh snapshot rides the beacon so the inbox cart card updates
         // immediately, and future messages carry it in pageContext.
         refreshCartSnapshot().then(function (snapshot) {
-          beacon("added_to_cart", { product: card.title, variantId: card.variantId }, snapshot);
-          // The add belongs to the campaign that opened this chat, if any —
-          // one credit per campaign, not one per item added.
-          if (attributedCampaignId) {
-            beacon("campaign_atc", { campaignId: attributedCampaignId, product: card.title });
-            attributedCampaignId = null;
-          }
+          beaconAdd(card, snapshot);
         });
         if (config.cartDrawer) {
           // Honor "open cart drawer after add to cart" (spec 16): minimize the

@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { InboxDetail } from "./InboxShared";
 import { PlanBadge } from "./ui/PlanGate";
@@ -122,10 +121,6 @@ export function InboxDetails({
   onBlock: () => void;
   onDelete: () => void;
 }) {
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const activeId = active?.id ?? null;
-  useEffect(() => setConfirmDelete(false), [activeId]);
-
   if (!active) {
     return (
       <div className="cin-col cin-details">
@@ -238,7 +233,21 @@ export function InboxDetails({
                 <div key={i} className="cin-cart-item">
                   <span className="cin-cart-info">
                     <span className="cin-cart-name">{line.title || "Item"}</span>
-                    {line.variant ? <span className="cin-cart-var">{line.variant}</span> : null}
+                    {/* Quantity belongs on the row, not just in the total: the
+                        cart read "Bracelet · Small" whether that was one item
+                        or six, and the total then looked wrong. Shown only
+                        past 1 — "x 1" on every line is noise. */}
+                    {line.variant || (line.quantity ?? 1) > 1 ? (
+                      <span className="cin-cart-var">
+                        {line.variant}
+                        {(line.quantity ?? 1) > 1 ? (
+                          <span className="cin-cart-qty">
+                            {line.variant ? " × " : "× "}
+                            {line.quantity}
+                          </span>
+                        ) : null}
+                      </span>
+                    ) : null}
                   </span>
                   <span className="cin-cart-price">
                     {typeof line.price === "number" ? fmt(line.price) : ""}
@@ -277,19 +286,9 @@ export function InboxDetails({
         <button type="button" className="cin-fb" onClick={onBlock} disabled={active.blocked}>
           {active.blocked ? "Blocked" : "Block"}
         </button>
-        <button
-          type="button"
-          className="cin-fb del"
-          onClick={() => {
-            if (!confirmDelete) {
-              setConfirmDelete(true);
-              return;
-            }
-            setConfirmDelete(false);
-            onDelete();
-          }}
-        >
-          {confirmDelete ? "Confirm?" : "Delete"}
+        {/* The route confirms in the shared ConfirmDeleteModal. */}
+        <button type="button" className="cin-fb del" onClick={onDelete}>
+          Delete
         </button>
       </div>
     </div>

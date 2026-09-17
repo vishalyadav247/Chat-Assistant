@@ -2,7 +2,7 @@ import { useId, useRef } from "react";
 import { RADIUS, SPACE, TONES } from "./tokens";
 
 // The one tab-pill row for the whole admin (replaces 5 divergent
-// implementations — see PROGRESS decisions log 2026-08-10). Pill track on a
+// implementations). Pill track on a
 // subdued surface; active pill = accent-soft (a form surface — no gradients).
 //
 // A11y: this declares the ARIA tab pattern, so it implements the pattern's
@@ -81,7 +81,6 @@ export function TabPills<T extends string>(props: {
         gap: SPACE.xs,
         background: "var(--s-color-bg-fill-secondary, #f1f1f1)",
         borderRadius: RADIUS.banner,
-        padding: 4,
         width: "fit-content",
         flexWrap: "wrap",
       }}

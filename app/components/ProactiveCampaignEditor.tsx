@@ -112,7 +112,7 @@ export function ProactiveCampaignEditor(props: {
   currency: string;
   /** Chatbox conversation starters — the Text "Quick question" chips. */
   starters: { label: string }[];
-  /** Pro+ gates: premium templates, Product Quiz, "similar products". */
+  /** Pro+ gate: premium templates. */
   premiumAllowed: boolean;
   /** Tier that unlocks those gates (live matrix), or null when allowed. */
   premiumPlan: string | null;

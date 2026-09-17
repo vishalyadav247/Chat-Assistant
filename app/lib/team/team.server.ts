@@ -2,7 +2,7 @@ import { z } from "zod";
 import db from "../../db.server";
 import { getQuota } from "../billing/plans.server";
 import { requireShopId } from "../tenancy.server";
-import { runtimeConfig } from "../platform/runtime-config.server";
+import { runtimeConfig } from "../admin/runtime-config.server";
 import { handoverEmail, inviteEmail, resetEmail, sendEmail } from "../email/email.server";
 import { hashPassword, passwordProblem, verifyPassword } from "./password.server";
 import { consumeToken, findToken, mintToken, revokeTokens } from "./tokens.server";
@@ -64,7 +64,7 @@ const MAX_FAILED_LOGINS = 5;
 const LOCK_MS = 15 * 60 * 1000;
 
 export function webBaseUrl(): string {
-  // Operator-managed at /platform/settings; WEB_APP_URL / SHOPIFY_APP_URL fall back.
+  // Operator-managed at /admin/settings; WEB_APP_URL / SHOPIFY_APP_URL fall back.
   return runtimeConfig().webAppUrl.replace(/\/+$/, "");
 }
 

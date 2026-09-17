@@ -1,16 +1,57 @@
-import type { LoaderFunctionArgs, MetaFunction } from "react-router";
+import type { HeadersFunction, LoaderFunctionArgs, MetaFunction } from "react-router";
 import { redirect, useLoaderData } from "react-router";
 
+import { runtimeConfig } from "../../lib/admin/runtime-config.server";
 import styles from "./styles.module.css";
 
 // Public marketing page — the only ChatConvert surface served outside the
-// Shopify admin and the /web team app. App Store review requirement 2.3.1
-// forbids asking a merchant to type their .myshopify.com domain here, so
-// installation goes through the App Store listing only; the template's
-// "Shop domain" login form was removed deliberately. Do not re-add it.
+// Shopify admin and the /web team app.
+//
+// NO store-domain form (QA-C1, 2026-09-14). App Store requirement 2.3.1
+// "Initiate installation from a Shopify-owned surface" — verified on
+// shopify.dev 2026-09-14 — says an app must not request manual entry of a
+// myshopify.com URL or shop domain during installation or configuration. An
+// earlier note here called that citation unverifiable and restored the card;
+// it is verifiable, so installation starts only from the App Store listing.
 //
 // Shopify still bounces merchants through this route with ?shop=… on their way
 // into the embedded app — that redirect below is load-bearing.
+
+/**
+ * `host` → `<store>.myshopify.com`, or null if it is not a shape we recognise.
+ *
+ * The param is base64 (sometimes url-safe, sometimes unpadded) of either
+ * `admin.shopify.com/store/<store>` or the older `<store>.myshopify.com/admin`.
+ * Both forms are accepted; anything else returns null rather than guessing,
+ * because a wrong shop domain here would send a merchant to another store's
+ * install screen.
+ */
+function shopDomainFromHost(host: string): string | null {
+  let decoded: string;
+  try {
+    const normalized = host.replace(/-/g, "+").replace(/_/g, "/");
+    decoded = Buffer.from(normalized, "base64").toString("utf-8");
+  } catch {
+    return null;
+  }
+  const viaAdmin = /^admin\.shopify\.com\/store\/([a-zA-Z0-9][a-zA-Z0-9-]*)\/?$/.exec(decoded);
+  if (viaAdmin) return `${viaAdmin[1]}.myshopify.com`;
+  const legacy = /^([a-zA-Z0-9][a-zA-Z0-9-]*\.myshopify\.com)\/admin\/?$/.exec(decoded);
+  return legacy ? legacy[1] : null;
+}
+
+/**
+ * Never cached.
+ *
+ * This URL answers differently depending on the query it arrives with — a
+ * marketing page for a visitor, a redirect into the app for a merchant coming
+ * from the admin. With no Cache-Control header the browser is free to apply
+ * heuristic caching, and a merchant whose browser had already stored the 200
+ * kept being served the install card after the redirect shipped: the fix was
+ * live on the server and invisible in the admin. Cheap insurance on a page
+ * that is one small document.
+ */
+export const headers: HeadersFunction = () => ({ "Cache-Control": "no-store" });
 
 export const meta: MetaFunction = () => [
   { title: "ChatConvert — AI product recommendations & support chat for Shopify" },
@@ -28,10 +69,35 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     throw redirect(`/app?${url.searchParams.toString()}`);
   }
 
-  // Blank until the App Store listing is live (same env var the in-app review
-  // prompt uses). While blank we show a plain status line instead of a dead link.
-  // eslint-disable-next-line no-undef
-  const handle = process.env.SHOPIFY_APP_STORE_HANDLE || "";
+  // Arriving from inside the Shopify admin without a `shop` param.
+  //
+  // The redirect above keys on `shop` alone, so any admin entry that omits it
+  // fell through to the marketing card — a merchant who already has the app
+  // installed being shown a store-domain box and an "Install from the Shopify
+  // App Store" band, inside their own admin. `host` is the reliable signal:
+  // Shopify sends it on every embedded load, base64 of
+  // `admin.shopify.com/store/<store>`, so the shop can be recovered from it
+  // and the merchant sent where they were going.
+  const host = url.searchParams.get("host");
+  const embedded = url.searchParams.get("embedded") === "1" || url.searchParams.has("id_token");
+  const shopFromHost = host ? shopDomainFromHost(host) : null;
+  if (shopFromHost) {
+    const params = new URLSearchParams(url.searchParams);
+    params.set("shop", shopFromHost);
+    throw redirect(`/app?${params.toString()}`);
+  }
+  // Embedded but the host is unreadable: still never show the install card in
+  // an iframe. /app can authenticate from the session token on its own.
+  if (embedded) {
+    throw redirect(`/app?${url.searchParams.toString()}`);
+  }
+
+  // The EFFECTIVE handle — Admin → Settings, then SHOPIFY_APP_STORE_HANDLE,
+  // then DEFAULT_APP_STORE_HANDLE — not process.env directly, which is why
+  // setting the handle in the operator console never lit this link up. It only
+  // comes back blank if someone deliberately clears every source, and then the
+  // band degrades to a note rather than to a dead link.
+  const handle = runtimeConfig().appStoreHandle;
   return { listingUrl: handle ? `https://apps.shopify.com/${handle}` : null };
 };
 
@@ -47,6 +113,8 @@ const ICONS = {
   check: "M20 6 9 17l-5-5",
   spark: "m12 3 1.9 5.8L20 10.7l-5.2 3.4L15.5 20 12 16.8 8.5 20l.7-5.9L4 10.7l6.1-1.9L12 3z",
   arrow: "M5 12h14M12 5l7 7-7 7",
+  store: "M3 9.5 4.8 4.2A1.5 1.5 0 0 1 6.2 3h11.6a1.5 1.5 0 0 1 1.4 1.2L21 9.5M3 9.5h18M3 9.5a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0M5 12.6V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-7.4",
+  info: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 16v-4M12 8h.01",
 } as const;
 
 function Icon(props: { path: string; size?: number; className?: string }) {
@@ -143,8 +211,10 @@ export default function Index() {
           </div>
 
           <div className={styles.heroCard}>
-            <h2 className={styles.cardTitle}>Get ChatConvert</h2>
-            <p className={styles.cardSub}>Install from the Shopify App Store to get started.</p>
+            <h2 className={styles.cardTitle}>Install ChatConvert</h2>
+            <p className={styles.cardSub}>
+              Install from the Shopify App Store — one click, no code, no theme edits.
+            </p>
 
             {listingUrl ? (
               <a className={styles.primaryButton} href={listingUrl}>
@@ -152,15 +222,11 @@ export default function Index() {
                 <Icon path={ICONS.arrow} size={17} />
               </a>
             ) : (
-              <p className={styles.cardNote}>
-                The App Store listing is not live yet. If ChatConvert is already installed, open it
-                from <strong>Apps</strong> in your Shopify admin.
+              <p className={styles.cardHint}>
+                Search for <strong>ChatConvert</strong> in the Shopify App Store, or open it from{" "}
+                <strong>Apps</strong> in your Shopify admin if it is already installed.
               </p>
             )}
-
-            <p className={styles.cardHint}>
-              Already installed? Open it from <strong>Apps</strong> in your Shopify admin.
-            </p>
 
             <div className={styles.cardDivider} />
 
@@ -206,7 +272,7 @@ export default function Index() {
           <span className={styles.trustDot} aria-hidden="true">
             ·
           </span>
-          <span>Installs with one click, no theme edits</span>
+          <span>Installs from the Shopify App Store, no theme edits</span>
         </p>
       </div>
     </div>

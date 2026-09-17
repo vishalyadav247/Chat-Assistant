@@ -3,7 +3,7 @@ import "dotenv/config";
 // into the dev-server process. These stubs exist purely to satisfy that import
 // — the job is executed by the dev server's worker with the CLI's real values.
 process.env.SHOPIFY_APP_URL ||= "http://localhost:3000";
-process.env.SHOPIFY_API_KEY ||= "d8b180fa8bf4edbda15692d2652516d7";
+process.env.SHOPIFY_API_KEY ||= "placeholder-not-used-for-enqueue";
 process.env.SHOPIFY_API_SECRET ||= "placeholder-not-used-for-enqueue";
 process.env.SCOPES ||= "read_products";
 

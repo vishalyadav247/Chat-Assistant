@@ -331,33 +331,18 @@ async function main() {
     dayARow !== undefined && dayARow.includes(",3,2,1,1,1,1,3,1,1,2,1,1,"),
     dayARow,
   );
-  // Plan gate, asserted from BOTH sides rather than by inspection.
-  // exportConversationsCsv/exportAnalyticsCsv call requirePlan(plan, "exports")
-  // via requireExports(). The calls above already prove it passes on Plus;
-  // here we drop the same shop to Free and prove the identical call is refused,
-  // then restore it. (Before 2026-08-21 enforcement defaulted to "open" and this
-  // section could only assert the mode constant.)
-  const { hasFeature, planEnforcementMode } = await import("../app/lib/billing/plans.server");
-  const enforced = planEnforcementMode() === "enforced";
-  check("enforcement is live", enforced, planEnforcementMode());
-  check("plus has exports", hasFeature("plus", "exports"));
+  // The "exports" plan gate was REMOVED 2026-09-10 (user decision: data
+  // export/import on every plan, no gate, no setting). Asserted from both
+  // sides: the feature identifier is gone from the matrix, and the identical
+  // export calls succeed on a Free shop.
+  const { GATED_FEATURES } = await import("../app/lib/billing/plans.server");
+  check("exports is no longer a gated feature", !(GATED_FEATURES as string[]).includes("exports"));
 
   await db.shop.update({ where: { id: shopId }, data: { plan: "free" } });
-  let refused = false;
-  try {
-    await exportConversationsCsv(shopId);
-  } catch (error) {
-    refused = (error as Error).message === "plan_gate:exports";
-  }
-  check("free shop is refused the conversations export", enforced ? refused : !refused);
-
-  let refusedAnalytics = false;
-  try {
-    await exportAnalyticsCsv(shopId, "7d");
-  } catch (error) {
-    refusedAnalytics = (error as Error).message === "plan_gate:exports";
-  }
-  check("free shop is refused the analytics export", enforced ? refusedAnalytics : !refusedAnalytics);
+  const freeConvCsv = await exportConversationsCsv(shopId);
+  check("free shop can export conversations", freeConvCsv.startsWith("id,startedAt,"));
+  const freeAnalyticsCsv = await exportAnalyticsCsv(shopId, "7d");
+  check("free shop can export analytics", freeAnalyticsCsv.trim().split("\n").length === 8);
   await db.shop.update({ where: { id: shopId }, data: { plan: "plus" } });
 
   // ── Cleanup ───────────────────────────────────────────────────────────────

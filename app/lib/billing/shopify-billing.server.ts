@@ -1,7 +1,7 @@
 import db from "../../db.server";
 import { adminAppUrl } from "../format/admin-url";
 import { requireShopId } from "../tenancy.server";
-import { runtimeConfig } from "../platform/runtime-config.server";
+import { runtimeConfig } from "../admin/runtime-config.server";
 import { DEFAULT_PLANS, PLANS, PLAN_IDS, type PlanId } from "./plans.server";
 import { recordEvent } from "../analytics/events.server";
 import { invalidateShopConfig } from "../config/shop-config.server";
@@ -28,11 +28,18 @@ import {
 // Enforcement stays OPEN (plans.server.ts): subscribing persists the plan on the
 // Shop row but no feature is blocked anywhere.
 
-export type BillingIntervalId = "monthly" | "yearly";
+// Monthly is the ONLY billing interval. Annual was withdrawn entirely:
+// Shopify rejects usage lines on ANNUAL subscriptions, so a yearly
+// subscriber could never be billed for conversations past their quota and hard-
+// capped instead — on the top tier with nothing left to upgrade to. Keeping the
+// named type (rather than deleting the parameter) means the callback URL, the
+// webhook reader and the Shop row keep their shape, and the compiler now
+// refuses anything but "monthly".
+export type BillingIntervalId = "monthly";
 export type PaidPlanId = Exclude<PlanId, "free">;
 
 /** Overage usage line: capped amount per spec 15 ($100 cap). The per-conversation
- *  rate comes from the plan matrix (platform-overridable) — see usageTermsFor. */
+ *  rate comes from the plan matrix (admin-overridable) — see usageTermsFor. */
 export const USAGE_CAPPED_AMOUNT = 100;
 
 /** Usage-line terms text, derived from the plan's (possibly overridden) rate (QA D5). */
@@ -42,7 +49,7 @@ export function usageTermsFor(plan: PaidPlanId): string {
 
 /**
  * Subscription name sent to Shopify. Uses the STABLE default name
- * ("ChatConvert Basic/Pro/Plus"), never the platform-overridable display name,
+ * ("ChatConvert Basic/Pro/Plus"), never the admin-overridable display name,
  * so planFromSubscriptionName() keeps resolving after a rename (QA D2).
  */
 export function subscriptionNameFor(plan: PaidPlanId): string {
@@ -77,7 +84,7 @@ export interface BillingProvider {
 }
 
 export function isBillingTestMode(): boolean {
-  // Operator-managed at /platform/settings; BILLING_TEST_MODE env is the fallback.
+  // Operator-managed at /admin/settings; BILLING_TEST_MODE env is the fallback.
   //
   // HARD-DISABLED IN PRODUCTION. The mock provider persists a paid plan against
   // a fabricated subscription gid without ever calling Shopify, and its
@@ -86,8 +93,10 @@ export function isBillingTestMode(): boolean {
   // completeBillingReturn self-fulfilling. A stray operator toggle (or a stale
   // BILLING_TEST_MODE in the deploy environment) would therefore hand out free
   // paid tiers on the live app, so the flag is ignored outside development.
-  // For App Review, use `billingForceTestCharges` instead: it keeps the real
-  // Shopify flow and only sets `test: true` on the charge.
+  // App Review is covered without any switch: reviewers check the production
+  // app on a DEV store, and shouldCreateTestCharge() detects that per shop —
+  // real Shopify flow, `test: true` on the charge, no money and nothing to
+  // remember to turn back off.
   if (process.env.NODE_ENV === "production") return false;
   return runtimeConfig().billingTestMode;
 }
@@ -127,7 +136,7 @@ export function isPaidPlan(plan: string): plan is PaidPlanId {
 /**
  * Reverse of the "ChatConvert {Plan}" subscription-name convention (audit R1).
  * Matches case-insensitively against the plan id, the DEFAULT name and the
- * CURRENT (platform-overridden) name, so subscriptions created before a rename
+ * CURRENT (admin-overridden) name, so subscriptions created before a rename
  * and subscriptions created with a renamed plan both still resolve (QA D2).
  */
 export function planFromSubscriptionName(name: string): PaidPlanId | null {
@@ -143,12 +152,7 @@ export function planFromSubscriptionName(name: string): PaidPlanId | null {
 }
 
 export function isBillingInterval(value: string): value is BillingIntervalId {
-  return value === "monthly" || value === "yearly";
-}
-
-/** Yearly subscriptions are charged annually: per-month price × 12, in cents-safe form. */
-export function yearlyTotal(plan: PaidPlanId): number {
-  return Number((PLANS[plan].priceYearlyPerMonth * 12).toFixed(2));
+  return value === "monthly";
 }
 
 // ── Real provider (Admin GraphQL, offline token via unauthenticated.admin) ──
@@ -215,6 +219,58 @@ async function adminFor(shopDomain: string) {
   return admin;
 }
 
+const SHOP_PLAN_QUERY = `#graphql
+  query ShopIsDevelopment {
+    shop {
+      plan {
+        partnerDevelopment
+      }
+    }
+  }
+`;
+
+/**
+ * Is this a development store?
+ *
+ * Replaces the old `billingForceTestCharges` operator switch, which was
+ * global and manual: left on, EVERY merchant's
+ * subscription was created with `test: true` and Shopify never billed any of
+ * them — silently, with nothing on screen. Shopify's own guidance is the same
+ * trap in prose: "After you finish testing, set test to false. Otherwise, app
+ * users who install your app aren't charged."
+ *
+ * A development store is knowable instead of configurable: `ShopPlan
+ * .partnerDevelopment` is the documented flag, and dev stores cannot process
+ * real transactions at all. App reviewers check the production app on a dev
+ * store, so review is covered with nothing to remember and nothing to switch
+ * back off.
+ *
+ * Fails CLOSED. If the lookup errors we return false, meaning a REAL charge.
+ * The alternative — defaulting to a test charge on an unreachable API — is the
+ * revenue leak this whole change exists to remove. A dev store that wrongly
+ * gets a real charge simply cannot approve it (Shopify blocks the transaction),
+ * which is a visible, recoverable failure; the reverse is invisible.
+ */
+async function isDevelopmentStore(shopDomain: string): Promise<boolean> {
+  try {
+    const admin = await adminFor(shopDomain);
+    const response = await admin.graphql(SHOP_PLAN_QUERY);
+    const body = (await response.json()) as {
+      data?: { shop?: { plan?: { partnerDevelopment?: boolean } } };
+    };
+    return body.data?.shop?.plan?.partnerDevelopment === true;
+  } catch (error) {
+    logError("shop_plan_lookup_failed", error, { shopDomain });
+    return false;
+  }
+}
+
+/** Whether this subscription should be created as a Shopify TEST charge. */
+export async function shouldCreateTestCharge(shopDomain: string): Promise<boolean> {
+  if (process.env.NODE_ENV !== "production") return true;
+  return isDevelopmentStore(shopDomain);
+}
+
 interface SubscriptionNode {
   id: string;
   name: string;
@@ -234,12 +290,10 @@ function toActiveSubscription(node: SubscriptionNode): ActiveSubscription {
   const usage = node.lineItems.find(
     (li) => li.plan.pricingDetails.__typename === "AppUsagePricing",
   );
+  // A legacy ANNUAL subscription reads back as null: the app no longer models
+  // annual, and claiming "monthly" for one would be a lie the meter acts on.
   const interval =
-    recurring?.plan.pricingDetails.interval === "ANNUAL"
-      ? "yearly"
-      : recurring?.plan.pricingDetails.interval === "EVERY_30_DAYS"
-        ? "monthly"
-        : null;
+    recurring?.plan.pricingDetails.interval === "EVERY_30_DAYS" ? "monthly" : null;
   return {
     id: node.id,
     name: node.name,
@@ -260,10 +314,10 @@ const realProvider: BillingProvider = {
       plan: {
         appRecurringPricingDetails: {
           price: {
-            amount: interval === "yearly" ? yearlyTotal(plan) : def.priceMonthly,
+            amount: def.priceMonthly,
             currencyCode: "USD",
           },
-          interval: interval === "yearly" ? "ANNUAL" : "EVERY_30_DAYS",
+          interval: "EVERY_30_DAYS",
           // Promo code (spec 15): Shopify applies the discount itself, so the
           // approval page and every invoice show the reduced price.
           ...(discount ? { discount } : {}),
@@ -271,10 +325,9 @@ const realProvider: BillingProvider = {
       },
     };
     const lineItems: unknown[] = [recurringLine];
-    // Shopify rejects usage lines on ANNUAL subscriptions (QA D1): yearly plans
-    // carry no usage line → no usageLineItemId → the meter hard-caps at quota
-    // (same path as Free). Overage is only billable on monthly subscriptions.
-    if (def.overagePerConversation !== null && interval !== "yearly") {
+    // Every paid subscription is monthly now, so every paid tier with a rate
+    // carries a usage line and overage works end to end (the reason annual went).
+    if (def.overagePerConversation !== null) {
       lineItems.push({
         plan: {
           appUsagePricingDetails: {
@@ -294,10 +347,10 @@ const realProvider: BillingProvider = {
       variables: {
         name: subscriptionNameFor(plan),
         returnUrl: callbackUrl(shopDomain, plan, interval),
-        // Review M2: dev stores can only approve test subscriptions. Default to
-        // test outside production, and allow forcing test charges in production
-        // (app review + partner test stores) via env.
-        test: process.env.NODE_ENV !== "production" || runtimeConfig().billingForceTestCharges,
+        // Dev stores can only approve TEST subscriptions, and reviewers check the
+        // production app on one. Derived per shop rather than switched by hand —
+        // see shouldCreateTestCharge().
+        test: await shouldCreateTestCharge(shopDomain),
         trialDays: trialDays > 0 ? trialDays : undefined,
         lineItems,
       },
@@ -381,9 +434,9 @@ export function mockSubscriptionFromParams(
     createdAt: new Date().toISOString(),
     trialDays,
     interval,
-    // Mirrors the real provider: no usage line on yearly subscriptions (D1).
+    // Mirrors the real provider: every monthly paid tier with a rate gets one.
     usageLineItemId:
-      def.overagePerConversation !== null && interval !== "yearly"
+      def.overagePerConversation !== null
         ? `${id.replace("AppSubscription", "AppSubscriptionLineItem")}-usage`
         : null,
   };
@@ -599,4 +652,67 @@ export async function downgradeToFree(shopDomain: string): Promise<BillingReturn
   await recordEvent(shop.id, "plan_changed", { plan: "free", planStatus: "none" });
   invalidateShopConfig(shop.id);
   return { ok: true };
+}
+
+// ── Raising the usage ceiling (spec 15) ──────────────────
+//
+// `cappedAmount` is the merchant's approved maximum for one 30-day billing
+// cycle. Once it is reached Shopify refuses further usage records, and the app
+// stops answering rather than working for free (usage.server.ts → aiAllowed).
+// Only the merchant can lift it: appSubscriptionLineItemUpdate returns a
+// confirmationUrl they must approve, exactly like the original subscription.
+
+const RAISE_CAP_MUTATION = `
+  mutation RaiseUsageCap($id: ID!, $cappedAmount: MoneyInput!) {
+    appSubscriptionLineItemUpdate(id: $id, cappedAmount: $cappedAmount) {
+      confirmationUrl
+      appSubscription { id }
+      userErrors { field message }
+    }
+  }
+`;
+
+/** Ceiling steps offered on Plan & Usage, in USD. */
+export const USAGE_CAP_STEPS = [100, 250, 500, 1000] as const;
+
+/** The next step above the current ceiling (never lowers it). */
+export function nextUsageCap(current: number): number {
+  return USAGE_CAP_STEPS.find((step) => step > current) ?? Math.ceil((current * 2) / 50) * 50;
+}
+
+export async function raiseUsageCap(
+  shopDomain: string,
+  lineItemId: string,
+  cappedAmount: number,
+): Promise<{ ok: true; confirmationUrl: string | null } | { ok: false; error: string }> {
+  if (isBillingTestMode()) {
+    console.log(`[billing mock] raiseUsageCap ${shopDomain} ${lineItemId} → $${cappedAmount}`);
+    return { ok: true, confirmationUrl: null };
+  }
+  try {
+    const { unauthenticated } = await import("../../shopify.server");
+    const { admin } = await unauthenticated.admin(shopDomain);
+    const response = await admin.graphql(RAISE_CAP_MUTATION, {
+      variables: { id: lineItemId, cappedAmount: { amount: cappedAmount, currencyCode: "USD" } },
+    });
+    const body = (await response.json()) as {
+      data?: {
+        appSubscriptionLineItemUpdate?: {
+          confirmationUrl?: string | null;
+          userErrors?: Array<{ message: string }>;
+        };
+      };
+    };
+    const payload = body.data?.appSubscriptionLineItemUpdate;
+    const errors = payload?.userErrors ?? [];
+    if (errors.length > 0) {
+      const message = errors.map((e) => e.message).join("; ");
+      logError("usage_cap_raise_error", message, { shopDomain });
+      return { ok: false, error: message.slice(0, 200) };
+    }
+    return { ok: true, confirmationUrl: payload?.confirmationUrl ?? null };
+  } catch (error) {
+    logError("usage_cap_raise_error", error, { shopDomain });
+    return { ok: false, error: "Shopify could not update the limit. Try again in a moment." };
+  }
 }

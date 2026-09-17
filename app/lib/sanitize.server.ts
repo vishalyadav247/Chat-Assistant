@@ -13,7 +13,10 @@ const ALLOWED_ATTRS: Record<string, Set<string>> = {
   span: new Set(["style"]),
 };
 
-const SAFE_URL = /^(https?:\/\/|\/|mailto:|tel:)/i;
+// `#cc-…` are the widget's own in-panel action links (`#cc-track`, `#cc-chat`
+// — see chat-widget.js deep links). Fragment-only, so they can never navigate
+// or execute; the widget intercepts the click and switches screen.
+const SAFE_URL = /^(https?:\/\/|\/|mailto:|tel:|#cc-[a-z-]+$)/i;
 // Only color styling from the FAQ editor's color control.
 const SAFE_STYLE = /^color:\s*#[0-9a-fA-F]{3,8};?$/;
 
@@ -34,6 +37,9 @@ export function sanitizeHtml(input: string): string {
     const allowed = ALLOWED_ATTRS[tag];
     let attrs = "";
     if (allowed && rawAttrs) {
+      // A `#cc-…` link acts inside the open chat panel — a new tab would just
+      // reload the storefront, so target is dropped however it was authored.
+      const panelAction = /href\s*=\s*("|')#cc-/i.test(rawAttrs);
       const attrRe = /([a-zA-Z-]+)\s*=\s*("([^"]*)"|'([^']*)')/g;
       let m: RegExpExecArray | null;
       while ((m = attrRe.exec(rawAttrs))) {
@@ -42,7 +48,7 @@ export function sanitizeHtml(input: string): string {
         if (!allowed.has(name)) continue;
         if ((name === "href" || name === "src") && !SAFE_URL.test(value)) continue;
         if (name === "style" && !SAFE_STYLE.test(value)) continue;
-        if (name === "target" && value !== "_blank") continue;
+        if (name === "target" && (value !== "_blank" || panelAction)) continue;
         attrs += ` ${name}="${value.replace(/"/g, "&quot;")}"`;
       }
       if (tag === "a" && attrs.includes("target=")) attrs += ` rel="noopener noreferrer"`;

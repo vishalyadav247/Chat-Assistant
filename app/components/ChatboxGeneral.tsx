@@ -1,5 +1,6 @@
 import { Link } from "react-router";
 import type { WidgetSettingsData } from "../lib/settings/schemas";
+import { PlanBadge } from "./ui/PlanGate";
 import { ChatboxUploadButton } from "./ChatboxUploadButton";
 import { arrayMove, DragHandle, useDragReorder } from "./DragReorder";
 
@@ -18,6 +19,9 @@ const ALL_CONTACT_TYPES: ContactType[] = ["whatsapp", "phone", "email"];
 
 export function ChatboxGeneral(props: {
   value: WidgetSettingsData;
+  orderTrackingAllowed: boolean;
+  /** Tier that unlocks order tracking, or null when this plan has it. */
+  orderTrackingPlan: string | null;
   onChange: (next: WidgetSettingsData) => void;
 }) {
   const { value, onChange } = props;
@@ -243,15 +247,27 @@ export function ChatboxGeneral(props: {
       <s-section>
         <s-stack gap="base">
         <s-stack gap="small-300">
+          {/* Plan-gated (order_tracking). Locked, the switch shows the EFFECTIVE
+              state — off — while the stored choice is kept for after an upgrade. */}
           <s-switch
             label="Order tracking"
-            checked={value.orderTracking}
+            checked={value.orderTracking && props.orderTrackingAllowed}
+            disabled={!props.orderTrackingAllowed}
             onInput={(e) => onChange({ ...value, orderTracking: e.currentTarget.checked })}
           />
           <s-paragraph>
             Show the Order Tracking block to let customers track their orders. Select a tracking
             method in <Link to="/app/settings?tab=chatbox">Integration settings</Link>.
           </s-paragraph>
+          {!props.orderTrackingAllowed ? (
+            <s-stack direction="inline" gap="small" alignItems="center">
+              <PlanBadge plan={props.orderTrackingPlan} />
+              <s-text tone="neutral">
+                Available on the {props.orderTrackingPlan ?? "next"} plan and above —{" "}
+                <Link to="/app/plan-usage">upgrade</Link>
+              </s-text>
+            </s-stack>
+          ) : null}
         </s-stack>
         </s-stack>
       </s-section>

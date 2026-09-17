@@ -19,7 +19,7 @@
  * writes still succeed (dimensions match), so nothing fails; retrieval just
  * quietly gets worse. The other three columns had no re-embed path at all.
  *
- * The fix is a marker row in app_secrets (`platform:embedding-model`) that
+ * The fix is a marker row in app_secrets (`admin:embedding-model`) that
  * records which model built the vectors on disk. A mismatch against env
  * EMBEDDING_MODEL means EVERYTHING is stale, regardless of hashes.
  *
@@ -56,6 +56,12 @@ try {
 } catch {
   /* no .env — rely on ambient environment */
 }
+// App modules transitively import shopify.server, which throws on an empty app
+// URL / API key when run outside `shopify app dev` (QA-T1).
+process.env.SHOPIFY_API_KEY ||= "qa-placeholder-key";
+process.env.SHOPIFY_API_SECRET ||= "qa-placeholder-secret";
+process.env.SHOPIFY_APP_URL ||= "http://localhost:3000";
+process.env.SCOPES ||= "read_products";
 
 const args = process.argv.slice(2);
 const FORCE = args.includes("--force");
@@ -87,7 +93,7 @@ async function main() {
     "../app/lib/embeddings/embedding.server"
   );
   const { getEmbeddingModelMarker, setEmbeddingModelMarker } = await import(
-    "../app/lib/platform/platform-settings.server"
+    "../app/lib/admin/admin-settings.server"
   );
 
   const model = process.env.EMBEDDING_MODEL || "text-embedding-3-small";
@@ -123,7 +129,7 @@ async function main() {
           where: { shopId },
           select: {
             id: true, title: true, description: true, productType: true, vendor: true,
-            tags: true, metafieldText: true, contentHash: true,
+            tags: true, variants: true, metafieldText: true, contentHash: true,
           },
         });
         return rows.map((p) => {

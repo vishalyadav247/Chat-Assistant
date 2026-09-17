@@ -38,11 +38,11 @@ Models (fields per `PRODUCTION-BUILD-SPEC.md` §5, extended by feature needs):
 | `Product` | shopId, shopifyProductId, title, description, productType, vendor, tags, price, stock, imageUrl, handle, status, `embedding Unsupported("vector(1536)")?`, `searchText Unsupported("tsvector")?` | `@@unique([shopId, shopifyProductId])`; btree `(shopId, price)`, `(shopId, stock)`; embedding **nullable** (written by raw UPDATE) |
 | `Collection` | shopId, shopifyCollectionId, title, description, productCount, learnEnabled | `@@unique([shopId, shopifyCollectionId])` |
 | `Knowledge` | shopId, dataSourceId, topic, body, `embedding vector(1536)?` | RAG chunks |
-| `DataSource` | shopId, type (url/manual/csv/file/pages/faq), name, url, status, crawlScope, reCrawlWeekly, chunkCount, lastSyncedAt, metadata Json | |
+| `DataSource` | shopId, type (url/manual/csv/file/pages/faq), name, url, status, reCrawlWeekly, chunkCount, lastSyncedAt, metadata Json | |
 | `Faq` | shopId, categoryId, question, answerHtml, status, featured, position | |
 | `FaqCategory` | shopId, name, icon, position, status, featured, isDefault | |
 | `CuratedAnswer` | shopId, question, synonyms String[], productIds String[], talkingPoints, status, priority, servedCount, `embedding vector(1536)?` | |
-| `Persona` | shopId (unique), role, brandVoice, communicationStyle, behaviours, guidelines String[], avoid String[], scope, offTopicMessage, defaultLanguage, languages String[], autoDetectLanguage, welcomeMessage | |
+| `Persona` | shopId (unique), role, brandVoice, communicationStyle, behaviours (the merchant's instructions — what the AI reads), scope, offTopicMessage, defaultLanguage, languages String[], autoDetectLanguage, welcomeMessage | |
 | `Guardrails` | shopId (unique), answerOnlyFromKnowledge, bannedTopics String[], fallbackMessage, minMeaningScore (0.30), curatedMatchThreshold (0.80), curatedBorderline (0.65), bannedMatchThreshold (0.35) | defaults from `data-sources/guardrails.json` |
 | `Conversation` | shopId, sessionId, contactId?, mode (ai/human), status (open/resolved), outcome, starred, blocked, unread, assigneeId?, channel, startedAt, endedAt, lastMessageAt | |
 | `Message` | conversationId, role (in/out/sys), content, productCards Json?, sourceLayer, intent Json?, seenAt, createdAt | index `(conversationId, createdAt)` |

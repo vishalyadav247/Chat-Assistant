@@ -3,6 +3,7 @@ import { authenticate } from "../shopify.server";
 import { resolveShopId } from "../lib/tenancy.server";
 import { buildWidgetConfig } from "../lib/widget/config.server";
 import { touchWidgetSeen } from "../lib/embed-status.server";
+import { warmShop } from "../lib/pipeline/warm.server";
 
 // GET /apps/chatconvert/widget-config — the widget boot payload (spec 05).
 // Shop identity comes ONLY from the verified proxy signature. Uninstalled
@@ -22,6 +23,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   // throttled to once an hour, so a busy storefront does not turn a cached GET
   // into a write per page view.
   void touchWidgetSeen(shopId);
+  // The panel opens seconds before the shopper types. Filling the chat caches
+  // now (shop config, banned-topic + recommendation vectors, typo lexicon)
+  // takes that work out of their first turn, which measured ~1.7 s slower than
+  // later ones in production. Fire-and-forget and throttled per shop.
+  void warmShop(shopId);
   const payload = await buildWidgetConfig(shopId, session.shop);
 
   return Response.json(payload, {

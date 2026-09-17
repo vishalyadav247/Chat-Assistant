@@ -17,6 +17,13 @@ import { logError } from "../log.server";
 export const DEFAULT_CATEGORY_NAME = "Uncategorized";
 export const FAQ_CSV_MAX_BYTES = 1024 * 1024; // 1MB (design: Import FAQs modal)
 
+/** The shop's FAQ count cap (faqs quota — 25/50/100/250). */
+async function shopFaqQuota(shopId: string): Promise<number> {
+  const { getQuota } = await import("../billing/plans.server");
+  const shop = await db.shop.findUnique({ where: { id: shopId }, select: { plan: true } });
+  return getQuota(shop?.plan ?? "free", "faqs");
+}
+
 export interface FaqRowData {
   id: string;
   categoryId: string | null;
@@ -25,6 +32,8 @@ export interface FaqRowData {
   status: string; // published | draft
   featured: boolean;
   position: number;
+  /** ISO — DB-stamped on insert. */
+  createdAt: string;
 }
 
 export interface FaqCategoryData {
@@ -67,7 +76,11 @@ export async function listFaqTree(shopId: string): Promise<FaqCategoryData[]> {
   const [categories, faqs] = await Promise.all([
     db.faqCategory.findMany({
       where: { shopId },
-      orderBy: [{ position: "asc" }, { name: "asc" }],
+      // Alphabetical: the category Position control was
+      // removed from the admin — the widget never read it — so name order is
+      // the only predictable one. The position COLUMN stays but no longer
+      // drives any listing.
+      orderBy: [{ name: "asc" }],
     }),
     db.faq.findMany({
       where: { shopId },
@@ -97,6 +110,7 @@ export async function listFaqTree(shopId: string): Promise<FaqCategoryData[]> {
         status: faq.status,
         featured: faq.featured,
         position: faq.position,
+        createdAt: faq.createdAt.toISOString(),
       })),
   }));
 }
@@ -106,7 +120,7 @@ export async function listFaqTree(shopId: string): Promise<FaqCategoryData[]> {
 export const categoryInputSchema = z.object({
   id: z.string().optional(),
   name: z.string().trim().min(1).max(100),
-  // Polaris icon name (user decision 2026-08-12); legacy rows may hold emoji.
+  // Polaris icon name; legacy rows may hold emoji.
   icon: z.string().trim().min(1).max(32).default("page"),
   /** Desired 1-based position within the ordered category list. */
   position: z.number().int().min(1).optional(),
@@ -168,25 +182,14 @@ export async function deleteCategory(shopId: string, categoryId: string): Promis
   if (!category || category.isDefault) return false;
 
   const defaultId = await ensureDefaultCategory(shopId);
-  const [orphans, max] = await Promise.all([
-    db.faq.findMany({
-      where: { shopId, categoryId },
-      orderBy: [{ position: "asc" }, { question: "asc" }],
-      select: { id: true },
-    }),
-    db.faq.aggregate({
-      where: { shopId, categoryId: defaultId },
-      _max: { position: true },
-    }),
-  ]);
-  let position = (max._max.position ?? -1) + 1;
+  const orphans = await db.faq.findMany({
+    where: { shopId, categoryId },
+    select: { id: true },
+  });
+  // Positions are GLOBAL (widget order) — moving orphans to the default
+  // category is a relabel only, their widget slots stay exactly where they are.
   await db.$transaction([
-    ...orphans.map((faq) =>
-      db.faq.updateMany({
-        where: { id: faq.id, shopId },
-        data: { categoryId: defaultId, position: position++ },
-      }),
-    ),
+    db.faq.updateMany({ where: { shopId, categoryId }, data: { categoryId: defaultId } }),
     db.faqCategory.deleteMany({ where: { id: categoryId, shopId } }),
   ]);
   await normalizeCategoryPositions(shopId);
@@ -276,6 +279,11 @@ export const faqInputSchema = z.object({
   status: z.enum(["published", "draft"]).default("draft"),
   categoryId: z.string().min(1),
   featured: z.boolean().default(false),
+  /** 1-based slot in the shop's GLOBAL FAQ order — the order the chat widget
+   *  shows (featured list + search sort by position across all categories).
+   *  Absent → a new
+   *  FAQ appends at the end, an edit keeps its slot. */
+  position: z.number().int().min(1).optional(),
 });
 
 export type FaqInput = z.input<typeof faqInputSchema>;
@@ -305,8 +313,15 @@ export async function saveFaq(shopId: string, input: FaqInput): Promise<string> 
       },
     });
   } else {
+    // faqs quota — creating only; editing an existing FAQ is never blocked.
+    const quota = await shopFaqQuota(shopId);
+    const count = await db.faq.count({ where: { shopId } });
+    if (count >= quota) {
+      throw new Error(`Your plan allows ${quota} FAQs — remove one or upgrade to add more`);
+    }
+    // End of the GLOBAL widget order (position is shop-wide, not per category).
     const max = await db.faq.aggregate({
-      where: { shopId, categoryId: category.id },
+      where: { shopId },
       _max: { position: true },
     });
     const created = await db.faq.create({
@@ -322,7 +337,12 @@ export async function saveFaq(shopId: string, input: FaqInput): Promise<string> 
     });
     id = created.id;
   }
-  await syncFaqKnowledgeSafe(shopId);
+  if (parsed.position) {
+    // placeFaq reindexes the whole shop order and runs the knowledge sync.
+    await placeFaq(shopId, id, parsed.position - 1);
+  } else {
+    await syncFaqKnowledgeSafe(shopId);
+  }
   return id;
 }
 
@@ -331,6 +351,30 @@ export async function deleteFaq(shopId: string, faqId: string): Promise<boolean>
   const result = await db.faq.deleteMany({ where: { id: faqId, shopId } });
   if (result.count > 0) await syncFaqKnowledgeSafe(shopId);
   return result.count > 0;
+}
+
+/** Bulk delete from the FAQ table's selection (owner 2026-09-16). Shop-scoped; one knowledge rebuild. */
+export async function deleteFaqs(shopId: string, faqIds: string[]): Promise<number> {
+  requireShopId(shopId);
+  const ids = [...new Set(faqIds.filter(Boolean))].slice(0, 500);
+  if (ids.length === 0) return 0;
+  const result = await db.faq.deleteMany({ where: { id: { in: ids }, shopId } });
+  if (result.count > 0) await syncFaqKnowledgeSafe(shopId);
+  return result.count;
+}
+
+/**
+ * Bulk publish / unpublish. Publishing is what puts an FAQ in front of shoppers
+ * and into the AI's knowledge, so the plan's FAQ quota is not re-checked here
+ * (the rows already exist) but the knowledge bridge is rebuilt once.
+ */
+export async function setFaqsStatus(shopId: string, faqIds: string[], status: "published" | "draft"): Promise<number> {
+  requireShopId(shopId);
+  const ids = [...new Set(faqIds.filter(Boolean))].slice(0, 500);
+  if (ids.length === 0) return 0;
+  const result = await db.faq.updateMany({ where: { id: { in: ids }, shopId }, data: { status } });
+  if (result.count > 0) await syncFaqKnowledgeSafe(shopId);
+  return result.count;
 }
 
 export async function setFaqFeatured(
@@ -350,11 +394,14 @@ export async function moveFaq(
   requireShopId(shopId);
   const faq = await db.faq.findFirst({
     where: { id: faqId, shopId },
-    select: { id: true, categoryId: true },
+    select: { id: true },
   });
   if (!faq) return;
+  // GLOBAL order: position is the FAQ's slot in
+  // the CHAT WIDGET across all categories — the widget's featured list and
+  // search both sort by it shop-wide, categories are only labels.
   const siblings = await db.faq.findMany({
-    where: { shopId, categoryId: faq.categoryId },
+    where: { shopId },
     orderBy: [{ position: "asc" }, { question: "asc" }],
     select: { id: true },
   });
@@ -371,37 +418,28 @@ export async function moveFaq(
 }
 
 /**
- * Place a FAQ at a 0-based index within a category (drag-and-drop reorder).
- * Supports moving across categories; positions in the target category are
- * reindexed. Gaps left in the source category are harmless — ordering is
- * relative and listFaqTree sorts by position.
+ * Place a FAQ at a 0-based index in the shop's GLOBAL FAQ order — the order
+ * the CHAT WIDGET shows (featured list + search both sort by position across
+ * all categories; a category is only a label). All rows are reindexed, which
+ * also normalizes any legacy per-category position duplicates.
  */
-export async function placeFaq(
-  shopId: string,
-  faqId: string,
-  categoryId: string,
-  index: number,
-): Promise<void> {
+export async function placeFaq(shopId: string, faqId: string, index: number): Promise<void> {
   requireShopId(shopId);
-  const [faq, category] = await Promise.all([
-    db.faq.findFirst({ where: { id: faqId, shopId }, select: { id: true } }),
-    db.faqCategory.findFirst({ where: { id: categoryId, shopId }, select: { id: true } }),
-  ]);
-  if (!faq || !category) return;
-  const siblings = await db.faq.findMany({
-    where: { shopId, categoryId },
+  const faq = await db.faq.findFirst({ where: { id: faqId, shopId }, select: { id: true } });
+  if (!faq) return;
+  const all = await db.faq.findMany({
+    where: { shopId },
     orderBy: [{ position: "asc" }, { question: "asc" }],
     select: { id: true },
   });
-  const without = siblings.filter((f) => f.id !== faqId);
+  const without = all.filter((f) => f.id !== faqId);
   const at = Math.min(Math.max(index, 0), without.length);
   without.splice(at, 0, { id: faqId });
-  await db.$transaction([
-    db.faq.updateMany({ where: { id: faqId, shopId }, data: { categoryId } }),
-    ...without.map((f, position) =>
+  await db.$transaction(
+    without.map((f, position) =>
       db.faq.updateMany({ where: { id: f.id, shopId }, data: { position } }),
     ),
-  ]);
+  );
   await syncFaqKnowledgeSafe(shopId); // chunk order follows FAQ order
 }
 
@@ -418,11 +456,13 @@ export interface FaqImportResult {
 }
 
 /**
- * Import FAQ CSV text (≤1MB). Full round-trip with exportFaqCsv: a header row
- * may name question/answer plus the optional category/status/featured columns
- * — categories are created by name as needed, status and featured are
- * restored. Headerless files fall back to "question,answer" into the default
- * category (published), matching the old behavior.
+ * Import FAQ CSV text (≤1MB). Round-trips with exportFaqCsv: a header row may
+ * name question/answer plus the optional category/status columns — categories
+ * are created by name as needed. Headerless files fall back to
+ * "question,answer" into the default category (published).
+ * The CSV carries NO ordering and NO featured flag:
+ * imported FAQs append to the end of the global widget order in file order,
+ * not featured — position and featured are set in the app afterwards.
  */
 export async function importFaqCsv(shopId: string, csvText: string): Promise<FaqImportResult> {
   requireShopId(shopId);
@@ -443,7 +483,6 @@ export async function importFaqCsv(shopId: string, csvText: string): Promise<Faq
   const hadHeader = qCol >= 0 && aCol >= 0 && qCol !== aCol;
   const catCol = hadHeader ? header.findIndex((cell) => cell === "category") : -1;
   const statusCol = hadHeader ? header.findIndex((cell) => cell === "status") : -1;
-  const featCol = hadHeader ? header.findIndex((cell) => cell === "featured") : -1;
   const questionCol = hadHeader ? qCol : 0;
   const answerCol = hadHeader ? aCol : 1;
 
@@ -458,25 +497,21 @@ export async function importFaqCsv(shopId: string, csvText: string): Promise<Faq
   const categoryByName = new Map(existing.map((c) => [c.name.toLowerCase(), c.id]));
   let categoryCount = existing.length;
 
-  // Next FAQ position per category, resolved lazily per involved category.
-  const posByCategory = new Map<string, number>();
-  const nextPosition = async (categoryId: string): Promise<number> => {
-    if (!posByCategory.has(categoryId)) {
-      const max = await db.faq.aggregate({
-        where: { shopId, categoryId },
-        _max: { position: true },
-      });
-      posByCategory.set(categoryId, (max._max.position ?? -1) + 1);
-    }
-    const position = posByCategory.get(categoryId)!;
-    posByCategory.set(categoryId, position + 1);
-    return position;
-  };
+  // Imported rows append to the END of the GLOBAL widget order, in file order
+  // (a category is only a label).
+  const posMax = await db.faq.aggregate({ where: { shopId }, _max: { position: true } });
+  let nextPosition = (posMax._max.position ?? -1) + 1;
 
   // Re-importing an export used to duplicate every row — skip questions the
   // shop already has, and questions repeated within the file (QA D12c).
   const existingFaqs = await db.faq.findMany({ where: { shopId }, select: { question: true } });
   const seenQuestions = new Set(existingFaqs.map((f) => f.question.trim().toLowerCase()));
+
+  // faqs quota (25/50/100/250 — the FAQ consolidation
+  // made FAQs the ONE Q&A surface, so the count is tiered like curated answers).
+  // Rows past the cap are reported per line, never silently dropped.
+  const faqQuota = await shopFaqQuota(shopId);
+  let existingCount = existingFaqs.length;
 
   let imported = 0;
   let skipped = 0;
@@ -495,6 +530,10 @@ export async function importFaqCsv(shopId: string, csvText: string): Promise<Faq
     }
     if (imported >= CSV_ROW_CAP) {
       badRows.push({ line, reason: `row limit (${CSV_ROW_CAP}) exceeded` });
+      continue;
+    }
+    if (existingCount >= faqQuota) {
+      badRows.push({ line, reason: `plan FAQ limit (${faqQuota}) reached` });
       continue;
     }
 
@@ -519,7 +558,6 @@ export async function importFaqCsv(shopId: string, csvText: string): Promise<Faq
 
     const status =
       statusCol >= 0 && /draft/i.test((data[i][statusCol] ?? "").trim()) ? "draft" : "published";
-    const featured = featCol >= 0 && /^(true|yes|1)$/i.test((data[i][featCol] ?? "").trim());
 
     await db.faq.create({
       data: {
@@ -528,11 +566,13 @@ export async function importFaqCsv(shopId: string, csvText: string): Promise<Faq
         question: question.slice(0, 500),
         answerHtml: sanitizeHtml(answer),
         status,
-        featured,
-        position: await nextPosition(categoryId),
+        // featured deliberately not settable by CSV
+        // — it is chosen in the app, like position.
+        position: nextPosition++,
       },
     });
     seenQuestions.add(questionKey);
+    existingCount++;
     imported++;
   }
 
@@ -541,9 +581,10 @@ export async function importFaqCsv(shopId: string, csvText: string): Promise<Faq
 }
 
 /**
- * Export FAQs as CSV. Header includes extra columns (category/status/featured)
- * for reference — re-import maps question/answer by header, so a round-trip
- * preserves Q&A content.
+ * Export FAQs as CSV — exactly the columns importFaqCsv understands
+ * (question/answer/category/status), so an export can be edited and
+ * re-imported. Ordering and featured are NOT exported: both are managed
+ * in the app, not the file.
  */
 export async function exportFaqCsv(
   shopId: string,
@@ -551,14 +592,12 @@ export async function exportFaqCsv(
 ): Promise<string> {
   requireShopId(shopId);
   const tree = await listFaqTree(shopId);
-  const lines: string[] = ["question,answer,category,status,featured"];
+  const lines: string[] = ["question,answer,category,status"];
   for (const category of tree) {
     for (const faq of category.faqs) {
       if (scope === "published" && faq.status !== "published") continue;
       lines.push(
-        [faq.question, faq.answerHtml, category.name, faq.status, String(faq.featured)]
-          .map(csvCell)
-          .join(","),
+        [faq.question, faq.answerHtml, category.name, faq.status].map(csvCell).join(","),
       );
     }
   }

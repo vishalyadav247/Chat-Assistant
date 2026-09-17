@@ -41,9 +41,11 @@ export const apiVersion = ApiVersion.July26;
 export const addDocumentResponseHeaders = shopify.addDocumentResponseHeaders;
 export const authenticate = shopify.authenticate;
 export const unauthenticated = shopify.unauthenticated;
-// NOTE: `shopify.login` is deliberately NOT exported. Its only consumer was the
-// template's /auth/login shop-domain form, removed 2026-08-21 — App Store review
-// requirement 2.3.1 forbids asking a merchant to type their .myshopify.com
-// domain. Installation goes through the App Store listing only. Do not re-add.
+// login() — used ONLY by /auth/login to finish a library bounce that already
+// carries ?shop= (Shopify-initiated). There is deliberately no form that asks a
+// merchant to type a store domain: App Store requirement 2.3.1 forbids manual
+// entry of a myshopify.com URL or shop domain (verified on shopify.dev
+// 2026-09-14, QA-C1). The older note here calling that rule unverifiable was wrong.
+export const login = shopify.login;
 export const registerWebhooks = shopify.registerWebhooks;
 export const sessionStorage = shopify.sessionStorage;

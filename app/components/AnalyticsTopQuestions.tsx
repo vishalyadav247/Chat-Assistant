@@ -1,3 +1,4 @@
+import { Link } from "react-router";
 import type { TopQuestion } from "../lib/analytics/shared";
 import { BRAND } from "./ui/tokens";
 
@@ -86,7 +87,7 @@ export function AnalyticsUnansweredCard(props: {
               Upgrade to see which questions your AI could not answer and fix them.
             </s-text>
           </s-stack>
-          <s-link href="/app/plan-usage">View plans</s-link>
+          <Link to="/app/plan-usage">View plans</Link>
         </s-stack>
       )}
     </s-section>

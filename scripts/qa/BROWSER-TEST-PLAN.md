@@ -24,7 +24,7 @@ Legend for results: `PASS` / `FAIL` / `N/A` / `BLOCKED`.
 | P2 | Claude Chrome extension installed and connected | drives the browser |
 | P3 | Signed into the dev store `jgw-check.myshopify.com` admin | embedded surface |
 | P4 | A web-app member credential for `/web/login` | web surface |
-| P5 | Operator credential for `/platform/login` | platform surface |
+| P5 | Operator credential for `/admin/login` | admin surface |
 | P6 | Theme app embed enabled on the dev store's published theme | storefront widget |
 
 ---
@@ -70,14 +70,14 @@ Entry: `<tunnel>/web`
 | B2.9 | Console clean; no 4xx/5xx |
 | B2.10 | Responsive at 390px (agents use phones) — the whole inbox is usable |
 
-## B3. Platform operator console
+## B3. Admin operator console
 
-Entry: `<tunnel>/platform`
+Entry: `<tunnel>/admin`
 
 | # | Check |
 |---|---|
-| B3.1 | `/platform/login` renders; bad credentials rejected; good credentials land on the dashboard |
-| B3.2 | Every page renders with real cross-tenant data: Admins, AI, Logs, Plans, Promo codes, Settings, Usage |
+| B3.1 | `/admin/login` renders; bad credentials rejected; good credentials land on the dashboard |
+| B3.2 | Every page renders with real cross-tenant data: Access, AI, Logs, Plans, Promo codes, Settings, Usage |
 | B3.3 | Plans: edit a quota → save → the merchant app reflects it within 30s (check in B1 side by side) |
 | B3.4 | Plans: toggle enforcement open/enforced → gates change behaviour in the merchant app |
 | B3.5 | Promo codes: create → the code applies at checkout in B1 Plan & Usage |
@@ -108,6 +108,11 @@ Entry: the dev store's storefront with the app embed enabled.
 | B4.13 | Proactive campaign fires on its configured trigger |
 | B4.14 | Keyboard only: reach the launcher, open, type, send, close. Focus is visible throughout |
 | B4.15 | Mobile 390×844: panel fits, no horizontal scroll, keyboard does not cover the composer |
+| B4.15a | **Real iPhone, Safari** (not an emulator — see the note): tap the composer. The panel resizes to sit exactly on top of the keyboard and does **not** drift, jump, or slide up as the keyboard finishes animating |
+| B4.15b | **Real iPhone:** with the keyboard up, scroll the thread to the top and keep dragging. The storefront behind must not rubber-band, and the panel must not move |
+| B4.15c | **Real iPhone:** dismiss the keyboard. The panel returns to full height with no gap at the bottom |
+| B4.15d | **Real iPhone:** scroll the storefront halfway down, open the chat, close it. The page is where it was left — not scrolled back to the top |
+| B4.15e | **Real iPhone:** rotate to landscape with the panel open, rotate back. The panel still fills the screen and the composer is reachable |
 | B4.16 | Console clean on the storefront; the widget adds no page errors |
 | B4.17 | Lighthouse on the storefront page with and without the widget — record the delta |
 
@@ -117,7 +122,7 @@ Entry: the dev store's storefront with the app embed enabled.
 |---|---|
 | B5.1 | Widget message → appears in embedded Inbox AND web Inbox without a manual refresh (SSE) |
 | B5.2 | Agent reply from web → appears in the widget without a refresh |
-| B5.3 | Platform plan edit → merchant Plan & Usage updates within 30s |
+| B5.3 | Admin plan edit → merchant Plan & Usage updates within 30s |
 | B5.4 | Availability toggle in Settings → widget online/offline copy changes (allow for the ~5 min widget-config cache; note the real observed delay) |
 | B5.5 | Uninstall the app from the dev store → widget stops serving; reinstall inside the grace window → data intact |
 
@@ -125,8 +130,17 @@ Entry: the dev store's storefront with the app embed enabled.
 
 ## Recording
 
-Record every result back into `scripts/qa/test-matrix.xlsx` — the `Design tested` column is exactly
-what this document produces. Any FAIL becomes a numbered defect in the same sheet's `Defects` tab.
+Record every result in **`scripts/qa/make-test-matrix.ts`** — the `ROWS` array holds one
+entry per feature, and its `design` field is exactly what this document produces. Any FAIL
+becomes a numbered defect in the `DEFECTS` array in the same file.
+
+Edit the source, not the sheet. `test-matrix.xlsx` is generated from that file and is
+gitignored, so anything typed into the spreadsheet is destroyed by the next run and
+recorded nowhere. Regenerate when you want a readable copy:
+
+```bash
+npx tsx scripts/qa/make-test-matrix.ts
+```
 
 ---
 
@@ -144,7 +158,7 @@ plus the live storefront `jgw-check.myshopify.com`.
 | B1.7 forms fire | Toggling "Automatic resolution" flipped the switch, hid its dependent row and raised the Save bar — the React-18 `onChange` fix, proven live |
 | B2.6 inbox filters | Clicking "Handover" → `?filter=handover`; typing "arun" → `?filter=handover&q=arun`; both applied server-side (D-39) |
 | B1.12 chatbox preview parity | Preview injects the REAL `widget-renderer.js` + widget CSS — parity by construction |
-| B3.3 plan propagation | A `/platform/plans` override of Plus (1200) is live in the merchant's Plan & Usage |
+| B3.3 plan propagation | A `/admin/plans` override of Plus (1200) is live in the merchant's Plan & Usage |
 | B4.1/4.2 widget | Launcher and panel render on the live storefront with the merchant's theme colour |
 | B4.14 widget a11y | Native `<button>`, accessible name, `aria-haspopup="dialog"`, `aria-expanded` toggles, panel `role="dialog"` + `aria-modal`, focus moves to a VISIBLE control |
 | Consent | `cc:session` absent on page load — no identifier before interaction (a competing chat app on the same store writes one immediately) |
@@ -171,12 +185,21 @@ plus the live storefront `jgw-check.myshopify.com`.
 
 ### Could NOT be executed, and why
 
-- **Platform console visual pass** — a valid operator session exists server-side, but
-  the cookie never landed in the Chrome window the extension drives. `/platform` is
+- **Admin console visual pass** — a valid operator session exists server-side, but
+  the cookie never landed in the Chrome window the extension drives. `/admin` is
   covered by 352 automated cases; only the visual sweep is outstanding.
 - **True 390px mobile** — the extension cannot emulate a device, and Chrome refuses to
   render a window that narrow (viewport reports 0×0). The widget's mobile CSS fixes
   (min-height reset, `dvh`, `env(safe-area-inset-bottom)`) are source-verified only.
+- **The iOS soft keyboard (B4.15a–e) needs a REAL iPhone.** No emulator reproduces it,
+  and that is the whole difficulty: DevTools device mode, Chrome for Android and every
+  desktop browser either shrink the layout viewport for the keyboard or have no
+  keyboard at all, so B4.15 passed for months while real iPhones were broken. What
+  cannot be emulated is Safari shrinking the **visual** viewport and sliding it up
+  while the **layout** viewport stays full height — which is what moves a
+  `position: fixed` panel out from under the visible area. The invariants that fix it
+  are asserted statically by `scripts/qa/widget-viewport.test.ts` (area X), but the
+  behaviour itself is only ever proven on hardware.
 - **Keyboard activation** — synthetic key events were not delivered to the page at all
   (zero `keydown` reached a focused element), so Enter/Space activation could not be
   fired. The launcher is a native `<button>` in the tab order with a correct
